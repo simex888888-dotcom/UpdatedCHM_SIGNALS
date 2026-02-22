@@ -118,10 +118,11 @@ class UserManager:
         row = await db.db_get_user(user_id)
         return _from_db(row) if row else None
 
-    async def get_or_create(self, user_id: int, username: str = "") -> UserSettings:
-        row = await db.db_get_user(user_id)
+    async def get_or_create(self, userid: int, username: str) -> UserSettings:
+        row = await db.db_get_user(userid)
         if row:
-            return _from_db(row)
+            return from_db_row(row)
+    
         now = time.time()
         user = UserSettings(
             userid=userid,
@@ -131,6 +132,9 @@ class UserManager:
             subexpires=now + TRIAL_SECONDS,
             trialused=True,
         )
+        await db.db_upsert_user(user.to_db())
+        return user
+
 
         await db.db_upsert_user(user.to_db())
         log.info(f"Новый юзер: @{username} ({user_id})")
