@@ -143,7 +143,6 @@ def signal_text(sig: SignalResult, user: UserSettings) -> str:
     ])
 
 
-
 # ── Основной сканер ──────────────────────────────────
 
 class MidScanner:

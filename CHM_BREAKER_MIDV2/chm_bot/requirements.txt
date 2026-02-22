@@ -1,0 +1,5 @@
+aiohttp==3.9.3
+pandas==2.2.1
+numpy==1.26.4
+certifi==2024.2.2
+aiogram==3.7.0

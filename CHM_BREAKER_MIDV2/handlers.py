@@ -1,5 +1,5 @@
 """
-handlers.py — все обработчики команд и кнопоr
+handlers.py — все обработчики команд и кнопок
 ВАЖНО: во ВСЕХ callback-обработчиках cb.answer() вызывается ПЕРВЫМ,
 до любых await с БД или сетью. Telegram даёт только 10 сек на ответ.
 """
@@ -109,7 +109,9 @@ def stats_text(user: UserSettings, stats: dict) -> str:
     lw, lt = stats["longs_wins"], stats["longs_total"]
     sw, st = stats["shorts_wins"], stats["shorts_total"]
     lwr = (str(round(lw / lt * 100)) + "%") if lt else "—"
-    swr = (str(round(sw / st * 100)) + "%") if st else "—"
+    swr = (str(round(sw / st * 100)) + "%") if st else "—
+
+"
 
     best = ""
     for s, d in stats.get("best_symbols", []):
