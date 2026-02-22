@@ -78,10 +78,10 @@ class Config:
     # ════════════════════════════════════════════════
 
     TRIAL_HOURS    = 6
-    PRICE_30_DAYS  = "15$"
-    PRICE_90_DAYS  = "35$"
-    PRICE_365_DAYS = "99$"
-    PAYMENT_INFO   = "@твой_username"
+    PRICE_30_DAYS  = "50$"
+    PRICE_90_DAYS  = "120$"
+    PRICE_365_DAYS = "300$"
+    PAYMENT_INFO   = "@crypto_chm"
 
 
     # ════════════════════════════════════════════════
