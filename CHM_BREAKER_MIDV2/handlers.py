@@ -111,8 +111,6 @@ def stats_text(user: UserSettings, stats: dict) -> str:
     lwr = (str(round(lw / lt * 100)) + "%") if lt else "—"
     swr = (str(round(sw / st * 100)) + "%") if st else "—"
 
-"
-
     best = ""
     for s, d in stats.get("best_symbols", []):
         pct = round(d["wins"] / d["total"] * 100)
