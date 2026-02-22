@@ -136,18 +136,23 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     # КОМАНДЫ ПОЛЬЗОВАТЕЛЯ
     # ════════════════════════════════════════════════
 
-        @dp.message(Command("start"))
+    @dp.message(Command("start"))
     async def cmd_start(msg: Message):
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
         has, reason = user.check_access()
         if not has:
-            await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
+            await msg.answer(
+                access_denied_text(reason),
+                parse_mode="HTML",
+                reply_markup=kb_subscribe(config),
+            )
             return
 
         NL = "\n"
-        trial_note = ""
         if user.sub_status == "trial":
             trial_note = NL + NL + "🆓 Пробный период: осталось <b>" + user.time_left_str() + "</b>"
+        else:
+            trial_note = ""
 
         text = (
             "👋 Привет, <b>" + msg.from_user.first_name + "</b>!" + NL + NL +
@@ -160,13 +165,16 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
         await msg.answer(text, parse_mode="HTML", reply_markup=kb_main(user))
 
-
     @dp.message(Command("menu"))
     async def cmd_menu(msg: Message):
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
         has, reason = user.check_access()
         if not has:
-            await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
+            await msg.answer(
+                access_denied_text(reason),
+                parse_mode="HTML",
+                reply_markup=kb_subscribe(config),
+            )
             return
         await msg.answer(settings_text(user), parse_mode="HTML", reply_markup=kb_main(user))
 
@@ -186,12 +194,12 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.message(Command("subscribe"))
     async def cmd_subscribe(msg: Message):
         await msg.answer(
-            f"💳 <b>Подписка CHM BREAKER BOT</b>\n\n"
-            f"📅 30 дней  — <b>{config.PRICE_30_DAYS}</b>\n"
-            f"📅 90 дней  — <b>{config.PRICE_90_DAYS}</b>\n"
-            f"📅 365 дней — <b>{config.PRICE_365_DAYS}</b>\n\n"
-            f"После оплаты напиши: <b>{config.PAYMENT_INFO}</b>\n"
-            f"Укажи свой Telegram ID: <code>{msg.from_user.id}</code>",
+            "💳 <b>Подписка CHM BREAKER BOT</b>\n\n"
+            "📅 30 дней  — <b>" + str(config.PRICE_30_DAYS) + "</b>\n"
+            "📅 90 дней  — <b>" + str(config.PRICE_90_DAYS) + "</b>\n"
+            "📅 365 дней — <b>" + str(config.PRICE_365_DAYS) + "</b>\n\n"
+            "После оплаты напиши: <b>" + str(config.PAYMENT_INFO) + "</b>\n"
+            "Укажи свой Telegram ID: <code>" + str(msg.from_user.id) + "</code>",
             parse_mode="HTML",
         )
 
