@@ -50,80 +50,105 @@ class EditState(StatesGroup):
 
 
 def settings_text(user: UserSettings) -> str:
-    status  = "🟢 АКТИВЕН" if user.active else "🔴 ОСТАНОВЛЕН"
-    sub_em  = {"active": "✅", "trial": "🆓", "expired": "❌", "banned": "🚫"}.get(user.sub_status, "❓")
-    sub_str = f"{sub_em} {user.sub_status.upper()} — осталось {user.time_left_str()}"
-    filters = ", ".join(f for f, v in [
-        ("RSI", user.use_rsi), ("Объём", user.use_volume),
-        ("Паттерн", user.use_pattern), ("HTF", user.use_htf)] if v) or "все выкл"
-    return (
-        f"⚡ <b>CHM BREAKER BOT</b>\n\n"
-        f"Статус:    <b>{status}</b>\n"
-        f"Подписка:  <b>{sub_str}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Таймфрейм:     <b>{user.timeframe}</b>\n"
-        f"🔄 Интервал:      <b>каждые {user.scan_interval // 60} мин.</b>\n"
-        f"💰 Мин. объём:    <b>${user.min_volume_usdt:,.0f}</b>\n"
-        f"⭐ Мин. качество: <b>{'⭐' * user.min_quality}</b>\n"
-        f"🎯 Цели:          <b>{user.tp1_rr}R / {user.tp2_rr}R / {user.tp3_rr}R</b>\n"
-        f"🔬 Фильтры:       <b>{filters}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📐 Пивоты: сила <b>{user.pivot_strength}</b> | возраст <b>{user.max_level_age}</b>\n"
-        f"📉 EMA <b>{user.ema_fast}/{user.ema_slow}</b>  ATR <b>{user.atr_period}п x{user.atr_mult}</b>\n"
-        f"🔁 Cooldown: <b>{user.cooldown_bars} свечей</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📈 Сигналов получено: <b>{user.signals_received}</b>\n"
-    )
+    NL = "\n"
+    status = "🟢 АКТИВЕН" if user.active else "🔴 ОСТАНОВЛЕН"
+    sub_em = {"active": "✅", "trial": "🆓", "expired": "❌", "banned": "🚫"}.get(user.sub_status, "❓")
+    sub_str = sub_em + " " + user.sub_status.upper() + " — осталось " + user.time_left_str()
+    filters_list = ", ".join(
+        f for f, v in [
+            ("RSI", user.use_rsi),
+            ("Объём", user.use_volume),
+            ("Паттерн", user.use_pattern),
+            ("HTF", user.use_htf),
+        ] if v
+    ) or "все выкл"
+    quality_stars = "⭐" * user.min_quality
+    interval_min = user.scan_interval // 60
+    vol_fmt = "{:,.0f}".format(user.min_volume_usdt)
+
+    lines = [
+        "⚡ <b>CHM BREAKER BOT</b>",
+        "",
+        "Статус:    <b>" + status + "</b>",
+        "Подписка:  <b>" + sub_str + "</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "📊 Таймфрейм:     <b>" + user.timeframe + "</b>",
+        "🔄 Интервал:      <b>каждые " + str(interval_min) + " мин.</b>",
+        "💰 Мин. объём:    <b>$" + vol_fmt + "</b>",
+        "⭐ Мин. качество: <b>" + quality_stars + "</b>",
+        "🎯 Цели:          <b>" + str(user.tp1_rr) + "R / " + str(user.tp2_rr) + "R / " + str(user.tp3_rr) + "R</b>",
+        "🔬 Фильтры:       <b>" + filters_list + "</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "📐 Пивоты: сила <b>" + str(user.pivot_strength) + "</b> | возраст <b>" + str(user.max_level_age) + "</b>",
+        "📉 EMA <b>" + str(user.ema_fast) + "/" + str(user.ema_slow) + "</b>  ATR <b>" +
+        str(user.atr_period) + "п x" + str(user.atr_mult) + "</b>",
+        "🔁 Cooldown: <b>" + str(user.cooldown_bars) + " свечей</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "📈 Сигналов получено: <b>" + str(user.signals_received) + "</b>",
+    ]
+    return NL.join(lines)
 
 
 def stats_text(user: UserSettings, stats: dict) -> str:
-    name = f"@{user.username}" if user.username else "Трейдер"
+    NL = "\n"
+    name = "@" + user.username if user.username else "Трейдер"
     if not stats:
         return (
-            f"📊 <b>Статистика — {name}</b>\n\n"
-            f"Закрытых сделок пока нет.\n\n"
-            f"После сигнала нажми кнопку результата:\n"
-            f"<b>TP1 / TP2 / TP3 / SL</b>"
+            "📊 <b>Статистика — " + name + "</b>" + NL + NL +
+            "Закрытых сделок пока нет." + NL + NL +
+            "После сигнала нажми кнопку результата:" + NL +
+            "<b>TP1 / TP2 / TP3 / SL</b>"
         )
-    wr    = stats["winrate"]
-    rr    = stats["avg_rr"]
-    tot   = stats["total_rr"]
-    sign  = "+" if tot >= 0 else ""
+
+    wr = stats["winrate"]
+    rr = stats["avg_rr"]
+    tot = stats["total_rr"]
+    sign = "+" if tot >= 0 else ""
     wr_em = "🔥" if wr >= 70 else "✅" if wr >= 50 else "⚠️"
     rr_em = "💰" if rr > 1.0 else "⚖️" if rr > 0 else "📉"
     lw, lt = stats["longs_wins"], stats["longs_total"]
     sw, st = stats["shorts_wins"], stats["shorts_total"]
-    lwr    = f"{lw/lt*100:.0f}%" if lt else "—"
-    swr    = f"{sw/st*100:.0f}%" if st else "—"
-    best   = "".join(
-        f"  • {s}: {d['wins']}/{d['total']} ({d['wins']/d['total']*100:.0f}%)\n"
-        for s, d in stats.get("best_symbols", [])
-    )
-    return (
-        f"📊 <b>Статистика — {name}</b>\n\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"📋 Сделок: <b>{stats['total']}</b>  ✅ <b>{stats['wins']}</b>  ❌ <b>{stats['losses']}</b>\n"
-        f"{wr_em} Винрейт:    <b>{wr:.1f}%</b>\n"
-        f"{rr_em} Средний R:  <b>{rr:+.2f}R</b>\n"
-        f"💼 Итого R:  <b>{sign}{tot:.2f}R</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🎯 TP1: <b>{stats['tp1_cnt']}</b>  TP2: <b>{stats['tp2_cnt']}</b>  TP3: <b>{stats['tp3_cnt']}</b>\n"
-        f"📈 Лонги:  <b>{lw}/{lt}</b> ({lwr})\n"
-        f"📉 Шорты:  <b>{sw}/{st}</b> ({swr})\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🔥 Лучшая серия: <b>{stats['streak_w']}</b>  💔 Худшая: <b>{stats['streak_l']}</b>\n"
-        f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🏆 <b>Лучшие монеты:</b>\n"
-        f"{best or '  Нужно 2+ сделки по монете\n'}"
-    )
+    lwr = (str(round(lw / lt * 100)) + "%") if lt else "—"
+    swr = (str(round(sw / st * 100)) + "%") if st else "—"
+
+    best = ""
+    for s, d in stats.get("best_symbols", []):
+        pct = round(d["wins"] / d["total"] * 100)
+        best += "  • " + s + ": " + str(d["wins"]) + "/" + str(d["total"]) + " (" + str(pct) + "%)" + NL
+    if not best:
+        best = "  Нужно 2+ сделки по монете" + NL
+
+    lines = [
+        "📊 <b>Статистика — " + name + "</b>",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "📋 Сделок: <b>" + str(stats["total"]) + "</b>  ✅ <b>" + str(stats["wins"]) +
+        "</b>  ❌ <b>" + str(stats["losses"]) + "</b>",
+        wr_em + " Винрейт:    <b>" + "{:.1f}".format(wr) + "%</b>",
+        rr_em + " Средний R:  <b>" + "{:+.2f}".format(rr) + "R</b>",
+        "💼 Итого R:  <b>" + sign + "{:.2f}".format(tot) + "R</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "🎯 TP1: <b>" + str(stats["tp1_cnt"]) + "</b>  TP2: <b>" + str(stats["tp2_cnt"]) +
+        "</b>  TP3: <b>" + str(stats["tp3_cnt"]) + "</b>",
+        "📈 Лонги:  <b>" + str(lw) + "/" + str(lt) + "</b> (" + lwr + ")",
+        "📉 Шорты:  <b>" + str(sw) + "/" + str(st) + "</b> (" + swr + ")",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "🔥 Лучшая серия: <b>" + str(stats["streak_w"]) + "</b>  💔 Худшая: <b>" +
+        str(stats["streak_l"]) + "</b>",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "🏆 <b>Лучшие монеты:</b>",
+        best,
+    ]
+    return NL.join(lines)
 
 
 def access_denied_text(reason: str) -> str:
+    NL = "\n"
     if reason == "banned":
-        return "🚫 <b>Доступ заблокирован.</b>\n\nОбратись к администратору."
+        return "🚫 <b>Доступ заблокирован.</b>" + NL + NL + "Обратись к администратору."
     return (
-        "⏰ <b>Доступ истёк</b>\n\n"
-        "Для продолжения оформи подписку — нажми кнопку ниже.\n"
+        "⏰ <b>Доступ истёк</b>" + NL + NL +
+        "Для продолжения оформи подписку — нажми кнопку ниже." + NL +
         "После оплаты напиши администратору — доступ откроют в течение нескольких минут."
     )
 
@@ -141,11 +166,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
         has, reason = user.check_access()
         if not has:
-            await msg.answer(
-                access_denied_text(reason),
-                parse_mode="HTML",
-                reply_markup=kb_subscribe(config),
-            )
+            await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
             return
 
         NL = "\n"
@@ -170,11 +191,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
         has, reason = user.check_access()
         if not has:
-            await msg.answer(
-                access_denied_text(reason),
-                parse_mode="HTML",
-                reply_markup=kb_subscribe(config),
-            )
+            await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
             return
         await msg.answer(settings_text(user), parse_mode="HTML", reply_markup=kb_main(user))
 
@@ -187,21 +204,22 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     @dp.message(Command("stats"))
     async def cmd_stats(msg: Message):
-        user  = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
+        user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
         stats = await db.db_get_user_stats(user.user_id)
         await msg.answer(stats_text(user, stats), parse_mode="HTML", reply_markup=kb_back())
 
     @dp.message(Command("subscribe"))
     async def cmd_subscribe(msg: Message):
-        await msg.answer(
-            "💳 <b>Подписка CHM BREAKER BOT</b>\n\n"
-            "📅 30 дней  — <b>" + str(config.PRICE_30_DAYS) + "</b>\n"
-            "📅 90 дней  — <b>" + str(config.PRICE_90_DAYS) + "</b>\n"
-            "📅 365 дней — <b>" + str(config.PRICE_365_DAYS) + "</b>\n\n"
-            "После оплаты напиши: <b>" + str(config.PAYMENT_INFO) + "</b>\n"
-            "Укажи свой Telegram ID: <code>" + str(msg.from_user.id) + "</code>",
-            parse_mode="HTML",
+        NL = "\n"
+        text = (
+            "💳 <b>Подписка CHM BREAKER BOT</b>" + NL + NL +
+            "📅 30 дней  — <b>" + str(config.PRICE_30_DAYS) + "</b>" + NL +
+            "📅 90 дней  — <b>" + str(config.PRICE_90_DAYS) + "</b>" + NL +
+            "📅 365 дней — <b>" + str(config.PRICE_365_DAYS) + "</b>" + NL + NL +
+            "После оплаты напиши: <b>" + str(config.PAYMENT_INFO) + "</b>" + NL +
+            "Укажи свой Telegram ID: <code>" + str(msg.from_user.id) + "</code>"
         )
+        await msg.answer(text, parse_mode="HTML")
 
     # ════════════════════════════════════════════════
     # АДМИН-КОМАНДЫ
@@ -211,30 +229,31 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def cmd_admin(msg: Message):
         if not is_admin(msg.from_user.id):
             return
-        s   = await um.stats_summary()
+        s = await um.stats_summary()
         prf = scanner.get_perf()
-        cs  = prf.get("cache", {})
-        await msg.answer(
-            f"👑 <b>Панель администратора</b>\n\n"
-            f"👥 Всего:    <b>{s['total']}</b>\n"
-            f"🆓 Триал:   <b>{s['trial']}</b>  ✅ Активных: <b>{s['active']}</b>\n"
-            f"❌ Истекших: <b>{s['expired']}</b>  🚫 Забан: <b>{s['banned']}</b>\n"
-            f"🔄 Сканируют: <b>{s['scanning']}</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"⚙️ <b>Производительность:</b>\n"
-            f"Циклов: <b>{prf['cycles']}</b>  Юзеров: <b>{prf['users']}</b>\n"
-            f"Сигналов: <b>{prf['signals']}</b>  API calls: <b>{prf['api_calls']}</b>\n"
-            f"Кэш: <b>{cs.get('size',0)}</b> ключей | хит <b>{cs.get('ratio',0)}%</b>\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"<b>Команды:</b>\n"
-            f"/give [id] [days] — выдать доступ\n"
-            f"/revoke [id]      — отозвать\n"
-            f"/ban [id]         — забанить\n"
-            f"/unban [id]       — разбанить\n"
-            f"/userinfo [id]    — инфо о юзере\n"
-            f"/broadcast [текст]— рассылка",
-            parse_mode="HTML",
+        cs = prf.get("cache", {})
+        NL = "\n"
+        text = (
+            "👑 <b>Панель администратора</b>" + NL + NL +
+            "👥 Всего:    <b>" + str(s["total"]) + "</b>" + NL +
+            "🆓 Триал:   <b>" + str(s["trial"]) + "</b>  ✅ Активных: <b>" + str(s["active"]) + "</b>" + NL +
+            "❌ Истекших: <b>" + str(s["expired"]) + "</b>  🚫 Забан: <b>" + str(s["banned"]) + "</b>" + NL +
+            "🔄 Сканируют: <b>" + str(s["scanning"]) + "</b>" + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "⚙️ <b>Производительность:</b>" + NL +
+            "Циклов: <b>" + str(prf["cycles"]) + "</b>  Юзеров: <b>" + str(prf["users"]) + "</b>" + NL +
+            "Сигналов: <b>" + str(prf["signals"]) + "</b>  API calls: <b>" + str(prf["api_calls"]) + "</b>" + NL +
+            "Кэш: <b>" + str(cs.get("size", 0)) + "</b> ключей | хит <b>" + str(cs.get("ratio", 0)) + "%</b>" + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "<b>Команды:</b>" + NL +
+            "/give [id] [days] — выдать доступ" + NL +
+            "/revoke [id]      — отозвать" + NL +
+            "/ban [id]         — забанить" + NL +
+            "/unban [id]       — разбанить" + NL +
+            "/userinfo [id]    — инфо о юзере" + NL +
+            "/broadcast [текст]— рассылка"
         )
+        await msg.answer(text, parse_mode="HTML")
 
     @dp.message(Command("give"))
     async def cmd_give(msg: Message):
@@ -245,30 +264,33 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await msg.answer("Использование: /give [user_id] [дней]\nПример: /give 123456789 30")
             return
         try:
-            tid  = int(parts[1])
+            tid = int(parts[1])
             days = int(parts[2])
         except ValueError:
             await msg.answer("❌ Неверный формат. Пример: /give 123456789 30")
             return
         user = await um.get(tid)
         if not user:
-            await msg.answer(f"❌ Пользователь {tid} не найден в базе")
+            await msg.answer("❌ Пользователь " + str(tid) + " не найден в базе")
             return
         user.grant_access(days)
         await um.save(user)
+        NL = "\n"
+        time_left = user.time_left_str()
+        uname = user.username or str(tid)
         await msg.answer(
-            f"✅ Доступ выдан!\n"
-            f"👤 @{user.username or tid}\n"
-            f"📅 +{days} дней\n"
-            f"⏰ Осталось: {user.time_left_str()}"
+            "✅ Доступ выдан!" + NL +
+            "👤 @" + uname + NL +
+            "📅 +" + str(days) + " дней" + NL +
+            "⏰ Осталось: " + time_left
         )
         try:
             await bot.send_message(
                 tid,
-                f"🎉 <b>Доступ открыт!</b>\n\n"
-                f"Подписка активирована на <b>{days} дней</b>.\n"
-                f"Осталось: <b>{user.time_left_str()}</b>\n\n"
-                f"Нажми /menu чтобы начать.",
+                "🎉 <b>Доступ открыт!</b>" + NL + NL +
+                "Подписка активирована на <b>" + str(days) + " дней</b>." + NL +
+                "Осталось: <b>" + time_left + "</b>" + NL + NL +
+                "Нажми /menu чтобы начать.",
                 parse_mode="HTML",
             )
         except Exception:
@@ -290,11 +312,12 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not user:
             await msg.answer("❌ Не найден")
             return
-        user.sub_status  = "expired"
+        user.sub_status = "expired"
         user.sub_expires = 0
-        user.active      = False
+        user.active = False
         await um.save(user)
-        await msg.answer(f"✅ Доступ отозван у @{user.username or tid}")
+        uname = user.username or str(tid)
+        await msg.answer("✅ Доступ отозван у @" + uname)
 
     @dp.message(Command("ban"))
     async def cmd_ban(msg: Message):
@@ -313,9 +336,10 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await msg.answer("❌ Не найден")
             return
         user.sub_status = "banned"
-        user.active     = False
+        user.active = False
         await um.save(user)
-        await msg.answer(f"🚫 @{user.username or tid} заблокирован")
+        uname = user.username or str(tid)
+        await msg.answer("🚫 @" + uname + " заблокирован")
 
     @dp.message(Command("unban"))
     async def cmd_unban(msg: Message):
@@ -335,7 +359,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             return
         user.sub_status = "expired"
         await um.save(user)
-        await msg.answer(f"✅ @{user.username or tid} разблокирован")
+        uname = user.username or str(tid)
+        await msg.answer("✅ @" + uname + " разблокирован")
 
     @dp.message(Command("userinfo"))
     async def cmd_userinfo(msg: Message):
@@ -354,16 +379,20 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await msg.answer("❌ Не найден")
             return
         stats = await db.db_get_user_stats(tid)
-        await msg.answer(
-            f"👤 <b>@{user.username or '—'}</b> (<code>{user.user_id}</code>)\n"
-            f"Подписка: <b>{user.sub_status.upper()}</b> | Осталось: <b>{user.time_left_str()}</b>\n"
-            f"Сканер: {'🟢 вкл' if user.active else '🔴 выкл'}  TF: <b>{user.timeframe}</b>\n"
-            f"Сигналов: <b>{user.signals_received}</b>\n"
-            f"Сделок в БД: <b>{stats.get('total', 0)}</b>  "
-            f"Винрейт: <b>{stats.get('winrate', 0):.1f}%</b>  "
-            f"R: <b>{stats.get('total_rr', 0):+.2f}R</b>",
-            parse_mode="HTML",
+        NL = "\n"
+        uname = user.username or "—"
+        winrate = stats.get("winrate", 0)
+        total_rr = stats.get("total_rr", 0)
+        text = (
+            "👤 <b>@" + uname + "</b> (<code>" + str(user.user_id) + "</code>)" + NL +
+            "Подписка: <b>" + user.sub_status.upper() + "</b> | Осталось: <b>" + user.time_left_str() + "</b>" + NL +
+            "Сканер: " + ("🟢 вкл" if user.active else "🔴 выкл") + "  TF: <b>" + user.timeframe + "</b>" + NL +
+            "Сигналов: <b>" + str(user.signals_received) + "</b>" + NL +
+            "Сделок в БД: <b>" + str(stats.get("total", 0)) + "</b>  " +
+            "Винрейт: <b>" + "{:.1f}".format(winrate) + "%</b>  " +
+            "R: <b>" + "{:+.2f}".format(total_rr) + "R</b>"
         )
+        await msg.answer(text, parse_mode="HTML")
 
     @dp.message(Command("broadcast"))
     async def cmd_broadcast(msg: Message):
@@ -373,17 +402,17 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not text:
             await msg.answer("Использование: /broadcast [текст]")
             return
-        users  = await um.all_users()
-        sent   = failed = 0
+        users = await um.all_users()
+        sent = failed = 0
         for u in users:
             if u.sub_status in ("trial", "active"):
                 try:
-                    await bot.send_message(u.user_id, f"📢 {text}")
+                    await bot.send_message(u.user_id, "📢 " + text)
                     sent += 1
                     await asyncio.sleep(0.04)
                 except Exception:
                     failed += 1
-        await msg.answer(f"📢 Рассылка: ✅ {sent}  ❌ {failed}")
+        await msg.answer("📢 Рассылка: ✅ " + str(sent) + "  ❌ " + str(failed))
 
     # ════════════════════════════════════════════════
     # РЕЗУЛЬТАТЫ СДЕЛОК
@@ -391,48 +420,50 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     @dp.callback_query(F.data.startswith("res_"))
     async def trade_result(cb: CallbackQuery):
-        parts    = cb.data.split("_", 2)
-        result   = parts[1]
+        parts = cb.data.split("_", 2)
+        result = parts[1]
         trade_id = parts[2]
 
-        # ✅ cb.answer() ВСЕГДА ПЕРВЫМ — до любых await с БД
-        # Telegram даёт 10 секунд. Если сначала идти в БД — алерт не успевает.
         labels = {
             "TP1": "🎯 TP1 зафиксирован!",
             "TP2": "🎯 TP2 зафиксирован!",
             "TP3": "🏆 TP3 зафиксирован!",
-            "SL":  "❌ Стоп-лосс зафиксирован",
-            "SKIP":"⏭ Пропущено",
+            "SL": "❌ Стоп-лосс зафиксирован",
+            "SKIP": "⏭ Пропущено",
         }
         await cb.answer(labels.get(result, "✅ Записано"), show_alert=True)
 
-        # Теперь спокойно работаем с БД
         trade = await db.db_get_trade(trade_id)
         if not trade:
             await cb.message.answer("⚠️ Сделка не найдена в базе.")
             return
 
-        # Защита от двойного нажатия
         if trade.get("result") and trade["result"] not in ("", "SKIP"):
             await cb.message.answer(
-                f"ℹ️ Результат уже записан: <b>{trade['result']}</b>",
-                parse_mode="HTML"
+                "ℹ️ Результат уже записан: <b>" + trade["result"] + "</b>",
+                parse_mode="HTML",
             )
             return
 
         rr_map = {
-            "TP1": trade["tp1_rr"], "TP2": trade["tp2_rr"],
-            "TP3": trade["tp3_rr"], "SL": -1.0, "SKIP": 0.0,
+            "TP1": trade["tp1_rr"],
+            "TP2": trade["tp2_rr"],
+            "TP3": trade["tp3_rr"],
+            "SL": -1.0,
+            "SKIP": 0.0,
         }
         await db.db_set_trade_result(trade_id, result, rr_map.get(result, 0.0))
 
-        # Добавляем результат в текст сообщения + убираем кнопки
-        emojis = {"TP1":"🎯 TP1","TP2":"🎯 TP2","TP3":"🏆 TP3","SL":"❌ SL","SKIP":"⏭ Пропущено"}
+        emojis = {"TP1": "🎯 TP1", "TP2": "🎯 TP2", "TP3": "🏆 TP3", "SL": "❌ SL", "SKIP": "⏭ Пропущено"}
         rr_str = {
-            "TP1": f"+{trade['tp1_rr']}R", "TP2": f"+{trade['tp2_rr']}R",
-            "TP3": f"+{trade['tp3_rr']}R", "SL": "-1R", "SKIP": "",
+            "TP1": "+" + str(trade["tp1_rr"]) + "R",
+            "TP2": "+" + str(trade["tp2_rr"]) + "R",
+            "TP3": "+" + str(trade["tp3_rr"]) + "R",
+            "SL": "-1R",
+            "SKIP": "",
         }
-        result_line = f"\n\n<b>Результат: {emojis.get(result)}  {rr_str.get(result, '')}</b>"
+        NL = "\n"
+        result_line = NL + NL + "<b>Результат: " + emojis.get(result, "") + "  " + rr_str.get(result, "") + "</b>"
         try:
             await cb.message.edit_text(
                 (cb.message.text or "") + result_line,
@@ -442,27 +473,25 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         except Exception:
             pass
 
-        # Отправляем обновлённую сводку
         if result != "SKIP":
-            user  = await um.get_or_create(cb.from_user.id)
+            user = await um.get_or_create(cb.from_user.id)
             stats = await db.db_get_user_stats(user.user_id)
             if stats:
-                wr   = stats["winrate"]
-                tot  = stats["total_rr"]
+                wr = stats["winrate"]
+                tot = stats["total_rr"]
                 sign = "+" if tot >= 0 else ""
                 wr_em = "🔥" if wr >= 70 else "✅" if wr >= 50 else "⚠️"
-                await cb.message.answer(
-                    f"📊 <b>Счёт обновлён</b>\n\n"
-                    f"Сделок: <b>{stats['total']}</b>  "
-                    f"{wr_em} Винрейт: <b>{wr:.1f}%</b>\n"
-                    f"Итого R: <b>{sign}{tot:.2f}R</b>\n\n"
-                    f"Полная статистика → /stats",
-                    parse_mode="HTML",
+                text = (
+                    "📊 <b>Счёт обновлён</b>" + NL + NL +
+                    "Сделок: <b>" + str(stats["total"]) + "</b>  " +
+                    wr_em + " Винрейт: <b>" + "{:.1f}".format(wr) + "%</b>" + NL +
+                    "Итого R: <b>" + sign + "{:.2f}".format(tot) + "R</b>" + NL + NL +
+                    "Полная статистика → /stats"
                 )
+                await cb.message.answer(text, parse_mode="HTML")
 
     # ════════════════════════════════════════════════
     # МЕНЮ И НАСТРОЙКИ
-    # Правило: cb.answer() первым, потом save + edit
     # ════════════════════════════════════════════════
 
     @dp.callback_query(F.data == "toggle_active")
@@ -488,7 +517,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_tf(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.timeframe = cb.data.replace("set_tf_", "")
-        await cb.answer(f"✅ Таймфрейм: {user.timeframe}")
+        await cb.answer("✅ Таймфрейм: " + user.timeframe)
         await um.save(user)
         await safe_edit(cb, settings_text(user), kb_main(user))
 
@@ -502,7 +531,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_interval(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.scan_interval = int(cb.data.replace("set_interval_", ""))
-        await cb.answer(f"✅ Каждые {user.scan_interval // 60} мин.")
+        await cb.answer("✅ Каждые " + str(user.scan_interval // 60) + " мин.")
         await um.save(user)
         await safe_edit(cb, settings_text(user), kb_main(user))
 
@@ -521,7 +550,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_pivot(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.pivot_strength = int(cb.data.replace("set_pivot_", ""))
-        await cb.answer(f"✅ Пивоты: {user.pivot_strength}")
+        await cb.answer("✅ Пивоты: " + str(user.pivot_strength))
         await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты и уровни S/R</b>", kb_pivots(user))
 
@@ -529,7 +558,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_age(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.max_level_age = int(cb.data.replace("set_age_", ""))
-        await cb.answer(f"✅ Возраст уровня: {user.max_level_age}")
+        await cb.answer("✅ Возраст уровня: " + str(user.max_level_age))
         await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты и уровни S/R</b>", kb_pivots(user))
 
@@ -537,7 +566,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_retest(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.max_retest_bars = int(cb.data.replace("set_retest_", ""))
-        await cb.answer(f"✅ Ретест: {user.max_retest_bars} свечей")
+        await cb.answer("✅ Ретест: " + str(user.max_retest_bars) + " свечей")
         await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты и уровни S/R</b>", kb_pivots(user))
 
@@ -545,7 +574,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_buffer(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.zone_buffer = float(cb.data.replace("set_buffer_", ""))
-        await cb.answer(f"✅ Буфер зоны: x{user.zone_buffer}")
+        await cb.answer("✅ Буфер зоны: x" + str(user.zone_buffer))
         await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты и уровни S/R</b>", kb_pivots(user))
 
@@ -559,7 +588,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_ema_fast(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.ema_fast = int(cb.data.replace("set_ema_fast_", ""))
-        await cb.answer(f"✅ EMA Fast: {user.ema_fast}")
+        await cb.answer("✅ EMA Fast: " + str(user.ema_fast))
         await um.save(user)
         await safe_edit(cb, "📉 <b>EMA тренд</b>", kb_ema(user))
 
@@ -567,7 +596,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_ema_slow(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.ema_slow = int(cb.data.replace("set_ema_slow_", ""))
-        await cb.answer(f"✅ EMA Slow: {user.ema_slow}")
+        await cb.answer("✅ EMA Slow: " + str(user.ema_slow))
         await um.save(user)
         await safe_edit(cb, "📉 <b>EMA тренд</b>", kb_ema(user))
 
@@ -575,7 +604,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_htf_ema(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.htf_ema_period = int(cb.data.replace("set_htf_ema_", ""))
-        await cb.answer(f"✅ HTF EMA: {user.htf_ema_period}")
+        await cb.answer("✅ HTF EMA: " + str(user.htf_ema_period))
         await um.save(user)
         await safe_edit(cb, "📉 <b>EMA тренд</b>", kb_ema(user))
 
@@ -621,7 +650,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_rsi_period(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.rsi_period = int(cb.data.replace("set_rsi_period_", ""))
-        await cb.answer(f"✅ RSI период: {user.rsi_period}")
+        await cb.answer("✅ RSI период: " + str(user.rsi_period))
         await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры сигнала</b>", kb_filters(user))
 
@@ -629,7 +658,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_rsi_ob(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.rsi_ob = int(cb.data.replace("set_rsi_ob_", ""))
-        await cb.answer(f"✅ RSI Overbought: {user.rsi_ob}")
+        await cb.answer("✅ RSI Overbought: " + str(user.rsi_ob))
         await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры сигнала</b>", kb_filters(user))
 
@@ -637,7 +666,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_rsi_os(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.rsi_os = int(cb.data.replace("set_rsi_os_", ""))
-        await cb.answer(f"✅ RSI Oversold: {user.rsi_os}")
+        await cb.answer("✅ RSI Oversold: " + str(user.rsi_os))
         await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры сигнала</b>", kb_filters(user))
 
@@ -645,7 +674,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_vol_mult(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.vol_mult = float(cb.data.replace("set_vol_mult_", ""))
-        await cb.answer(f"✅ Объём: x{user.vol_mult}")
+        await cb.answer("✅ Объём: x" + str(user.vol_mult))
         await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры сигнала</b>", kb_filters(user))
 
@@ -653,7 +682,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_vol_len(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.vol_len = int(cb.data.replace("set_vol_len_", ""))
-        await cb.answer(f"✅ Период объёма: {user.vol_len}")
+        await cb.answer("✅ Период объёма: " + str(user.vol_len))
         await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры сигнала</b>", kb_filters(user))
 
@@ -667,7 +696,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_quality(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.min_quality = int(cb.data.replace("set_quality_", ""))
-        await cb.answer(f"✅ Мин. качество: {'⭐' * user.min_quality}")
+        await cb.answer("✅ Мин. качество: " + ("⭐" * user.min_quality))
         await um.save(user)
         await safe_edit(cb, settings_text(user), kb_main(user))
 
@@ -681,7 +710,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_cooldown(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.cooldown_bars = int(cb.data.replace("set_cooldown_", ""))
-        await cb.answer(f"✅ Cooldown: {user.cooldown_bars} свечей")
+        await cb.answer("✅ Cooldown: " + str(user.cooldown_bars) + " свечей")
         await um.save(user)
         await safe_edit(cb, settings_text(user), kb_main(user))
 
@@ -695,7 +724,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_atr_period(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.atr_period = int(cb.data.replace("set_atr_period_", ""))
-        await cb.answer(f"✅ ATR период: {user.atr_period}")
+        await cb.answer("✅ ATR период: " + str(user.atr_period))
         await um.save(user)
         await safe_edit(cb, "🛡 <b>Стоп-лосс (ATR)</b>", kb_sl(user))
 
@@ -703,7 +732,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_atr_mult(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.atr_mult = float(cb.data.replace("set_atr_mult_", ""))
-        await cb.answer(f"✅ ATR множитель: x{user.atr_mult}")
+        await cb.answer("✅ ATR множитель: x" + str(user.atr_mult))
         await um.save(user)
         await safe_edit(cb, "🛡 <b>Стоп-лосс (ATR)</b>", kb_sl(user))
 
@@ -711,7 +740,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_risk(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.max_risk_pct = float(cb.data.replace("set_risk_", ""))
-        await cb.answer(f"✅ Макс. риск: {user.max_risk_pct}%")
+        await cb.answer("✅ Макс. риск: " + str(user.max_risk_pct) + "%")
         await um.save(user)
         await safe_edit(cb, "🛡 <b>Стоп-лосс (ATR)</b>", kb_sl(user))
 
@@ -743,10 +772,14 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def save_tp1(msg: Message, state: FSMContext):
         user = await um.get_or_create(msg.from_user.id)
         try:
-            user.tp1_rr = round(float(msg.text.replace(",",".")), 1)
+            user.tp1_rr = round(float(msg.text.replace(",", ".")), 1)
             await um.save(user)
             await state.clear()
-            await msg.answer(f"✅ Цель 1 = <b>{user.tp1_rr}R</b>", parse_mode="HTML", reply_markup=kb_targets(user))
+            await msg.answer(
+                "✅ Цель 1 = <b>" + str(user.tp1_rr) + "R</b>",
+                parse_mode="HTML",
+                reply_markup=kb_targets(user),
+            )
         except ValueError:
             await msg.answer("❌ Введи число, например: 0.8")
 
@@ -754,10 +787,14 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def save_tp2(msg: Message, state: FSMContext):
         user = await um.get_or_create(msg.from_user.id)
         try:
-            user.tp2_rr = round(float(msg.text.replace(",",".")), 1)
+            user.tp2_rr = round(float(msg.text.replace(",", ".")), 1)
             await um.save(user)
             await state.clear()
-            await msg.answer(f"✅ Цель 2 = <b>{user.tp2_rr}R</b>", parse_mode="HTML", reply_markup=kb_targets(user))
+            await msg.answer(
+                "✅ Цель 2 = <b>" + str(user.tp2_rr) + "R</b>",
+                parse_mode="HTML",
+                reply_markup=kb_targets(user),
+            )
         except ValueError:
             await msg.answer("❌ Введи число, например: 1.5")
 
@@ -765,10 +802,14 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def save_tp3(msg: Message, state: FSMContext):
         user = await um.get_or_create(msg.from_user.id)
         try:
-            user.tp3_rr = round(float(msg.text.replace(",",".")), 1)
+            user.tp3_rr = round(float(msg.text.replace(",", ".")), 1)
             await um.save(user)
             await state.clear()
-            await msg.answer(f"✅ Цель 3 = <b>{user.tp3_rr}R</b>", parse_mode="HTML", reply_markup=kb_targets(user))
+            await msg.answer(
+                "✅ Цель 3 = <b>" + str(user.tp3_rr) + "R</b>",
+                parse_mode="HTML",
+                reply_markup=kb_targets(user),
+            )
         except ValueError:
             await msg.answer("❌ Введи число, например: 2.5")
 
@@ -782,7 +823,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_volume(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.min_volume_usdt = float(cb.data.replace("set_volume_", ""))
-        await cb.answer(f"✅ Мин. объём: ${user.min_volume_usdt:,.0f}")
+        vol_fmt = "{:,.0f}".format(user.min_volume_usdt)
+        await cb.answer("✅ Мин. объём: $" + vol_fmt)
         await um.save(user)
         await safe_edit(cb, settings_text(user), kb_main(user))
 
@@ -811,7 +853,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.callback_query(F.data == "my_stats")
     async def my_stats(cb: CallbackQuery):
         await cb.answer()
-        user  = await um.get_or_create(cb.from_user.id)
+        user = await um.get_or_create(cb.from_user.id)
         stats = await db.db_get_user_stats(user.user_id)
         await safe_edit(cb, stats_text(user, stats), kb_back())
 
