@@ -109,7 +109,7 @@ def stats_text(user: UserSettings, stats: dict) -> str:
     lw, lt = stats["longs_wins"], stats["longs_total"]
     sw, st = stats["shorts_wins"], stats["shorts_total"]
     lwr = (str(round(lw / lt * 100)) + "%") if lt else "—"
-    swr = (str(round(sw / st * 100)) + "%") if st else "—
+    swr = (str(round(sw / st * 100)) + "%") if st else "—"
 
 "
 
