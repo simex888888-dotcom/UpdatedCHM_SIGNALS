@@ -106,7 +106,24 @@ def signal_text(sig: SignalResult, user: UserSettings) -> str:
     tp2    = sig.entry + sign * risk * user.tp2_rr
     tp3    = sig.entry + sign * risk * user.tp3_rr
 
-    def pct(t): return abs((t - sig.entry) / sig.entry * 100)
+    def pct(t):
+        return abs((t - sig.entry) / sig.entry * 100)
+
+    # формируем строку про тренд и объём
+    trend_parts = [sig.trend_local]
+
+    # текст про подтверждение тренда HTF
+    if user.use_htf:
+        trend_parts.append("Тренд подтверждён HTF")
+
+    # текст про подтверждение объёма
+    if user.use_volume:
+        trend_parts.append("Объём подтверждён")
+
+    trend_line = (
+        "📊 " + "  |  ".join(trend_parts) +
+        f"  |  RSI: <code>{sig.rsi:.1f}</code>  |  Vol: <code>x{sig.volume_ratio:.1f}</code>"
+    )
 
     return "\n".join([
         header, "",
@@ -119,11 +136,12 @@ def signal_text(sig: SignalResult, user: UserSettings) -> str:
         f"🎯 Цель 2: <code>{tp2:.6g}</code>  <i>(+{pct(tp2):.2f}%)</i>",
         f"🏆 Цель 3: <code>{tp3:.6g}</code>  <i>(+{pct(tp3):.2f}%)</i>",
         "━━━━━━━━━━━━━━━━━━━━", "",
-        f"📊 {sig.trend_local}  |  RSI: <code>{sig.rsi:.1f}</code>  |  Vol: <code>x{sig.volume_ratio:.1f}</code>",
+        trend_line,
         f"🕯 Паттерн: {sig.pattern}", "",
         "⚡ <i>CHM Laboratory — CHM BREAKER</i>", "",
         "👇 <i>Отметь результат когда сделка закроется:</i>",
     ])
+
 
 
 # ── Основной сканер ──────────────────────────────────
