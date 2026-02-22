@@ -81,12 +81,16 @@ class UserSettings:
 
     def time_left_str(self) -> str:
         left = self.sub_expires - time.time()
-        if left <= 0:   return "истёк"
-        if left < 3600: return f"{int(left // 60)} мин."
+        if left <= 0:
+            return "истёк"
+        if left < 3600:
+            return f"{int(left // 60)} мин."
         if left < 86400:
-            h = int(left // 3600); m = int((left % 3600) // 60)
+            h = int(left // 3600)
+            m = int((left % 3600) // 60)
             return f"{h}ч {m}м"
-        d = int(left // 86400); h = int((left % 86400) // 3600)
+        d = int(left // 86400)
+        h = int((left % 86400) // 3600)
         return f"{d}д {h}ч"
 
     def to_db(self) -> dict:
@@ -118,24 +122,20 @@ class UserManager:
         row = await db.db_get_user(user_id)
         return _from_db(row) if row else None
 
-    async def get_or_create(self, userid: int, username: str) -> UserSettings:
-        row = await db.db_get_user(userid)
+    async def get_or_create(self, user_id: int, username: str = "") -> UserSettings:
+        row = await db.db_get_user(user_id)
         if row:
-            return from_db_row(row)
-    
+            return _from_db(row)
+
         now = time.time()
         user = UserSettings(
-            userid=userid,
+            user_id=user_id,
             username=username,
-            substatus="trial",
-            trialstarted=now,
-            subexpires=now + TRIAL_SECONDS,
-            trialused=True,
+            sub_status="trial",
+            trial_started=now,
+            sub_expires=now + TRIAL_SECONDS,
+            trial_used=True,
         )
-        await db.db_upsert_user(user.to_db())
-        return user
-
-
         await db.db_upsert_user(user.to_db())
         log.info(f"Новый юзер: @{username} ({user_id})")
         return user
