@@ -122,16 +122,16 @@ class UserManager:
         row = await db.db_get_user(user_id)
         if row:
             return _from_db(row)
-        now  = time.time()
+        now = time.time()
         user = UserSettings(
-            user_id       = user_id,
-            username      = username,
-            sub_status    = "trial",
-            trial_started = now,
-            sub_expires   = now + TRIAL_SECONDS,
-            trial_used    = True,
-            created_at    = now,
+            userid=userid,
+            username=username,
+            substatus="trial",
+            trialstarted=now,
+            subexpires=now + TRIAL_SECONDS,
+            trialused=True,
         )
+
         await db.db_upsert_user(user.to_db())
         log.info(f"Новый юзер: @{username} ({user_id})")
         return user
