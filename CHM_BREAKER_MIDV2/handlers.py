@@ -136,22 +136,30 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     # КОМАНДЫ ПОЛЬЗОВАТЕЛЯ
     # ════════════════════════════════════════════════
 
-    @dp.message(Command("start"))
+        @dp.message(Command("start"))
     async def cmd_start(msg: Message):
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
         has, reason = user.check_access()
         if not has:
             await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
             return
-        trial_note = f"\n\n🆓 Пробный период: осталось <b>{user.time_left_str()}</b>" if user.sub_status == "trial" else ""
-        await msg.answer(
-            f"👋 Привет, <b>{msg.from_user.first_name}</b>!\n\n"
-            f"⚡ <b>CHM BREAKER BOT</b> — by CHM Laboratory\n\n"
-            f"Сканирую 200+ монет на OKX и шлю сигналы\n"
-            f"когда индикатор CHM BREAKER даёт вход."
-            f"{trial_note}\n\nНастрой и включи сканер 👇",
-            parse_mode="HTML", reply_markup=kb_main(user),
+
+        NL = "\n"
+        trial_note = ""
+        if user.sub_status == "trial":
+            trial_note = NL + NL + "🆓 Пробный период: осталось <b>" + user.time_left_str() + "</b>"
+
+        text = (
+            "👋 Привет, <b>" + msg.from_user.first_name + "</b>!" + NL + NL +
+            "⚡ <b>CHM BREAKER BOT</b> — by CHM Laboratory" + NL + NL +
+            "Сканирую 200+ монет на OKX и шлю сигналы" + NL +
+            "когда индикатор CHM BREAKER даёт вход." +
+            trial_note + NL + NL +
+            "Настрой и включи сканер 👇"
         )
+
+        await msg.answer(text, parse_mode="HTML", reply_markup=kb_main(user))
+
 
     @dp.message(Command("menu"))
     async def cmd_menu(msg: Message):
