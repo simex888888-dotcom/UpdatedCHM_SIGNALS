@@ -23,12 +23,12 @@ class Config:
     #  🔑 TELEGRAM
     # ════════════════════════════════════════════════
 
-    TELEGRAM_TOKEN = os.getenv("BOT_TOKEN_CHM")
+    TELEGRAM_TOKEN = ("8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k")
 
 
     # Твой Telegram ID — станешь администратором
     # Узнать: написать @userinfobot
-    ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "445677777,705020259,7107654772").split(",")]
+    ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "445677777").split(",")]
 
     # ════════════════════════════════════════════════
     #  🗄  SQLITE
