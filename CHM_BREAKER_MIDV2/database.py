@@ -76,6 +76,11 @@ CREATE TABLE IF NOT EXISTS users (
     short_tf         TEXT    DEFAULT '1h',
     short_interval   INTEGER DEFAULT 3600,
 
+    long_active      INTEGER DEFAULT 0,
+    short_active     INTEGER DEFAULT 0,
+    long_cfg         TEXT    DEFAULT '{}',
+    short_cfg        TEXT    DEFAULT '{}',
+
     signals_received INTEGER DEFAULT 0,
     created_at       REAL    DEFAULT 0,
     updated_at       REAL    DEFAULT 0
@@ -120,6 +125,10 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN long_interval INTEGER DEFAULT 3600",
             "ALTER TABLE users ADD COLUMN short_tf TEXT DEFAULT '1h'",
             "ALTER TABLE users ADD COLUMN short_interval INTEGER DEFAULT 3600",
+            "ALTER TABLE users ADD COLUMN long_active INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN short_active INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN long_cfg TEXT DEFAULT '{}'",
+            "ALTER TABLE users ADD COLUMN short_cfg TEXT DEFAULT '{}'",
         ]
         for sql in migrations:
             try:
@@ -166,7 +175,9 @@ async def db_get_active_users() -> list[dict]:
     async with aiosqlite.connect(_db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM users WHERE active=1 AND sub_status IN ('trial','active') AND sub_expires > ?",
+            """SELECT * FROM users
+               WHERE sub_status IN ('trial','active') AND sub_expires > ?
+               AND (active=1 OR long_active=1 OR short_active=1)""",
             (now,)
         ) as cur:
             rows = await cur.fetchall()
