@@ -19,7 +19,7 @@ import database as db
 
 log = logging.getLogger("CHM.Users")
 
-TRIAL_SECONDS = 6 * 3600
+TRIAL_SECONDS = 3600
 
 
 # ── Полный набор торговых настроек ───────────────────

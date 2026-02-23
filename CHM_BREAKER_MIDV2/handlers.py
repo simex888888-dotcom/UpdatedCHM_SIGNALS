@@ -220,18 +220,52 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         stats = await db.db_get_user_stats(user.user_id)
         await msg.answer(stats_text(user, stats), parse_mode="HTML", reply_markup=kb_back())
 
-    @dp.message(Command("subscribe"))
-    async def cmd_subscribe(msg: Message):
-        NL = "\n"
-        await msg.answer(
-            "💳 <b>Подписка CHM BREAKER BOT</b>" + NL + NL +
-            "📅 30 дней  — <b>" + config.PRICE_30_DAYS + "</b>" + NL +
-            "📅 90 дней  — <b>" + config.PRICE_90_DAYS + "</b>" + NL +
-            "📅 365 дней — <b>" + config.PRICE_365_DAYS + "</b>" + NL + NL +
-            "После оплаты: <b>" + config.PAYMENT_INFO + "</b>" + NL +
-            "Твой Telegram ID: <code>" + str(msg.from_user.id) + "</code>",
+    @dp.callback_query(F.data == "buy_30")
+    async def buy_30_cb(cb: CallbackQuery):
+        await cb.answer()
+        await cb.message.answer(
+            "<b>Оформление подписки на 30 дней</b>\n\n"
+            f"Стоимость: <b>{config.PRICE_30_DAYS}</b>\n\n"
+            f"{config.PAYMENT_INFO}\n\n"
+            f"Ваш Telegram ID: <code>{cb.from_user.id}</code>\n"
+            "После оплаты напишите его администратору.",
             parse_mode="HTML",
         )
+
+    @dp.callback_query(F.data == "buy_90")
+    async def buy_90_cb(cb: CallbackQuery):
+        await cb.answer()
+        await cb.message.answer(
+            "<b>Оформление подписки на 90 дней</b>\n\n"
+            f"Стоимость: <b>{config.PRICE_90_DAYS}</b>\n\n"
+            f"{config.PAYMENT_INFO}\n\n"
+            f"Ваш Telegram ID: <code>{cb.from_user.id}</code>\n"
+            "После оплаты напишите его администратору.",
+            parse_mode="HTML",
+        )
+
+    @dp.callback_query(F.data == "buy_365")
+    async def buy_365_cb(cb: CallbackQuery):
+        await cb.answer()
+        await cb.message.answer(
+            "<b>Оформление подписки на 365 дней</b>\n\n"
+            f"Стоимость: <b>{config.PRICE_365_DAYS}</b>\n\n"
+            f"{config.PAYMENT_INFO}\n\n"
+            f"Ваш Telegram ID: <code>{cb.from_user.id}</code>\n"
+            "После оплаты напишите его администратору.",
+            parse_mode="HTML",
+        )
+
+    @dp.callback_query(F.data == "contact_admin")
+    async def contact_admin_cb(cb: CallbackQuery):
+        await cb.answer()
+        await cb.message.answer(
+            "📩 Напишите администратору для оформления подписки.\n\n"
+            f"7107654772: <code>{cb.from_user.id}</code>",
+            parse_mode="HTML",
+        )
+
+
 
     # ─── АДМИН ────────────────────────────────────────
 

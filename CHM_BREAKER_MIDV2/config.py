@@ -23,13 +23,12 @@ class Config:
     #  🔑 TELEGRAM
     # ════════════════════════════════════════════════
 
-    TELEGRAM_TOKEN = ("8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k")
+    TELEGRAM_TOKEN = os.getenv("BOT_TOKEN_CHM")
 
 
     # Твой Telegram ID — станешь администратором
     # Узнать: написать @userinfobot
-    ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "445677777").split(",")]
-
+    ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "445677777,705020259,7107654772").split(",")]
 
     # ════════════════════════════════════════════════
     #  🗄  SQLITE
@@ -77,10 +76,10 @@ class Config:
     #  💳 ПОДПИСКА
     # ════════════════════════════════════════════════
 
-    TRIAL_HOURS    = 6
+    TRIAL_HOURS    = 1
     PRICE_30_DAYS  = "50$"
     PRICE_90_DAYS  = "120$"
-    PRICE_365_DAYS = "300$"
+    PRICE_365_DAYS = "290$"
     PAYMENT_INFO   = "@crypto_chm"
 
 

@@ -16,48 +16,99 @@ log = logging.getLogger("CHM.MultiScanner")
 
 
 def make_signal_text(sig: SignalResult, user: UserSettings, change_24h=None) -> str:
-    stars  = "⭐" * sig.quality + "☆" * (5 - sig.quality)
-    header = "🟢 <b>LONG СИГНАЛ</b>"  if sig.direction == "LONG"  else "🔴 <b>SHORT СИГНАЛ</b>"
-    emoji  = "📈" if sig.direction == "LONG" else "📉"
+    """Профессиональный сигнал с чеклистом подтверждений."""
+    is_long  = sig.direction == "LONG"
+    stars    = "⭐" * sig.quality + "☆" * (5 - sig.quality)
 
-    risk   = abs(sig.entry - sig.sl)
-    tp1    = sig.entry + risk * user.tp1_rr if sig.direction == "LONG" else sig.entry - risk * user.tp1_rr
-    tp2    = sig.entry + risk * user.tp2_rr if sig.direction == "LONG" else sig.entry - risk * user.tp2_rr
-    tp3    = sig.entry + risk * user.tp3_rr if sig.direction == "LONG" else sig.entry - risk * user.tp3_rr
+    # Заголовок
+    if is_long:
+        header = "╔══════════════════════╗\n║   🟢  LONG  СИГНАЛ   ║\n╚══════════════════════╝"
+    else:
+        header = "╔══════════════════════╗\n║   🔴  SHORT СИГНАЛ   ║\n╚══════════════════════╝"
 
-    def pct(t):
-        return abs((t - sig.entry) / sig.entry * 100)
+    # Уровни с пользовательскими RR
+    risk  = abs(sig.entry - sig.sl)
+    tp1   = sig.entry + risk * user.tp1_rr if is_long else sig.entry - risk * user.tp1_rr
+    tp2   = sig.entry + risk * user.tp2_rr if is_long else sig.entry - risk * user.tp2_rr
+    tp3   = sig.entry + risk * user.tp3_rr if is_long else sig.entry - risk * user.tp3_rr
 
-    lines = [
-        header,
-        "",
-        f"💎 <b>{sig.symbol}</b>  {emoji}  {sig.breakout_type}",
-        f"⭐ Качество: {stars}",
-        "",
-        "━━━━━━━━━━━━━━━━━━━━",
-        f"💰 Вход:    <code>{sig.entry:.6g}</code>",
-        f"🛑 Стоп:    <code>{sig.sl:.6g}</code>  <i>(-{sig.risk_pct:.2f}%)</i>",
-        "",
-        f"🎯 Цель 1: <code>{tp1:.6g}</code>  <i>(+{pct(tp1):.2f}%)</i>",
-        f"🎯 Цель 2: <code>{tp2:.6g}</code>  <i>(+{pct(tp2):.2f}%)</i>",
-        f"🏆 Цель 3: <code>{tp3:.6g}</code>  <i>(+{pct(tp3):.2f}%)</i>",
-        "━━━━━━━━━━━━━━━━━━━━",
-        "",
-        f"📊 {sig.trend_local}  |  RSI: <code>{sig.rsi:.1f}</code>  |  Vol: <code>x{sig.volume_ratio:.1f}</code>",
-        f"🕯 Паттерн: {sig.pattern}",
-    ]
+    def pct(t):  return abs((t - sig.entry) / sig.entry * 100)
+    def fmt(v):  return f"{v:.6g}"
 
+    # 24h данные
+    ch24_line = ""
     if change_24h:
-        ch = change_24h.get("change_pct", 0)
-        em = "🔺" if ch > 0 else "🔻"
+        ch  = change_24h.get("change_pct", 0)
         vol = change_24h.get("volume_usdt", 0)
-        lines += ["", f"📅 24h: {em} {ch:+.2f}%  |  Vol: ${vol:,.0f}"]
+        em  = "🔺" if ch > 0 else "🔻"
+        ch24_line = f"\n📅 <b>24h:</b> {em} <b>{ch:+.2f}%</b>  |  Vol: <b>${vol:,.0f}</b>"
 
-    if sig.reasons:
-        lines += ["", "✅ " + "  ".join(sig.reasons)]
+    # ── ЧЕКЛИСТ подтверждений ─────────────────────────────
+    # Каждый критерий: ✅ если выполнен, ❌ если нет
+    vol_ok    = sig.volume_ratio >= 1.2
+    rsi_bull  = sig.rsi < 50
+    rsi_bear  = sig.rsi > 50
+    rsi_ok    = rsi_bull if is_long else rsi_bear
+    rsi_zone  = sig.rsi < 40 if is_long else sig.rsi > 60
+    pat_ok    = bool(sig.pattern and "Бычья свеча" not in sig.pattern and "Медвежья свеча" not in sig.pattern)
+    trend_ok  = "Бычий" in sig.trend_local if is_long else "Медвежий" in sig.trend_local
+    htf_ok    = "Бычий" in sig.trend_htf if is_long else ("Медвежий" in sig.trend_htf if "Выкл" not in sig.trend_htf else None)
 
-    lines += ["", "⚡ <i>CHM Laboratory — CHM BREAKER</i>"]
-    return "\n".join(lines)
+    def ck(v) -> str: return "✅" if v else "❌"
+    def ck3(v) -> str: return "✅" if v else ("➖" if v is None else "❌")
+
+    rsi_str  = f"RSI {sig.rsi:.1f}"
+    vol_str  = f"Объём ×{sig.volume_ratio:.1f}"
+    htf_str  = sig.trend_htf if "Выкл" not in sig.trend_htf else "HTF выкл"
+
+    checklist = (
+        f"{ck(trend_ok)} Тренд: <b>{sig.trend_local}</b>\n"
+        f"{ck3(htf_ok)} HTF тренд: <b>{htf_str}</b>\n"
+        f"{ck(rsi_ok)} {rsi_str} {'< 50 ↙️' if is_long else '> 50 ↗️'}"
+        + (f"  <i>({'зона' if rsi_zone else 'слабый'})</i>\n" if True else "\n")
+        + f"{ck(vol_ok)} {vol_str}{'  🔥' if sig.volume_ratio >= 2 else ''}\n"
+        + f"{ck(pat_ok)} Паттерн: <b>{sig.pattern}</b>\n"
+        + f"━━━━━━━━━━━━━━━━━━━━\n"
+        + f"{'✅' if sig.has_bos else '❌'} BOS (Break of Structure)\n"
+        + f"{'✅' if sig.has_ob  else '❌'} Order Block"
+        + (f" @ <code>{sig.ob_level:.4g}</code>" if sig.has_ob else "") + "\n"
+        + f"{'✅' if sig.has_fvg else '❌'} FVG / Имбаланс"
+        + (f" <i>({sig.fvg_size_pct:.2f}%)</i>" if sig.has_fvg else "") + "\n"
+        + f"{'✅' if sig.has_liq_sweep else '❌'} Liquidity Sweep\n"
+        + f"{'✅' if sig.has_divergence else '❌'} RSI Дивергенция"
+    )
+
+    # Итоговый счёт
+    smc_hits = sum([sig.has_bos, sig.has_ob, sig.has_fvg, sig.has_liq_sweep, sig.has_divergence])
+    score_bar = "█" * sig.quality + "░" * (5 - sig.quality)
+    smc_bar   = "▓" * smc_hits + "░" * (5 - smc_hits)
+    quality_line = (
+        f"⭐ <b>Качество:</b> {stars}  [{score_bar}] {sig.quality}/5\n"
+        f"🔮 <b>SMC Score:</b>  [{smc_bar}] {smc_hits}/5"
+    )
+
+    text = (
+        f"{header}\n\n"
+        f"💎 <b>{sig.symbol}</b>   {sig.breakout_type}{ch24_line}\n"
+        f"\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💰 <b>Вход:</b>    <code>{fmt(sig.entry)}</code>\n"
+        f"🛑 <b>Стоп:</b>    <code>{fmt(sig.sl)}</code>  <i>(-{sig.risk_pct:.2f}%)</i>\n"
+        f"\n"
+        f"🎯 <b>Цель 1:</b>  <code>{fmt(tp1)}</code>  <i>(+{pct(tp1):.2f}% / {user.tp1_rr}R)</i>\n"
+        f"🎯 <b>Цель 2:</b>  <code>{fmt(tp2)}</code>  <i>(+{pct(tp2):.2f}% / {user.tp2_rr}R)</i>\n"
+        f"🏆 <b>Цель 3:</b>  <code>{fmt(tp3)}</code>  <i>(+{pct(tp3):.2f}% / {user.tp3_rr}R)</i>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"\n"
+        f"📋 <b>ПОДТВЕРЖДЕНИЯ:</b>\n"
+        f"{checklist}\n"
+        f"\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"{quality_line}\n"
+        f"\n"
+        f"⚡ <i>CHM Laboratory — CHM BREAKER</i>"
+    )
+    return text
 
 
 class UserScanner:
