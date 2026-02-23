@@ -20,6 +20,10 @@ from keyboards import (
     kb_pivots, kb_ema, kb_filters, kb_quality, kb_cooldown,
     kb_sl, kb_targets, kb_volume, kb_notify, kb_back,
     kb_subscribe,
+    kb_mode_long, kb_mode_short, kb_mode_both,
+    kb_long_timeframes, kb_short_timeframes,
+    kb_long_intervals, kb_short_intervals,
+    trend_text,
 )
 
 log = logging.getLogger("CHM.Handlers")
@@ -161,6 +165,25 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     # КОМАНДЫ ПОЛЬЗОВАТЕЛЯ
     # ════════════════════════════════════════════════
 
+    def _main_text(user: UserSettings) -> str:
+        """Текст главного меню с трендом."""
+        trend = scanner.get_trend()
+        NL = "\n"
+        mode_names = {"long": "📈 ЛОНГ", "short": "📉 ШОРТ", "both": "⚡ ОБА"}
+        cur_mode = mode_names.get(user.scan_mode, "⚡ ОБА")
+        active_str = "🟢 работает" if user.active else "🔴 остановлен"
+        sub_em = {"active": "✅", "trial": "🆓", "expired": "❌", "banned": "🚫"}.get(user.sub_status, "❓")
+        return (
+            "⚡ <b>CHM BREAKER BOT</b>" + NL + NL +
+            trend_text(trend) + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "Режим: <b>" + cur_mode + "</b>  |  " + active_str + NL +
+            "Подписка: <b>" + sub_em + " " + user.sub_status.upper() +
+            " — " + user.time_left_str() + "</b>" + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "Выбери режим сканера 👇"
+        )
+
     @dp.message(Command("start"))
     async def cmd_start(msg: Message):
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
@@ -168,23 +191,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not has:
             await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
             return
-
-        NL = "\n"
-        if user.sub_status == "trial":
-            trial_note = NL + NL + "🆓 Пробный период: осталось <b>" + user.time_left_str() + "</b>"
-        else:
-            trial_note = ""
-
-        text = (
-            "👋 Привет, <b>" + msg.from_user.first_name + "</b>!" + NL + NL +
-            "⚡ <b>CHM BREAKER BOT</b> — by CHM Laboratory" + NL + NL +
-            "Сканирую 200+ монет на OKX и шлю сигналы" + NL +
-            "когда индикатор CHM BREAKER даёт вход." +
-            trial_note + NL + NL +
-            "Настрой и включи сканер 👇"
-        )
-
-        await msg.answer(text, parse_mode="HTML", reply_markup=kb_main(user))
+        await msg.answer(_main_text(user), parse_mode="HTML", reply_markup=kb_main(user))
 
     @dp.message(Command("menu"))
     async def cmd_menu(msg: Message):
@@ -193,7 +200,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not has:
             await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
             return
-        await msg.answer(settings_text(user), parse_mode="HTML", reply_markup=kb_main(user))
+        await msg.answer(_main_text(user), parse_mode="HTML", reply_markup=kb_main(user))
 
     @dp.message(Command("stop"))
     async def cmd_stop(msg: Message):
@@ -491,7 +498,166 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 await cb.message.answer(text, parse_mode="HTML")
 
     # ════════════════════════════════════════════════
-    # МЕНЮ И НАСТРОЙКИ
+    # РЕЖИМЫ СКАНЕРА (ЛОНГ / ШОРТ / ОБА)
+    # ════════════════════════════════════════════════
+
+    @dp.callback_query(F.data == "mode_long")
+    async def mode_long(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        NL = "\n"
+        text = (
+            "📈 <b>ЛОНГ сканер</b>" + NL + NL +
+            "Ищет только сигналы на покупку (LONG)." + NL +
+            "Таймфрейм и интервал — отдельно от режима ОБА." + NL + NL +
+            "Текущий ТФ: <b>" + user.long_tf + "</b>  " +
+            "Интервал: <b>" + str(user.long_interval // 60) + " мин.</b>"
+        )
+        await safe_edit(cb, text, kb_mode_long(user))
+
+    @dp.callback_query(F.data == "mode_short")
+    async def mode_short(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        NL = "\n"
+        text = (
+            "📉 <b>ШОРТ сканер</b>" + NL + NL +
+            "Ищет только сигналы на продажу (SHORT)." + NL +
+            "Таймфрейм и интервал — отдельно от режима ОБА." + NL + NL +
+            "Текущий ТФ: <b>" + user.short_tf + "</b>  " +
+            "Интервал: <b>" + str(user.short_interval // 60) + " мин.</b>"
+        )
+        await safe_edit(cb, text, kb_mode_short(user))
+
+    @dp.callback_query(F.data == "mode_both")
+    async def mode_both(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        NL = "\n"
+        text = (
+            "⚡ <b>Режим ОБА (лонги + шорты)</b>" + NL + NL +
+            "Сканирует все сигналы — как лонги так и шорты." + NL + NL +
+            "Текущий ТФ: <b>" + user.timeframe + "</b>  " +
+            "Интервал: <b>" + str(user.scan_interval // 60) + " мин.</b>"
+        )
+        await safe_edit(cb, text, kb_mode_both(user))
+
+    # Включение/выключение ЛОНГ сканера
+    @dp.callback_query(F.data == "toggle_long")
+    async def toggle_long(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        has, reason = user.check_access()
+        if not has:
+            await cb.answer("Подписка истекла!", show_alert=True)
+            await safe_edit(cb, access_denied_text(reason), kb_subscribe(config))
+            return
+        if user.scan_mode != "long":
+            user.scan_mode = "long"
+            user.active    = True
+        else:
+            user.active = not user.active
+        await cb.answer("🟢 ЛОНГ сканер включён!" if user.active else "🔴 ЛОНГ сканер выключен.")
+        await um.save(user)
+        await safe_edit(cb, "📈 <b>ЛОНГ сканер</b>", kb_mode_long(user))
+
+    # Включение/выключение ШОРТ сканера
+    @dp.callback_query(F.data == "toggle_short")
+    async def toggle_short(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        has, reason = user.check_access()
+        if not has:
+            await cb.answer("Подписка истекла!", show_alert=True)
+            await safe_edit(cb, access_denied_text(reason), kb_subscribe(config))
+            return
+        if user.scan_mode != "short":
+            user.scan_mode = "short"
+            user.active    = True
+        else:
+            user.active = not user.active
+        await cb.answer("🟢 ШОРТ сканер включён!" if user.active else "🔴 ШОРТ сканер выключен.")
+        await um.save(user)
+        await safe_edit(cb, "📉 <b>ШОРТ сканер</b>", kb_mode_short(user))
+
+    # Включение/выключение ОБА сканера
+    @dp.callback_query(F.data == "toggle_both")
+    async def toggle_both(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        has, reason = user.check_access()
+        if not has:
+            await cb.answer("Подписка истекла!", show_alert=True)
+            await safe_edit(cb, access_denied_text(reason), kb_subscribe(config))
+            return
+        if user.scan_mode != "both":
+            user.scan_mode = "both"
+            user.active    = True
+        else:
+            user.active = not user.active
+        await cb.answer("🟢 Сканер включён!" if user.active else "🔴 Сканер выключен.")
+        await um.save(user)
+        await safe_edit(cb, "⚡ <b>Режим ОБА</b>", kb_mode_both(user))
+
+    # TF для ЛОНГ
+    @dp.callback_query(F.data == "menu_long_tf")
+    async def menu_long_tf(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "📊 <b>Таймфрейм для ЛОНГ сканера</b>", kb_long_timeframes(user.long_tf))
+
+    @dp.callback_query(F.data.startswith("set_long_tf_"))
+    async def set_long_tf(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.long_tf = cb.data.replace("set_long_tf_", "")
+        await cb.answer("✅ ЛОНГ таймфрейм: " + user.long_tf)
+        await um.save(user)
+        await safe_edit(cb, "📈 <b>ЛОНГ сканер</b>", kb_mode_long(user))
+
+    # Интервал для ЛОНГ
+    @dp.callback_query(F.data == "menu_long_interval")
+    async def menu_long_interval(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "🔄 <b>Интервал для ЛОНГ сканера</b>", kb_long_intervals(user.long_interval))
+
+    @dp.callback_query(F.data.startswith("set_long_interval_"))
+    async def set_long_interval(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.long_interval = int(cb.data.replace("set_long_interval_", ""))
+        await cb.answer("✅ Каждые " + str(user.long_interval // 60) + " мин.")
+        await um.save(user)
+        await safe_edit(cb, "📈 <b>ЛОНГ сканер</b>", kb_mode_long(user))
+
+    # TF для ШОРТ
+    @dp.callback_query(F.data == "menu_short_tf")
+    async def menu_short_tf(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "📊 <b>Таймфрейм для ШОРТ сканера</b>", kb_short_timeframes(user.short_tf))
+
+    @dp.callback_query(F.data.startswith("set_short_tf_"))
+    async def set_short_tf(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.short_tf = cb.data.replace("set_short_tf_", "")
+        await cb.answer("✅ ШОРТ таймфрейм: " + user.short_tf)
+        await um.save(user)
+        await safe_edit(cb, "📉 <b>ШОРТ сканер</b>", kb_mode_short(user))
+
+    # Интервал для ШОРТ
+    @dp.callback_query(F.data == "menu_short_interval")
+    async def menu_short_interval(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "🔄 <b>Интервал для ШОРТ сканера</b>", kb_short_intervals(user.short_interval))
+
+    @dp.callback_query(F.data.startswith("set_short_interval_"))
+    async def set_short_interval(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.short_interval = int(cb.data.replace("set_short_interval_", ""))
+        await cb.answer("✅ Каждые " + str(user.short_interval // 60) + " мин.")
+        await um.save(user)
+        await safe_edit(cb, "📉 <b>ШОРТ сканер</b>", kb_mode_short(user))
+
+    # ════════════════════════════════════════════════
+    # МЕНЮ И НАСТРОЙКИ (старые — без изменений)
     # ════════════════════════════════════════════════
 
     @dp.callback_query(F.data == "toggle_active")
@@ -861,7 +1027,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def back_main(cb: CallbackQuery):
         await cb.answer()
         user = await um.get_or_create(cb.from_user.id)
-        await safe_edit(cb, settings_text(user), kb_main(user))
+        await safe_edit(cb, _main_text(user), kb_main(user))
 
     @dp.callback_query(F.data == "noop")
     async def noop(cb: CallbackQuery):

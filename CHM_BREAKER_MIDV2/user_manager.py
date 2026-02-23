@@ -62,6 +62,16 @@ class UserSettings:
     notify_signal:    bool  = True
     notify_breakout:  bool  = False
 
+    # ── Режим сканирования ──────────────────────────
+    # "both"  — лонги и шорты (как раньше)
+    # "long"  — только лонги, свой TF и интервал
+    # "short" — только шорты, свой TF и интервал
+    scan_mode:        str   = "both"
+    long_tf:          str   = "1h"
+    long_interval:    int   = 3600
+    short_tf:         str   = "1h"
+    short_interval:   int   = 3600
+
     signals_received: int   = 0
 
     def check_access(self) -> tuple[bool, str]:

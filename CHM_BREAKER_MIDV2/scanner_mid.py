@@ -165,6 +165,11 @@ class MidScanner:
             "signals": 0, "api_calls": 0,
         }
 
+        # Кэш глобального тренда (BTC + ETH)
+        self._global_trend:      dict = {}
+        self._trend_updated_at:  float = 0
+        self._trend_ttl:         int   = 3600  # обновляем раз в час
+
     # ── Индикатор ────────────────────────────────────
 
     def _indicator(self, user: UserSettings) -> CHMIndicator:
@@ -173,6 +178,25 @@ class MidScanner:
             self._indicators[user.user_id]  = CHMIndicator(ic)
             self._ind_configs[user.user_id] = ic
         return self._indicators[user.user_id]
+
+    # ── Глобальный тренд ─────────────────────────────
+
+    async def _update_trend_if_needed(self):
+        if time.time() - self._trend_updated_at > self._trend_ttl:
+            try:
+                self._global_trend = await self.fetcher.get_global_trend()
+                self._trend_updated_at = time.time()
+                btc = self._global_trend.get("BTC", {})
+                eth = self._global_trend.get("ETH", {})
+                log.info(
+                    f"🌍 Тренд обновлён: "
+                    f"BTC={btc.get('trend','?')} ETH={eth.get('trend','?')}"
+                )
+            except Exception as e:
+                log.warning(f"Не удалось обновить тренд: {e}")
+
+    def get_trend(self) -> dict:
+        return self._global_trend
 
     # ── Монеты ───────────────────────────────────────
 
@@ -248,6 +272,13 @@ class MidScanner:
                 continue
             if sig is None or sig.quality < user.min_quality:
                 continue
+
+            # Фильтр по направлению (scan_mode)
+            if user.scan_mode == "long" and sig.direction != "LONG":
+                continue
+            if user.scan_mode == "short" and sig.direction != "SHORT":
+                continue
+
             if user.notify_signal:
                 await self._send(user, sig)
             signals += 1
@@ -306,16 +337,55 @@ class MidScanner:
             except asyncio.TimeoutError:
                 break
             try:
-                candles = candles_by_tf.get(user.timeframe, {})
+                candles = candles_by_tf.get(self._active_tf(user), {})
                 await self._scan_user(user, candles)
             except Exception as e:
                 log.error(f"Воркер {wid} ошибка {user.user_id}: {e}")
             finally:
                 self._queue.task_done()
 
+    # ── Активный TF и интервал по scan_mode ──────────
+
+    @staticmethod
+    def _active_tf(user: UserSettings) -> str:
+        if user.scan_mode == "long":
+            return user.long_tf
+        if user.scan_mode == "short":
+            return user.short_tf
+        return user.timeframe
+
+    @staticmethod
+    def _active_interval(user: UserSettings) -> int:
+        if user.scan_mode == "long":
+            return user.long_interval
+        if user.scan_mode == "short":
+            return user.short_interval
+        return user.scan_interval
+
     # ── Уведомление об истечении доступа ──────────────
 
     async def _notify_expired(self, user: UserSettings):
+        try:
+            was_trial   = user.sub_status == "trial"
+            user.active = False
+            await self.um.save(user)
+            cfg = self.cfg
+            if was_trial:
+                text = (
+                    "⏰ <b>Пробный период завершён!</b>\n\n"
+                    f"📅 30 дней  — <b>{cfg.PRICE_30_DAYS}</b>\n"
+                    f"📅 90 дней  — <b>{cfg.PRICE_90_DAYS}</b>\n\n"
+                    f"💳 {cfg.PAYMENT_INFO}"
+                )
+            else:
+                text = (
+                    "⏰ <b>Подписка истекла!</b>\n\n"
+                    f"📅 30 дней  — <b>{cfg.PRICE_30_DAYS}</b>\n"
+                    f"💳 {cfg.PAYMENT_INFO}"
+                )
+            await self.bot.send_message(user.user_id, text, parse_mode="HTML")
+        except Exception:
+            pass
         try:
             was_trial   = user.sub_status == "trial"
             user.active = False
@@ -342,22 +412,23 @@ class MidScanner:
 
     async def _cycle(self):
         start = time.time()
+        await self._update_trend_if_needed()
         users = await self.um.get_active_users()
         if not users:
             return
 
         now = time.time()
         due = [u for u in users
-               if now - self._last_scan.get(u.user_id, 0) >= u.scan_interval]
+               if now - self._last_scan.get(u.user_id, 0) >= self._active_interval(u)]
         if not due:
             return
 
         log.info(f"🔍 Цикл #{self._perf['cycles']+1}: {len(due)}/{len(users)} пользователей")
 
-        # Группируем по TF
+        # Группируем по активному TF (зависит от scan_mode каждого юзера)
         tf_groups: dict[str, list[UserSettings]] = defaultdict(list)
         for u in due:
-            tf_groups[u.timeframe].append(u)
+            tf_groups[self._active_tf(u)].append(u)
 
         min_vol = min(u.min_volume_usdt for u in due)
         coins   = await self._load_coins(min_vol)

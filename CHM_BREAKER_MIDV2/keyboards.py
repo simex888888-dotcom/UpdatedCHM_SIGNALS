@@ -26,15 +26,70 @@ def _mark(current, val) -> str:
 #  ГЛАВНОЕ МЕНЮ
 # ═══════════════════════════════════════════════════
 
+def trend_text(trend: dict) -> str:
+    """Строка с глобальным трендом для шапки меню."""
+    if not trend:
+        return "🌍 <b>Глобальный тренд:</b> загрузка...\n"
+    btc = trend.get("BTC", {})
+    eth = trend.get("ETH", {})
+    btc_str = btc.get("emoji", "❓") + " BTC: <b>" + btc.get("trend", "—") + "</b>"
+    eth_str = eth.get("emoji", "❓") + " ETH: <b>" + eth.get("trend", "—") + "</b>"
+    return "🌍 <b>Глобальный тренд (1D):</b>\n" + btc_str + "  |  " + eth_str + "\n"
+
+
+# ═══════════════════════════════════════════════════
+#  ГЛАВНОЕ МЕНЮ
+# ═══════════════════════════════════════════════════
+
 def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
-    status = "🟢 Сканер ВКЛ — нажми чтобы остановить" if user.active \
+    """Главное меню — выбор режима сканера."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _btn("📈 ЛОНГ — только сигналы в лонг",   "mode_long"),
+        _btn("📉 ШОРТ — только сигналы в шорт",   "mode_short"),
+        _btn("⚡ ОБА — лонги и шорты (текущий)",   "mode_both"),
+        _btn("📊 Моя статистика",                   "my_stats"),
+    ])
+
+
+def kb_mode_long(user: UserSettings) -> InlineKeyboardMarkup:
+    """Меню режима ЛОНГ."""
+    active = user.scan_mode == "long" and user.active
+    status = "🟢 ЛОНГ сканер ВКЛ — нажми чтобы остановить" if active \
+        else "🔴 ЛОНГ сканер ВЫКЛ — нажми чтобы запустить"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _btn(status,                              "toggle_long"),
+        _btn("📊 Таймфрейм ЛОНГ: " + user.long_tf, "menu_long_tf"),
+        _btn("🔄 Интервал: каждые " + str(user.long_interval // 60) + " мин.", "menu_long_interval"),
+        _btn("⚙️ Общие настройки сигнала →",     "menu_settings"),
+        _btn("◀️ Назад",                          "back_main"),
+    ])
+
+
+def kb_mode_short(user: UserSettings) -> InlineKeyboardMarkup:
+    """Меню режима ШОРТ."""
+    active = user.scan_mode == "short" and user.active
+    status = "🟢 ШОРТ сканер ВКЛ — нажми чтобы остановить" if active \
+        else "🔴 ШОРТ сканер ВЫКЛ — нажми чтобы запустить"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _btn(status,                               "toggle_short"),
+        _btn("📊 Таймфрейм ШОРТ: " + user.short_tf, "menu_short_tf"),
+        _btn("🔄 Интервал: каждые " + str(user.short_interval // 60) + " мин.", "menu_short_interval"),
+        _btn("⚙️ Общие настройки сигнала →",      "menu_settings"),
+        _btn("◀️ Назад",                           "back_main"),
+    ])
+
+
+def kb_mode_both(user: UserSettings) -> InlineKeyboardMarkup:
+    """Меню режима ОБА (как раньше)."""
+    active = user.scan_mode == "both" and user.active
+    status = "🟢 Сканер ВКЛ — нажми чтобы остановить" if active \
         else "🔴 Сканер ВЫКЛ — нажми чтобы запустить"
     return InlineKeyboardMarkup(inline_keyboard=[
-        _btn(status,                          "toggle_active"),
-        _btn("📊 Таймфрейм",                 "menu_tf"),
-        _btn("🔄 Интервал сканирования",      "menu_interval"),
-        _btn("⚙️  Все настройки сигнала →",  "menu_settings"),
-        _btn("📈 Моя статистика",              "my_stats"),
+        _btn(status,                              "toggle_both"),
+        _btn("📊 Таймфрейм: " + user.timeframe,  "menu_tf"),
+        _btn("🔄 Интервал: каждые " + str(user.scan_interval // 60) + " мин.", "menu_interval"),
+        _btn("⚙️ Все настройки сигнала →",       "menu_settings"),
+        _btn("◀️ Назад",                          "back_main"),
     ])
 
 
@@ -82,6 +137,30 @@ def kb_timeframes(current_tf: str, current_htf: str = "") -> InlineKeyboardMarku
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def kb_long_timeframes(current_tf: str) -> InlineKeyboardMarkup:
+    tfs = [
+        ("1m", "1 мин"), ("5m", "5 мин"), ("15m", "15 мин"), ("30m", "30 мин"),
+        ("1h", "1 час ⭐"), ("4h", "4 часа"), ("1d", "1 день"),
+    ]
+    rows = [_noop("── Таймфрейм для ЛОНГ сигналов ──")]
+    for tf, desc in tfs:
+        rows.append(_btn(f"{_mark(current_tf, tf)}{tf} — {desc}", f"set_long_tf_{tf}"))
+    rows.append(_back("mode_long"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_short_timeframes(current_tf: str) -> InlineKeyboardMarkup:
+    tfs = [
+        ("1m", "1 мин"), ("5m", "5 мин"), ("15m", "15 мин"), ("30m", "30 мин"),
+        ("1h", "1 час ⭐"), ("4h", "4 часа"), ("1d", "1 день"),
+    ]
+    rows = [_noop("── Таймфрейм для ШОРТ сигналов ──")]
+    for tf, desc in tfs:
+        rows.append(_btn(f"{_mark(current_tf, tf)}{tf} — {desc}", f"set_short_tf_{tf}"))
+    rows.append(_back("mode_short"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 # ═══════════════════════════════════════════════════
 #  ИНТЕРВАЛ СКАНИРОВАНИЯ
 # ═══════════════════════════════════════════════════
@@ -100,6 +179,30 @@ def kb_intervals(current: int) -> InlineKeyboardMarkup:
     for sec, desc in options:
         rows.append(_btn(f"{_mark(current, sec)}{desc}", f"set_interval_{sec}"))
     rows.append(_back())
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_long_intervals(current: int) -> InlineKeyboardMarkup:
+    options = [
+        (300, "5 мин"), (900, "15 мин"), (1800, "30 мин"),
+        (3600, "1 час ⭐"), (7200, "2 часа"), (14400, "4 часа"), (86400, "1 день"),
+    ]
+    rows = [_noop("── Интервал для ЛОНГ сканера ──")]
+    for sec, desc in options:
+        rows.append(_btn(f"{_mark(current, sec)}{desc}", f"set_long_interval_{sec}"))
+    rows.append(_back("mode_long"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_short_intervals(current: int) -> InlineKeyboardMarkup:
+    options = [
+        (300, "5 мин"), (900, "15 мин"), (1800, "30 мин"),
+        (3600, "1 час ⭐"), (7200, "2 часа"), (14400, "4 часа"), (86400, "1 день"),
+    ]
+    rows = [_noop("── Интервал для ШОРТ сканера ──")]
+    for sec, desc in options:
+        rows.append(_btn(f"{_mark(current, sec)}{desc}", f"set_short_interval_{sec}"))
+    rows.append(_back("mode_short"))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

@@ -70,6 +70,12 @@ CREATE TABLE IF NOT EXISTS users (
     notify_signal    INTEGER DEFAULT 1,
     notify_breakout  INTEGER DEFAULT 0,
 
+    scan_mode        TEXT    DEFAULT 'both',
+    long_tf          TEXT    DEFAULT '1h',
+    long_interval    INTEGER DEFAULT 3600,
+    short_tf         TEXT    DEFAULT '1h',
+    short_interval   INTEGER DEFAULT 3600,
+
     signals_received INTEGER DEFAULT 0,
     created_at       REAL    DEFAULT 0,
     updated_at       REAL    DEFAULT 0
@@ -107,6 +113,19 @@ async def init_db(path: str):
     _db_path = path
     async with aiosqlite.connect(_db_path) as db:
         await db.executescript(SCHEMA)
+        # Миграция: добавляем новые колонки если их нет (для существующих БД)
+        migrations = [
+            "ALTER TABLE users ADD COLUMN scan_mode TEXT DEFAULT 'both'",
+            "ALTER TABLE users ADD COLUMN long_tf TEXT DEFAULT '1h'",
+            "ALTER TABLE users ADD COLUMN long_interval INTEGER DEFAULT 3600",
+            "ALTER TABLE users ADD COLUMN short_tf TEXT DEFAULT '1h'",
+            "ALTER TABLE users ADD COLUMN short_interval INTEGER DEFAULT 3600",
+        ]
+        for sql in migrations:
+            try:
+                await db.execute(sql)
+            except Exception:
+                pass  # колонка уже существует
         await db.commit()
     log.info(f"✅ SQLite инициализирована: {path}")
 
