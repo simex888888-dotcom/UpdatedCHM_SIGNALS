@@ -1,9 +1,14 @@
 """
-CHM BREAKER — индикатор v5
-+ BOS/CHoCH, Order Block, FVG, RSI-дивергенция
+CHM BREAKER — индикатор v4.2
+Новое:
+  • CHOCH — смена характера структуры (ранний сигнал разворота)
+  • HTF Daily Confluence — совпадение с уровнями дневного таймфрейма
+  • Session scoring — бонус качества за торговлю в прайм-сессии
 """
 
 import logging
+from datetime import datetime, timezone
+
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
@@ -34,14 +39,15 @@ class SignalResult:
     trend_htf:     str   = ""
     pattern:       str   = ""
     breakout_type: str   = ""
-    # Новые SMC поля
-    has_ob:        bool  = False   # Order Block
-    has_fvg:       bool  = False   # Fair Value Gap
-    has_liq_sweep: bool  = False   # Liquidity Sweep (ложный пробой)
-    has_bos:       bool  = False   # Break of Structure
-    has_divergence:bool  = False   # RSI дивергенция
-    ob_level:      float = 0.0     # уровень OB
-    fvg_size_pct:  float = 0.0     # размер FVG в %
+    has_ob:        bool  = False
+    has_fvg:       bool  = False
+    has_liq_sweep: bool  = False
+    has_bos:       bool  = False
+    # ── Новые поля v4.2 ────────────────────────────
+    has_choch:      bool  = False   # Change of Character обнаружен
+    htf_confluence: bool  = False   # Совпадение с уровнями дневного TF
+    session_name:   str   = ""      # Название текущей сессии
+    session_prime:  bool  = False   # True = прайм-сессия (Лондон / Нью-Йорк)
 
 
 class CHMIndicator:
@@ -50,7 +56,7 @@ class CHMIndicator:
         self.cfg = config
         self._last_signal: dict[str, int] = {}
 
-    # ── Технические инструменты ─────────────────────────
+    # ── Базовые инструменты ─────────────────────────────────────────────────
 
     @staticmethod
     def _ema(s, n):
@@ -58,10 +64,10 @@ class CHMIndicator:
 
     @staticmethod
     def _rsi(s, n=14):
-        d    = s.diff()
-        g    = d.clip(lower=0).ewm(span=n, adjust=False).mean()
-        l    = (-d.clip(upper=0)).ewm(span=n, adjust=False).mean()
-        rs   = g / l.replace(0, np.nan)
+        d = s.diff()
+        g = d.clip(lower=0).ewm(span=n, adjust=False).mean()
+        l = (-d.clip(upper=0)).ewm(span=n, adjust=False).mean()
+        rs = g / l.replace(0, np.nan)
         return 100 - 100 / (1 + rs)
 
     @staticmethod
@@ -90,161 +96,7 @@ class CHMIndicator:
                 out.iloc[i] = arr[i]
         return out
 
-    # ── BOS / CHoCH ─────────────────────────────────────
-    # Break of Structure: цена закрылась выше последнего структурного максимума (BOS бычий)
-    # или ниже последнего структурного минимума (BOS медвежий)
-
-    def _detect_bos(self, df: pd.DataFrame, direction: str, strength: int = 5) -> bool:
-        """Возвращает True если есть BOS в нужном направлении на последних 30 свечах."""
-        try:
-            window = df.iloc[-30:]
-            c_now  = df["close"].iloc[-1]
-            if direction == "LONG":
-                ph = self._pivot_highs(window["high"], strength).dropna()
-                if len(ph) >= 2:
-                    prev_high = ph.iloc[-2]          # предпоследний максимум
-                    # Текущая цена пробила предпоследний максимум структуры
-                    return c_now > prev_high
-            else:
-                pl = self._pivot_lows(window["low"], strength).dropna()
-                if len(pl) >= 2:
-                    prev_low = pl.iloc[-2]
-                    return c_now < prev_low
-        except Exception:
-            pass
-        return False
-
-    # ── Order Block ─────────────────────────────────────
-    # Последняя сильная медвежья свеча перед бычьим движением (бычий OB для лонга)
-    # или последняя сильная бычья свеча перед медвежьим движением (медвежий OB для шорта)
-
-    def _detect_order_block(self, df: pd.DataFrame, direction: str, atr: float) -> tuple[bool, float]:
-        """Возвращает (ob_found, ob_level)."""
-        try:
-            c_now = df["close"].iloc[-1]
-            if direction == "LONG":
-                # Ищем медвежью свечу (close < open) за последние 20 свечей,
-                # после которой пошёл рост. OB = верхняя граница той свечи.
-                for i in range(-20, -3):
-                    candle = df.iloc[i]
-                    if candle["close"] < candle["open"]:                # медвежья
-                        ob_top    = candle["open"]                      # верх OB
-                        ob_bottom = candle["close"]                     # низ OB
-                        # После этой свечи был рост
-                        future_close = df["close"].iloc[i+1:i+5].max()
-                        if future_close > ob_top:                       # вышел выше OB
-                            # Текущая цена около OB
-                            if ob_bottom - atr * 0.3 < c_now < ob_top + atr * 0.3:
-                                return True, (ob_top + ob_bottom) / 2
-            else:
-                # Бычья свеча перед падением
-                for i in range(-20, -3):
-                    candle = df.iloc[i]
-                    if candle["close"] > candle["open"]:                # бычья
-                        ob_top    = candle["close"]
-                        ob_bottom = candle["open"]
-                        future_close = df["close"].iloc[i+1:i+5].min()
-                        if future_close < ob_bottom:                    # вышел ниже OB
-                            if ob_bottom - atr * 0.3 < c_now < ob_top + atr * 0.3:
-                                return True, (ob_top + ob_bottom) / 2
-        except Exception:
-            pass
-        return False, 0.0
-
-    # ── Fair Value Gap (FVG / Imbalance) ─────────────────
-    # Импульсная свеча, оставившая разрыв между high[i-1] и low[i+1]
-
-    def _detect_fvg(self, df: pd.DataFrame, direction: str) -> tuple[bool, float]:
-        """Ищет FVG в последних 15 свечах. Возвращает (fvg_found, gap_size_pct)."""
-        try:
-            c_now = df["close"].iloc[-1]
-            for i in range(-15, -2):
-                prev   = df.iloc[i - 1]
-                middle = df.iloc[i]
-                nxt    = df.iloc[i + 1]
-                mid_body = abs(middle["close"] - middle["open"])
-                mid_total = middle["high"] - middle["low"]
-                if mid_total < 1e-10:
-                    continue
-                is_impulse = mid_body / mid_total > 0.6   # импульсная свеча
-
-                if direction == "LONG" and is_impulse and middle["close"] > middle["open"]:
-                    gap_low  = prev["high"]
-                    gap_high = nxt["low"]
-                    if gap_high > gap_low:    # реальный разрыв
-                        gap_pct = (gap_high - gap_low) / gap_low * 100
-                        # Цена вернулась в FVG (ретест)
-                        mid_gap = (gap_low + gap_high) / 2
-                        if gap_low - mid_body * 0.3 < c_now < gap_high + mid_body * 0.3:
-                            return True, gap_pct
-
-                if direction == "SHORT" and is_impulse and middle["close"] < middle["open"]:
-                    gap_low  = nxt["high"]
-                    gap_high = prev["low"]
-                    if gap_high > gap_low:
-                        gap_pct = (gap_high - gap_low) / gap_low * 100
-                        mid_gap = (gap_low + gap_high) / 2
-                        if gap_low - mid_body * 0.3 < c_now < gap_high + mid_body * 0.3:
-                            return True, gap_pct
-        except Exception:
-            pass
-        return False, 0.0
-
-    # ── Liquidity Sweep ──────────────────────────────────
-    # Ложный пробой: цена пробила уровень, но вернулась — шортисты/лонгисты ликвидированы
-
-    def _detect_liquidity_sweep(self, df: pd.DataFrame, direction: str, level: float, atr: float) -> bool:
-        """Проверяет был ли недавний ложный пробой уровня (sweep)."""
-        try:
-            # Смотрим последние 10 свечей
-            recent = df.iloc[-10:-1]
-            c_now  = df["close"].iloc[-1]
-            if direction == "LONG":
-                # Цена пробивала уровень вниз (шип ниже), но закрылась выше
-                lows = recent["low"]
-                if lows.min() < level - atr * 0.1:         # был шип ниже уровня
-                    if c_now > level:                        # сейчас выше
-                        return True
-            else:
-                highs = recent["high"]
-                if highs.max() > level + atr * 0.1:
-                    if c_now < level:
-                        return True
-        except Exception:
-            pass
-        return False
-
-    # ── RSI Дивергенция ──────────────────────────────────
-    # Цена обновила минимум/максимум, RSI — нет → скрытое давление разворота
-
-    def _detect_divergence(self, df: pd.DataFrame, rsi: pd.Series, direction: str) -> bool:
-        """Простая RSI-дивергенция на последних 20 свечах."""
-        try:
-            window_df  = df.iloc[-20:]
-            window_rsi = rsi.iloc[-20:]
-            if direction == "LONG":
-                # Бычья дивергенция: цена сделала новый LOW, RSI — нет
-                price_low1 = window_df["low"].iloc[:10].min()
-                price_low2 = window_df["low"].iloc[10:].min()
-                rsi_low1   = window_rsi.iloc[:10].min()
-                rsi_low2   = window_rsi.iloc[10:].min()
-                if price_low2 < price_low1 and rsi_low2 > rsi_low1:
-                    return True
-            else:
-                # Медвежья дивергенция: цена сделала новый HIGH, RSI — нет
-                price_hi1 = window_df["high"].iloc[:10].max()
-                price_hi2 = window_df["high"].iloc[10:].max()
-                rsi_hi1   = window_rsi.iloc[:10].max()
-                rsi_hi2   = window_rsi.iloc[10:].max()
-                if price_hi2 > price_hi1 and rsi_hi2 < rsi_hi1:
-                    return True
-        except Exception:
-            pass
-        return False
-
-    # ── Паттерны ─────────────────────────────────────────
-
-    def _detect_pattern(self, df) -> tuple[str, str]:
+    def _detect_pattern(self, df) -> tuple:
         c = df.iloc[-1]
         p = df.iloc[-2]
         body       = abs(c["close"] - c["open"])
@@ -254,34 +106,166 @@ class CHMIndicator:
         upper_wick = c["high"] - max(c["close"], c["open"])
         lower_wick = min(c["close"], c["open"]) - c["low"]
         p_body     = abs(p["close"] - p["open"])
-
         bull, bear = "", ""
 
         if lower_wick >= body * 1.5 and c["close"] >= c["open"]:
             bull = "🟢 Бычий пин-бар"
         if upper_wick >= body * 1.5 and c["close"] <= c["open"]:
             bear = "🔴 Медвежий пин-бар"
-
         if (c["close"] > c["open"] and p["close"] < p["open"]
                 and c["close"] > p["open"] and c["open"] < p["close"] and body >= p_body * 0.8):
             bull = "🟢 Бычье поглощение"
         if (c["close"] < c["open"] and p["close"] > p["open"]
                 and c["close"] < p["open"] and c["open"] > p["close"] and body >= p_body * 0.8):
             bear = "🔴 Медвежье поглощение"
-
         if lower_wick >= total * 0.55 and upper_wick <= total * 0.15:
             bull = "🟢 Молот"
         if upper_wick >= total * 0.55 and lower_wick <= total * 0.15:
             bear = "🔴 Падающая звезда"
-
         if not bull and c["close"] > c["open"] and body >= total * 0.4:
             bull = "🟢 Бычья свеча"
         if not bear and c["close"] < c["open"] and body >= total * 0.4:
             bear = "🔴 Медвежья свеча"
-
         return bull, bear
 
-    # ── Главный анализ ────────────────────────────────────
+    # ── ═══════════════════════════════════════════════════════════════════ ──
+    #    НОВОЕ v4.2: три улучшения точности
+    # ── ═══════════════════════════════════════════════════════════════════ ──
+
+    # ── 1. CHOCH — Change of Character ──────────────────────────────────────
+    #
+    #  CHOCH определяет первый пробой структуры в ПРОТИВОПОЛОЖНУЮ сторону.
+    #  Это самый ранний сигнал смены тренда — ещё до того как BOS подтвердил.
+    #
+    #  BULL CHOCH: рынок делал lower-highs (медвежья структура),
+    #              затем цена закрылась выше последнего lower-high → смена характера.
+    #  BEAR CHOCH: рынок делал higher-lows (бычья структура),
+    #              затем цена закрылась ниже последнего higher-low → смена характера.
+
+    def _detect_choch(self, df: pd.DataFrame, direction: str) -> bool:
+        strength = max(3, self.cfg.PIVOT_STRENGTH // 2)  # чуть мягче чем основные пивоты
+        ph = self._pivot_highs(df["high"], strength)
+        pl = self._pivot_lows(df["low"],   strength)
+
+        recent_h = ph.dropna().iloc[-5:]
+        recent_l = pl.dropna().iloc[-5:]
+
+        if len(recent_h) < 3 or len(recent_l) < 3:
+            return False
+
+        c_now = df["close"].iloc[-1]
+
+        if direction == "LONG":
+            h_vals = recent_h.values
+            # Была медвежья структура: последние 2 свинг-хая понижались
+            had_lower_highs = len(h_vals) >= 3 and h_vals[-3] > h_vals[-2]
+            # Теперь цена пробила последний lower-high вверх
+            broke_above = c_now > h_vals[-2]
+            # Дополнительно проверяем что последний свинг-лоу выше предыдущего (рост дна)
+            l_vals = recent_l.values
+            rising_lows = len(l_vals) >= 2 and l_vals[-1] > l_vals[-2]
+            return had_lower_highs and broke_above and rising_lows
+
+        else:  # SHORT
+            l_vals = recent_l.values
+            # Была бычья структура: последние 2 свинг-лоу повышались
+            had_higher_lows = len(l_vals) >= 3 and l_vals[-3] < l_vals[-2]
+            # Теперь цена пробила последний higher-low вниз
+            broke_below = c_now < l_vals[-2]
+            # Дополнительно: последний свинг-хай ниже предыдущего (снижение вершин)
+            h_vals = recent_h.values
+            falling_highs = len(h_vals) >= 2 and h_vals[-1] < h_vals[-2]
+            return had_higher_lows and broke_below and falling_highs
+
+    # ── 2. HTF Daily Confluence ──────────────────────────────────────────────
+    #
+    #  Проверяет, находится ли зона входа вблизи значимого уровня дневного TF.
+    #  Уровни: Floor Pivot (классический), Daily S/R свинги, Camarilla Pivots.
+    #  Совпадение с дневным уровнем — самый сильный дополнительный фактор.
+
+    def _htf_daily_confluence(
+        self, entry: float, df_htf: pd.DataFrame, atr_daily: float, direction: str
+    ) -> bool:
+        if df_htf is None or len(df_htf) < 5:
+            return False
+
+        # Последний завершённый дневной бар ([-2], т.к. [-1] ещё не закрыт)
+        d = df_htf.iloc[-2]
+        H, L, C = d["high"], d["low"], d["close"]
+
+        # ─── Floor Pivot Points (классика) ────────────────────
+        P  = (H + L + C) / 3
+        R1 = 2 * P - L
+        S1 = 2 * P - H
+        R2 = P + (H - L)
+        S2 = P - (H - L)
+        R3 = H + 2 * (P - L)
+        S3 = L - 2 * (H - P)
+
+        # ─── Camarilla Pivots (лучше работают внутри дня) ─────
+        cam_H4 = C + (H - L) * 1.1 / 2
+        cam_L4 = C - (H - L) * 1.1 / 2
+        cam_H3 = C + (H - L) * 1.1 / 4
+        cam_L3 = C - (H - L) * 1.1 / 4
+
+        # ─── Дневные свинг-уровни ─────────────────────────────
+        daily_ph = self._pivot_highs(df_htf["high"], 3)
+        daily_pl = self._pivot_lows(df_htf["low"],   3)
+        swing_levels = (
+            list(daily_ph.dropna().iloc[-3:].values) +
+            list(daily_pl.dropna().iloc[-3:].values)
+        )
+
+        all_levels = [P, R1, S1, R2, S2, R3, S3, cam_H4, cam_L4, cam_H3, cam_L3] + swing_levels
+
+        # Зона совпадения = 1.5 ATR от дневной свечи
+        zone = atr_daily * 1.5 if atr_daily > 0 else abs(H - L) * 0.3
+
+        for level in all_levels:
+            dist = abs(entry - level)
+            if dist < zone:
+                if direction == "LONG" and level <= entry + zone:
+                    return True
+                if direction == "SHORT" and level >= entry - zone:
+                    return True
+
+        return False
+
+    # ── 3. Session Filter ────────────────────────────────────────────────────
+    #
+    #  Время торговых сессий (UTC):
+    #    Азия:          00:00 – 07:00  слабый объём, много шума
+    #    Лондон-пре:    06:00 – 07:00  подготовка к открытию
+    #    Лондон:        07:00 – 10:00  ⭐ прайм — крупные движения
+    #    Лондон-мид:    10:00 – 12:00  затухание лондонской активности
+    #    NY-пре:        12:00 – 13:00  подготовка
+    #    NY открытие:   13:00 – 16:00  ⭐⭐ лучшее время — перекрытие
+    #    NY-мид:        16:00 – 18:00  затухание
+    #    Вечер/ночь:    18:00 – 00:00  межсессия, малый объём
+
+    @staticmethod
+    def _get_session() -> tuple:
+        """Возвращает (session_name, is_prime).
+           is_prime = True во время Лондон-open и NY-open.
+        """
+        utc_h = datetime.now(timezone.utc).hour
+
+        if 7 <= utc_h < 10:
+            return "🇬🇧 Лондон", True
+        elif 13 <= utc_h < 17:
+            return "🇺🇸 Нью-Йорк", True      # включает перекрытие с Лондоном
+        elif 10 <= utc_h < 13:
+            return "🌐 Лондон-мид", False
+        elif 17 <= utc_h < 20:
+            return "🌐 NY-мид", False
+        elif 6 <= utc_h < 7:
+            return "🌐 Пре-Лондон", False
+        elif 12 <= utc_h < 13:
+            return "🌐 Пре-NY", False
+        else:
+            return "🌏 Азия / ночь", False
+
+    # ── Основной метод анализа ──────────────────────────────────────────────
 
     def analyze(self, symbol: str, df: pd.DataFrame, df_htf=None) -> Optional[SignalResult]:
         cfg = self.cfg
@@ -314,7 +298,6 @@ class CHMIndicator:
         bull_local = c_now > ema50_now and ema50_now > ema200_now
         bear_local = c_now < ema50_now and ema50_now < ema200_now
         neutral    = not bull_local and not bear_local
-
         trend_local = "📈 Бычий" if bull_local else ("📉 Медвежий" if bear_local else "↔️ Боковик")
 
         htf_bull = htf_bear = True
@@ -327,12 +310,12 @@ class CHMIndicator:
             htf_bear = htf_c < htf_e
             trend_htf = "📈 Бычий" if htf_bull else "📉 Медвежий"
 
-        # ── Пивоты ───────────────────────────────────────
-        strength = cfg.PIVOT_STRENGTH
-        ph = self._pivot_highs(df["high"], strength)
-        pl = self._pivot_lows(df["low"],   strength)
-        res_vals = ph.dropna().iloc[-5:]
-        sup_vals = pl.dropna().iloc[-5:]
+        # ── Пивоты ────────────────────────────────────────
+        strength  = cfg.PIVOT_STRENGTH
+        ph        = self._pivot_highs(df["high"], strength)
+        pl        = self._pivot_lows(df["low"],   strength)
+        res_vals  = ph.dropna().iloc[-5:]
+        sup_vals  = pl.dropna().iloc[-5:]
 
         if len(res_vals) == 0 or len(sup_vals) == 0:
             return None
@@ -341,6 +324,9 @@ class CHMIndicator:
 
         # ── Паттерн ──────────────────────────────────────
         bull_pat, bear_pat = self._detect_pattern(df)
+
+        # ── 3. Сессия (получаем один раз для обоих направлений) ─────────────
+        session_name, session_prime = self._get_session()
 
         # ── СИГНАЛ LONG ──────────────────────────────────
         long_signal = False
@@ -378,8 +364,8 @@ class CHMIndicator:
         short_type   = ""
 
         for res in res_vals.values[::-1]:
-            dist = abs(c_now - res) / atr_now
-            near_res  = dist < 1.5
+            dist     = abs(c_now - res) / atr_now
+            near_res = dist < 1.5
             prev_high = df["high"].iloc[-3:-1].max()
             rejected  = prev_high >= res - zone and c_now < res
             if near_res or rejected:
@@ -411,17 +397,9 @@ class CHMIndicator:
         if not long_signal and not short_signal:
             return None
 
+        # ── Расчёт уровней ────────────────────────────────
         direction = "LONG" if long_signal else "SHORT"
-        level     = long_level if long_signal else short_level
 
-        # ── SMC детекторы (новые) ────────────────────────
-        has_bos       = self._detect_bos(df, direction, strength)
-        has_ob, ob_lv = self._detect_order_block(df, direction, atr_now)
-        has_fvg, fvg_pct = self._detect_fvg(df, direction)
-        has_liq       = self._detect_liquidity_sweep(df, direction, level, atr_now)
-        has_div       = self._detect_divergence(df, rsi, direction)
-
-        # ── Расчёт уровней ───────────────────────────────
         if long_signal:
             entry   = c_now
             sl      = min(df["low"].iloc[-3:].min(), long_level - zone) - atr_now * cfg.ATR_MULT * 0.5
@@ -445,78 +423,83 @@ class CHMIndicator:
 
         risk_pct = abs((sl - entry) / entry * 100)
 
-        # ── Качество (базовые 1-5 + SMC бонусы) ──────────
-        quality  = 1
-        reasons  = []
+        # ── НОВОЕ v4.2: вычисляем три дополнительных фактора ────────────────
 
-        vol_ok_q = vol_ratio >= cfg.VOL_MULT
-        pat_ok_q = bool(bull_pat if long_signal else bear_pat)
-        rsi_ok_q = (rsi_now < 50) if long_signal else (rsi_now > 50)
-        htf_ok_q = (htf_bull if long_signal else htf_bear)
-        trend_q  = (bull_local if long_signal else bear_local)
+        # 1. CHOCH
+        has_choch = self._detect_choch(df, direction)
+
+        # 2. HTF Daily Confluence
+        atr_daily = 0.0
+        if df_htf is not None and len(df_htf) > 20:
+            daily_atr = self._atr(df_htf, 14)
+            atr_daily = daily_atr.iloc[-1]
+        htf_confluence = self._htf_daily_confluence(entry, df_htf, atr_daily, direction)
+
+        # 3. Сессия уже получена выше (session_name, session_prime)
+
+        # ── Качество (1-5 звёзд) ─────────────────────────
+        # Базовые условия (как раньше, не трогаем)
+        vol_ok_q  = vol_ratio >= cfg.VOL_MULT
+        pat_ok_q  = bool(bull_pat if long_signal else bear_pat)
+        rsi_ok_q  = (rsi_now < 50) if long_signal else (rsi_now > 50)
+        htf_ok_q  = (htf_bull if long_signal else htf_bear)
+        trend_q   = (bull_local if long_signal else bear_local)
+
+        quality = 1
+        reasons = []
 
         if vol_ok_q:
             quality += 1
-            reasons.append(f"vol:{vol_ratio:.1f}x")
+            reasons.append(f"✅ Объём x{vol_ratio:.1f}")
         if pat_ok_q:
             quality += 1
-            reasons.append(f"pat:{pattern}")
+            reasons.append(f"✅ {pattern}")
         if rsi_ok_q:
             quality += 1
-            reasons.append(f"rsi:{rsi_now:.1f}")
+            reasons.append(f"✅ RSI {rsi_now:.1f}")
         if trend_q and htf_ok_q:
             quality += 1
-            reasons.append("trend")
+            reasons.append("✅ Тренд подтверждает")
 
-        # SMC бонусы (качество не выходит за 5)
-        smc_score = 0
-        smc_reasons = []
-        if has_bos:
-            smc_score += 1
-            smc_reasons.append("BOS")
-        if has_ob:
-            smc_score += 1
-            smc_reasons.append(f"OB@{ob_lv:.4g}")
-        if has_fvg:
-            smc_score += 1
-            smc_reasons.append(f"FVG{fvg_pct:.1f}%")
-        if has_liq:
-            smc_score += 1
-            smc_reasons.append("LiqSweep")
-        if has_div:
-            smc_score += 1
-            smc_reasons.append("Div")
+        # ── Бонусы за новые факторы (+1 за каждый, cap = 5) ─────────────────
+        if has_choch and quality < 5:
+            quality += 1
+            reasons.append("✅ CHOCH — смена структуры")
 
-        total_score = quality + smc_score
-        quality     = min(quality, 5)
+        if htf_confluence and quality < 5:
+            quality += 1
+            reasons.append("✅ Daily confluence")
+
+        if session_prime and quality < 5:
+            quality += 1
+            reasons.append(f"✅ {session_name}")
+
+        quality = min(quality, 5)
 
         self._last_signal[symbol] = bar_idx
 
         return SignalResult(
-            symbol        = symbol,
-            direction     = direction,
-            entry         = entry,
-            sl            = sl,
-            tp1           = tp1,
-            tp2           = tp2,
-            tp3           = tp3,
-            risk_pct      = risk_pct,
-            quality       = quality,
-            smc_score     = smc_score,
-            total_score   = total_score,
-            reasons       = reasons,
-            smc_reasons   = smc_reasons,
-            rsi           = rsi_now,
-            volume_ratio  = vol_ratio,
-            trend_local   = trend_local,
-            trend_htf     = trend_htf,
-            pattern       = pattern,
-            breakout_type = btype,
-            has_bos       = has_bos,
-            has_ob        = has_ob,
-            has_fvg       = has_fvg,
-            has_liq_sweep = has_liq,
-            has_divergence = has_div,
-            ob_level      = ob_lv,
-            fvg_size_pct  = fvg_pct,
+            symbol         = symbol,
+            direction      = direction,
+            entry          = entry,
+            sl             = sl,
+            tp1            = tp1,
+            tp2            = tp2,
+            tp3            = tp3,
+            risk_pct       = risk_pct,
+            quality        = quality,
+            smc_score      = 0,
+            total_score    = quality,
+            reasons        = reasons,
+            rsi            = rsi_now,
+            volume_ratio   = vol_ratio,
+            trend_local    = trend_local,
+            trend_htf      = trend_htf,
+            pattern        = pattern,
+            breakout_type  = btype,
+            # ── Новые поля ──
+            has_choch      = has_choch,
+            htf_confluence = htf_confluence,
+            session_name   = session_name,
+            session_prime  = session_prime,
         )

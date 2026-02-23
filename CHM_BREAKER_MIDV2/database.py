@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS users (
     use_volume       INTEGER DEFAULT 1,
     use_pattern      INTEGER DEFAULT 0,
     use_htf          INTEGER DEFAULT 0,
+    use_session      INTEGER DEFAULT 0,
 
     atr_period       INTEGER DEFAULT 14,
     atr_mult         REAL    DEFAULT 1.0,
@@ -129,6 +130,7 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN short_active INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN long_cfg TEXT DEFAULT '{}'",
             "ALTER TABLE users ADD COLUMN short_cfg TEXT DEFAULT '{}'",
+            "ALTER TABLE users ADD COLUMN use_session INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try:

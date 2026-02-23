@@ -668,6 +668,14 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.long_cfg = cfg.to_json(); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры ЛОНГ</b>", kb_long_filters(user))
 
+    @dp.callback_query(F.data == "long_toggle_session")
+    async def long_toggle_session(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = TradeCfg.from_json(user.long_cfg); cfg.use_session = not cfg.use_session
+        await cb.answer("Сессии ЛОНГ " + ("✅" if cfg.use_session else "❌"))
+        user.long_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "🔬 <b>Фильтры ЛОНГ</b>", kb_long_filters(user))
+
     @dp.callback_query(F.data.startswith("long_set_rsi_period_"))
     async def long_set_rsi_period(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
@@ -952,6 +960,14 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.short_cfg = cfg.to_json(); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры ШОРТ</b>", kb_short_filters(user))
 
+    @dp.callback_query(F.data == "short_toggle_session")
+    async def short_toggle_session(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = TradeCfg.from_json(user.short_cfg); cfg.use_session = not cfg.use_session
+        await cb.answer("Сессии ШОРТ " + ("✅" if cfg.use_session else "❌"))
+        user.short_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "🔬 <b>Фильтры ШОРТ</b>", kb_short_filters(user))
+
     @dp.callback_query(F.data.startswith("short_set_rsi_period_"))
     async def short_set_rsi_period(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
@@ -1194,6 +1210,14 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         user.use_htf = not user.use_htf
         await cb.answer("HTF " + ("✅" if user.use_htf else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "🔬 <b>Фильтры (общие)</b>", kb_filters(user))
+
+    @dp.callback_query(F.data == "toggle_session")
+    async def toggle_session(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.use_session = not user.use_session
+        await cb.answer("Прайм-сессии " + ("✅ включены" if user.use_session else "❌ выключены"))
         await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры (общие)</b>", kb_filters(user))
 

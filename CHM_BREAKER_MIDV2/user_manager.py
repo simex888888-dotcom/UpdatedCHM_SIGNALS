@@ -46,6 +46,7 @@ class TradeCfg:
     use_volume:      bool  = True
     use_pattern:     bool  = False
     use_htf:         bool  = False
+    use_session:     bool  = False   # фильтр прайм-сессий (Лондон / NY open)
     atr_period:      int   = 14
     atr_mult:        float = 1.0
     max_risk_pct:    float = 1.5
@@ -108,6 +109,7 @@ class UserSettings:
     use_volume:       bool  = True
     use_pattern:      bool  = False
     use_htf:          bool  = False
+    use_session:      bool  = False   # фильтр прайм-сессий (Лондон / NY open)
     atr_period:       int   = 14
     atr_mult:         float = 1.0
     max_risk_pct:     float = 1.5
@@ -152,6 +154,7 @@ class UserSettings:
             vol_mult=self.vol_mult, vol_len=self.vol_len,
             use_rsi=self.use_rsi, use_volume=self.use_volume,
             use_pattern=self.use_pattern, use_htf=self.use_htf,
+            use_session=self.use_session,
             atr_period=self.atr_period, atr_mult=self.atr_mult,
             max_risk_pct=self.max_risk_pct,
             tp1_rr=self.tp1_rr, tp2_rr=self.tp2_rr, tp3_rr=self.tp3_rr,
@@ -217,7 +220,7 @@ class UserSettings:
     def to_db(self) -> dict:
         bool_fields = {
             "active", "trial_used", "use_rsi", "use_volume",
-            "use_pattern", "use_htf", "notify_signal", "notify_breakout",
+            "use_pattern", "use_htf", "use_session", "notify_signal", "notify_breakout",
             "long_active", "short_active",
         }
         d = {}
@@ -231,7 +234,7 @@ def _from_db(row: dict) -> UserSettings:
     u = UserSettings(user_id=row["user_id"])
     bool_fields = {
         "active", "trial_used", "use_rsi", "use_volume",
-        "use_pattern", "use_htf", "notify_signal", "notify_breakout",
+        "use_pattern", "use_htf", "use_session", "notify_signal", "notify_breakout",
         "long_active", "short_active",
     }
     for f in fields(u):

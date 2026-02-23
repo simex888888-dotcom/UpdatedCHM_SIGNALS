@@ -126,5 +126,6 @@ class Config:
     D_USE_VOLUME   = True
     D_USE_PATTERN  = False
     D_USE_HTF      = False
+    D_USE_SESSION  = False   # Фильтр сессий: только Лондон + NY открытие
     D_NOTIFY_SIG   = True
     D_NOTIFY_BRK   = False
