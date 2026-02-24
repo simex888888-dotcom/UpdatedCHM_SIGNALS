@@ -149,7 +149,7 @@ def make_signal_keyboard(trade_id: str, matched: int, total: int) -> InlineKeybo
     def b(text, cb): return InlineKeyboardButton(text=text, callback_data=cb)
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            b(f"📋 Подтверждения · {matched}/{total}", f"sig_checks_{trade_id}"),
+            b(f"📋 Усл. {matched}/{total}", f"sig_checks_{trade_id}"),
             b("📊 График",                              f"sig_chart_{trade_id}"),
         ],
         [
