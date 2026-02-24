@@ -355,8 +355,8 @@ class CHMIndicator:
             rsi_ok     = (rsi_now < cfg.RSI_OB) if cfg.USE_RSI_FILTER else True
             vol_ok     = (vol_ratio >= cfg.VOL_MULT) if cfg.USE_VOLUME_FILTER else True
             pattern_ok = bool(bull_pat) if cfg.USE_PATTERN_FILTER else True
-            bullish_c  = df["close"].iloc[-1] > df["open"].iloc[-1]
-            long_signal = trend_ok and htf_ok and rsi_ok and (vol_ok or pattern_ok) and (bullish_c or bull_pat)
+            # Даём сигнал если тренд и RSI ok + хотя бы объём или паттерн
+            long_signal = trend_ok and htf_ok and rsi_ok and (vol_ok or pattern_ok)
 
         # ── СИГНАЛ SHORT ─────────────────────────────────
         short_signal = False
@@ -385,8 +385,7 @@ class CHMIndicator:
             rsi_ok     = (rsi_now > cfg.RSI_OS) if cfg.USE_RSI_FILTER else True
             vol_ok     = (vol_ratio >= cfg.VOL_MULT) if cfg.USE_VOLUME_FILTER else True
             pattern_ok = bool(bear_pat) if cfg.USE_PATTERN_FILTER else True
-            bearish_c  = df["close"].iloc[-1] < df["open"].iloc[-1]
-            short_signal = trend_ok and htf_ok and rsi_ok and (vol_ok or pattern_ok) and (bearish_c or bear_pat)
+            short_signal = trend_ok and htf_ok and rsi_ok and (vol_ok or pattern_ok)
 
         if long_signal and short_signal:
             if rsi_now >= 50:
