@@ -351,7 +351,7 @@ class MultiScanner:
                 reply_markup=kb,
             )
             user.signals_received += 1
-            self.um.save_user(user)
+            await self.um.save(user)
             self._perf["signals"] += 1
             log.info(
                 f"✅ Сигнал → {user.username or user.user_id}: "
@@ -360,7 +360,7 @@ class MultiScanner:
         except TelegramForbiddenError:
             log.warning(f"Пользователь {user.user_id} заблокировал бота")
             user.active = False
-            self.um.save_user(user)
+            await self.um.save(user)
         except Exception as e:
             log.error(f"Ошибка отправки {user.user_id}: {e}")
 
@@ -409,7 +409,7 @@ class MultiScanner:
         return signals
 
     async def scan_all_users(self):
-        active = self.um.get_active_users()
+        active = await self.um.get_active_users()
         if not active:
             return
 

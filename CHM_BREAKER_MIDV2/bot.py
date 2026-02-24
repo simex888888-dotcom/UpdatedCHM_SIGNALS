@@ -15,6 +15,7 @@ from config import Config
 from user_manager import UserManager
 from handlers import register_handlers
 from scanner_multi import MultiScanner
+import database as db
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +31,10 @@ log = logging.getLogger("CHM")
 
 async def main():
     config  = Config()
+
+    # ── Инициализация базы данных (создаёт таблицы если нет) ──
+    await db.init_db(config.DB_PATH)
+
     bot     = Bot(token=config.TELEGRAM_TOKEN)
     storage = MemoryStorage()
     dp      = Dispatcher(storage=storage)
