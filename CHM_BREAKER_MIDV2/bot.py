@@ -1,65 +1,53 @@
 """
-bot.py — точка входа CHM BREAKER MID (50-500 пользователей)
+╔══════════════════════════════════════════════════════════════╗
+║        CHM BREAKER BOT — Telegram Multi-User Edition        ║
+║              by CHM Laboratory                              ║
+╚══════════════════════════════════════════════════════════════╝
+
+Запуск: python3 bot.py
 """
 
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
-
-import database
-import cache
 from config import Config
 from user_manager import UserManager
-from scanner_mid import MidScanner
 from handlers import register_handlers
+from scanner_multi import MultiScanner
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(name)-20s | %(levelname)s | %(message)s",
-    datefmt="%H:%M:%S",
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("chm_mid.log", encoding="utf-8"),
+        logging.FileHandler("chm_bot.log", encoding="utf-8"),
     ],
 )
-logging.getLogger("aiogram").setLevel(logging.WARNING)
-logging.getLogger("aiohttp").setLevel(logging.WARNING)
-
-log = logging.getLogger("CHM.Main")
+log = logging.getLogger("CHM")
 
 
 async def main():
-    config = Config()
-
-    log.info("⏳ Инициализация SQLite...")
-    await database.init_db(config.DB_PATH)
-
-    log.info("⏳ Инициализация кэша...")
-    cache.init_cache(max_symbols=config.CACHE_MAX_SYMBOLS)
-
+    config  = Config()
     bot     = Bot(token=config.TELEGRAM_TOKEN)
-    dp      = Dispatcher(storage=MemoryStorage())
-    um      = UserManager()
-    scanner = MidScanner(config, bot, um)
+    storage = MemoryStorage()
+    dp      = Dispatcher(storage=storage)
 
-    register_handlers(dp, bot, um, scanner, config)
+    user_manager = UserManager()
+    scanner      = MultiScanner(config, bot, user_manager)
 
-    log.info("🚀 CHM BREAKER MID запускается...")
-    log.info(f"   SQLite:      {config.DB_PATH}")
-    log.info(f"   Воркеров:    {config.SCAN_WORKERS}")
-    log.info(f"   API conc.:   {config.API_CONCURRENCY}")
-    log.info(f"   Кэш монет:   {config.CACHE_MAX_SYMBOLS} символов")
+    # Регистрируем все хэндлеры
+    register_handlers(dp, bot, user_manager, scanner, config)
 
-    try:
-        await asyncio.gather(
-            dp.start_polling(bot, allowed_updates=["message", "callback_query"]),
-            scanner.run_forever(),
-        )
-    finally:
-        log.info("🛑 Завершение...")
-        await scanner.fetcher.close()
-        await bot.session.close()
+    log.info("✅ v4.2 — CHOCH + Daily Confluence + Session загружены")
+    log.info("🚀 CHM BREAKER BOT запускается (multi-user режим)...")
+
+    # Запускаем сканер и бота параллельно
+    await asyncio.gather(
+        dp.start_polling(bot, allowed_updates=["message", "callback_query"]),
+        scanner.run_forever(),
+    )
 
 
 if __name__ == "__main__":

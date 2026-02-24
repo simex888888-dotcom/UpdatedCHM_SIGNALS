@@ -1,11 +1,9 @@
 """
-fetcher.py — загрузка данных с OKX
-Адаптирован для ProScanner: один экземпляр на весь процесс,
-session переиспользуется через connection pooling.
+Загрузка данных с OKX (работает в России и большинстве стран)
 """
 
-import asyncio
 import logging
+import asyncio
 import ssl
 import certifi
 import aiohttp
@@ -14,46 +12,31 @@ from typing import Optional
 
 log = logging.getLogger("CHM.Fetcher")
 
-OKX_CANDLES = "https://www.okx.com/api/v5/market/candles"
-OKX_TICKERS = "https://www.okx.com/api/v5/market/tickers"
-OKX_SYMBOLS = "https://www.okx.com/api/v5/public/instruments"
+OKX_CANDLES  = "https://www.okx.com/api/v5/market/candles"
+OKX_TICKERS  = "https://www.okx.com/api/v5/market/tickers"
+OKX_SYMBOLS  = "https://www.okx.com/api/v5/public/instruments"
 
 TIMEFRAME_MAP = {
     "1m":  "1m",  "3m":  "3m",  "5m":  "5m",  "15m": "15m",
     "30m": "30m", "1h":  "1H",  "2h":  "2H",  "4h":  "4H",
-    "6h":  "6H",  "12h": "12H", "1d":  "1D",  "1D":  "1D",
-    "1w":  "1W",
-}
-
-HEADERS = {
-    "User-Agent":      "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36",
-    "Accept":          "application/json",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection":      "keep-alive",
-    "Origin":          "https://www.okx.com",
-    "Referer":         "https://www.okx.com/",
+    "6h":  "6H",  "12h": "12H", "1d":  "1D",  "1w":  "1W",
 }
 
 
-class OKXFetcher:
+class BinanceFetcher:  # имя оставляем чтобы не менять другие файлы
 
     def __init__(self):
         self._session: Optional[aiohttp.ClientSession] = None
 
-    async def _sess(self) -> aiohttp.ClientSession:
+    async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
+            timeout   = aiohttp.ClientTimeout(total=15)
             ssl_ctx   = ssl.create_default_context(cafile=certifi.where())
-            connector = aiohttp.TCPConnector(
-                ssl=ssl_ctx,
-                limit=30,              # pool size для 500+ юзеров
-                limit_per_host=20,
-                keepalive_timeout=60,
-                enable_cleanup_closed=True,
-            )
+            connector = aiohttp.TCPConnector(ssl=ssl_ctx)
             self._session = aiohttp.ClientSession(
-                timeout=aiohttp.ClientTimeout(total=20, connect=8),
+                timeout=timeout,
                 connector=connector,
-                headers=HEADERS,
+                headers={"User-Agent": "Mozilla/5.0"},
             )
         return self._session
 
@@ -61,64 +44,9 @@ class OKXFetcher:
         if self._session and not self._session.closed:
             await self._session.close()
 
-    @staticmethod
-    def _to_okx(symbol: str) -> str:
-        symbol = symbol.replace(" ", "")
-        if symbol.endswith("USDT") and "-" not in symbol:
-            return f"{symbol[:-4]}-USDT-SWAP"
-        return symbol
-
-    async def get_candles(
-        self, symbol: str, timeframe: str,
-        limit: int = 300, retries: int = 3,
-    ) -> Optional[pd.DataFrame]:
-        tf_okx  = TIMEFRAME_MAP.get(timeframe, "1H")
-        okx_sym = self._to_okx(symbol)
-        params  = {"instId": okx_sym, "bar": tf_okx, "limit": str(min(limit, 300))}
-
-        for attempt in range(1, retries + 1):
-            try:
-                sess = await self._sess()
-                async with sess.get(OKX_CANDLES, params=params) as resp:
-                    if resp.status == 429:
-                        # Rate limit — ждём и повторяем
-                        wait = int(resp.headers.get("Retry-After", 3))
-                        log.warning(f"OKX rate limit, ждём {wait}с")
-                        await asyncio.sleep(wait)
-                        continue
-                    if resp.status != 200:
-                        return None
-                    data = await resp.json()
-
-                rows = data.get("data", [])
-                if not rows:
-                    return None
-
-                rows = list(reversed(rows))
-                df   = pd.DataFrame(
-                    rows,
-                    columns=["open_time","open","high","low","close",
-                             "vol","volCcy","volCcyQuote","confirm"]
-                )
-                df = df[["open_time","open","high","low","close","volCcyQuote"]].copy()
-                df.rename(columns={"volCcyQuote": "volume"}, inplace=True)
-                df[["open","high","low","close","volume"]] = \
-                    df[["open","high","low","close","volume"]].astype(float)
-                df["open_time"] = pd.to_datetime(
-                    df["open_time"].astype(float), unit="ms"
-                )
-                df.set_index("open_time", inplace=True)
-                return df.iloc[:-1]  # убираем незакрытую свечу
-
-            except asyncio.TimeoutError:
-                log.debug(f"{symbol} timeout (попытка {attempt})")
-            except Exception as e:
-                log.debug(f"{symbol} error: {e} (попытка {attempt})")
-
-            if attempt < retries:
-                await asyncio.sleep(1.5 * attempt)
-
-        return None
+    # ─────────────────────────────────────────────
+    #  Автозагрузка списка монет с OKX
+    # ─────────────────────────────────────────────
 
     async def get_all_usdt_pairs(
         self,
@@ -127,25 +55,37 @@ class OKXFetcher:
         max_coins: int = 0,
     ) -> list:
         blacklist = blacklist or []
-        try:
-            sess = await self._sess()
+        log.info("🌐 Загружаю список всех монет с OKX...")
 
-            async with sess.get(OKX_SYMBOLS, params={"instType": "SWAP"}) as resp:
+        try:
+            session = await self._get_session()
+
+            # Все USDT-SWAP инструменты (фьючерсы с USDT)
+            async with session.get(
+                OKX_SYMBOLS,
+                params={"instType": "SWAP"},
+            ) as resp:
                 if resp.status != 200:
+                    log.error(f"instruments HTTP {resp.status}")
                     return []
                 data = await resp.json()
 
             all_usdt = {
-                s["instId"] for s in data["data"]
+                s["instId"]
+                for s in data["data"]
                 if s["instId"].endswith("USDT-SWAP")
                 and s["state"] == "live"
                 and s["instId"] not in blacklist
             }
+            log.info(f"  Найдено активных USDT пар: {len(all_usdt)}")
 
-            await asyncio.sleep(0.5)
-
-            async with sess.get(OKX_TICKERS, params={"instType": "SWAP"}) as resp:
+            # Тикеры для фильтра по объёму
+            async with session.get(
+                OKX_TICKERS,
+                params={"instType": "SWAP"},
+            ) as resp:
                 if resp.status != 200:
+                    log.error(f"tickers HTTP {resp.status}")
                     return sorted(all_usdt)
                 tdata = await resp.json()
 
@@ -163,79 +103,128 @@ class OKXFetcher:
 
             filtered.sort(key=lambda x: x[1], reverse=True)
             coins = [sym for sym, _ in filtered]
+
             if max_coins and max_coins > 0:
                 coins = coins[:max_coins]
+
+            log.info(f"  После фильтра по объёму: {len(coins)} монет")
             return coins
 
         except Exception as e:
-            log.error(f"Ошибка загрузки монет: {e}")
+            log.error(f"Ошибка получения списка монет: {e}")
             return []
 
-    async def get_24h_change(self, symbol: str) -> Optional[dict]:
+    # ─────────────────────────────────────────────
+    #  Свечи с OKX
+    # ─────────────────────────────────────────────
+
+    async def get_candles(
+        self,
+        symbol: str,
+        timeframe: str,
+        limit: int = 300,
+        retries: int = 3,
+    ) -> Optional[pd.DataFrame]:
+        interval = TIMEFRAME_MAP.get(timeframe, "1H")
+
+        # OKX использует формат BTC-USDT-SWAP
+        okx_symbol = self._to_okx(symbol)
+
+        params = {
+            "instId": okx_symbol,
+            "bar":    interval,
+            "limit":  str(min(limit, 300)),
+        }
+
+        for attempt in range(1, retries + 1):
+            try:
+                session = await self._get_session()
+                async with session.get(OKX_CANDLES, params=params) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        log.warning(f"{symbol} HTTP {resp.status}: {text[:80]}")
+                        return None
+                    data = await resp.json()
+
+                rows = data.get("data", [])
+                if not rows:
+                    return None
+
+                # OKX: [ts, open, high, low, close, vol, volCcy, volCcyQuote, confirm]
+                # возвращает новые первые — разворачиваем
+                rows = list(reversed(rows))
+
+                df = pd.DataFrame(rows, columns=[
+                    "open_time", "open", "high", "low", "close",
+                    "vol", "volCcy", "volCcyQuote", "confirm"
+                ])
+                df = df[["open_time", "open", "high", "low", "close", "volCcyQuote"]].copy()
+                df.rename(columns={"volCcyQuote": "volume"}, inplace=True)
+                df[["open", "high", "low", "close", "volume"]] = \
+                    df[["open", "high", "low", "close", "volume"]].astype(float)
+                df = df.assign(open_time=pd.to_datetime(df["open_time"].astype(float), unit="ms"))
+                df.set_index("open_time", inplace=True)
+
+                # Убираем незакрытую свечу (confirm == "0")
+                df = df.iloc[:-1]
+                return df
+
+            except asyncio.TimeoutError:
+                log.warning(f"{symbol} таймаут (попытка {attempt}/{retries})")
+            except Exception as e:
+                log.warning(f"{symbol} ошибка: {e} (попытка {attempt}/{retries})")
+
+            if attempt < retries:
+                await asyncio.sleep(2 * attempt)
+
+        return None
+
+    # ─────────────────────────────────────────────
+    #  Вспомогательные
+    # ─────────────────────────────────────────────
+
+    @staticmethod
+    def _to_okx(symbol: str) -> str:
+        """BTCUSDT → BTC-USDT-SWAP"""
+        symbol = symbol.replace(" ", "")
+        if symbol.endswith("USDT") and "-" not in symbol:
+            base = symbol[:-4]
+            return f"{base}-USDT-SWAP"
+        return symbol
+
+    async def get_ticker_price(self, symbol: str) -> Optional[float]:
         try:
-            sess = await self._sess()
-            async with sess.get(
-                OKX_TICKERS, params={"instId": self._to_okx(symbol)}
+            session = await self._get_session()
+            async with session.get(
+                OKX_TICKERS,
+                params={"instId": self._to_okx(symbol)},
             ) as resp:
                 if resp.status == 200:
-                    d    = await resp.json()
-                    t    = d["data"][0]
-                    last = float(t.get("last", 0))
-                    op   = float(t.get("open24h", last))
-                    chg  = ((last - op) / op * 100) if op else 0
-                    return {
-                        "change_pct":  chg,
-                        "volume_usdt": float(t.get("volCcy24h", 0)),
-                    }
+                    d = await resp.json()
+                    return float(d["data"][0]["last"])
         except Exception:
             pass
         return None
 
-    async def get_global_trend(self) -> dict:
-        """
-        Анализирует глобальный тренд по BTC и ETH на дневном TF.
-        Возвращает dict с оценкой тренда для каждого актива.
-        """
-        import pandas as pd
-        result = {}
-        for symbol in ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]:
-            try:
-                df = await self.get_candles(symbol, "1D", limit=220)
-                if df is None or len(df) < 50:
-                    result[symbol] = {"trend": "неизвестен", "emoji": "❓", "detail": "нет данных"}
-                    continue
-
-                close = df["close"]
-                ema50  = close.ewm(span=50,  adjust=False).mean().iloc[-1]
-                ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
-                price  = close.iloc[-1]
-
-                # Считаем угол EMA50 за последние 5 свечей
-                ema50_series = close.ewm(span=50, adjust=False).mean()
-                slope = (ema50_series.iloc[-1] - ema50_series.iloc[-6]) / ema50_series.iloc[-6] * 100
-
-                if price > ema50 > ema200 and slope > 0.3:
-                    trend, emoji = "сильный бычий", "🟢🟢"
-                elif price > ema50 > ema200:
-                    trend, emoji = "бычий", "🟢"
-                elif price > ema200 and price < ema50:
-                    trend, emoji = "нейтральный/слабый", "🟡"
-                elif price < ema50 < ema200 and slope < -0.3:
-                    trend, emoji = "сильный медвежий", "🔴🔴"
-                elif price < ema50 < ema200:
-                    trend, emoji = "медвежий", "🔴"
-                else:
-                    trend, emoji = "нейтральный", "⚪"
-
-                name = "BTC" if "BTC" in symbol else "ETH"
-                result[name] = {
-                    "trend": trend,
-                    "emoji": emoji,
-                    "price": price,
-                    "ema50": ema50,
-                    "ema200": ema200,
-                }
-            except Exception as e:
-                name = "BTC" if "BTC" in symbol else "ETH"
-                result[name] = {"trend": "ошибка", "emoji": "❓", "detail": str(e)}
-        return result
+    async def get_24h_change(self, symbol: str) -> Optional[dict]:
+        try:
+            session = await self._get_session()
+            async with session.get(
+                OKX_TICKERS,
+                params={"instId": self._to_okx(symbol)},
+            ) as resp:
+                if resp.status == 200:
+                    d = await resp.json()
+                    t = d["data"][0]
+                    last  = float(t.get("last",  0))
+                    open_ = float(t.get("open24h", last))
+                    chg   = ((last - open_) / open_ * 100) if open_ else 0
+                    return {
+                        "change_pct":  chg,
+                        "volume_usdt": float(t.get("volCcy24h", 0)),
+                        "high":        float(t.get("high24h", 0)),
+                        "low":         float(t.get("low24h",  0)),
+                    }
+        except Exception:
+            pass
+        return None
