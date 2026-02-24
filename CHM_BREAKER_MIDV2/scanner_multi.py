@@ -404,7 +404,7 @@ class MultiScanner:
                     await self._send_signal(user, sig)
                 signals += 1
 
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(self.config.CHUNK_SLEEP)
 
         return signals
 
