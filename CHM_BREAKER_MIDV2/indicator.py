@@ -425,15 +425,18 @@ class CHMIndicator:
 
         # ── НОВОЕ v4.2: вычисляем три дополнительных фактора ────────────────
 
-        # 1. CHOCH
-        has_choch = self._detect_choch(df, direction)
+        # 1. CHOCH — только если включён
+        has_choch = self._detect_choch(df, direction) if cfg.SMC_USE_CHOCH else False
 
-        # 2. HTF Daily Confluence
+        # 2. HTF Daily Confluence — только если включён
         atr_daily = 0.0
         if df_htf is not None and len(df_htf) > 20:
             daily_atr = self._atr(df_htf, 14)
             atr_daily = daily_atr.iloc[-1]
-        htf_confluence = self._htf_daily_confluence(entry, df_htf, atr_daily, direction)
+        htf_confluence = (
+            self._htf_daily_confluence(entry, df_htf, atr_daily, direction)
+            if cfg.SMC_USE_CONF else False
+        )
 
         # 3. Сессия уже получена выше (session_name, session_prime)
 

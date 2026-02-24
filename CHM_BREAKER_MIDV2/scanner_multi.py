@@ -267,6 +267,12 @@ class MultiScanner:
         cfg.USE_PATTERN_FILTER = user.use_pattern
         cfg.USE_HTF_FILTER     = user.use_htf
         cfg.USE_SESSION_FILTER = user.use_session
+        cfg.SMC_USE_BOS        = user.smc_use_bos
+        cfg.SMC_USE_OB         = user.smc_use_ob
+        cfg.SMC_USE_FVG        = user.smc_use_fvg
+        cfg.SMC_USE_SWEEP      = user.smc_use_sweep
+        cfg.SMC_USE_CHOCH      = user.smc_use_choch
+        cfg.SMC_USE_CONF       = user.smc_use_conf
         cfg.ATR_MULT           = user.atr_mult
         cfg.MAX_RISK_PCT       = user.max_risk_pct
         cfg.TP1_RR             = user.tp1_rr

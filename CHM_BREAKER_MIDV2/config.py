@@ -23,7 +23,7 @@ class Config:
     #  🔑 TELEGRAM
     # ════════════════════════════════════════════════
 
-    TELEGRAM_TOKEN = ("8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k")
+    TELEGRAM_TOKEN = ("8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k ")
 
 
     # Твой Telegram ID — станешь администратором
@@ -42,20 +42,20 @@ class Config:
     # ════════════════════════════════════════════════
 
     # Параллельных запросов к OKX API
-    # OKX лимит ~20 req/sec → ставим 12 для запаса
-    API_CONCURRENCY = 12
+    # OKX лимит ~20 req/sec на candles → ставим 6 для запаса
+    API_CONCURRENCY = 6
 
     # Воркеров анализа (для 50-500 юзеров хватает 6)
     SCAN_WORKERS    = 6
 
-    # Монет за один батч запросов
-    CHUNK_SIZE      = 8
+    # Монет за один батч запросов — меньше = меньше 429
+    CHUNK_SIZE      = 5
 
-    # Пауза между батчами (защита от rate limit)
-    CHUNK_SLEEP     = 0.07
+    # Пауза между батчами (защита от rate limit OKX)
+    CHUNK_SLEEP     = 0.5
 
     # Пауза главного цикла после каждого прохода
-    SCAN_LOOP_SLEEP = 20
+    SCAN_LOOP_SLEEP = 30
 
     # ════════════════════════════════════════════════
     #  🕐 КЭШИ СВЕЧЕЙ (in-memory, секунды)

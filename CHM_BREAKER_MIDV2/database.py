@@ -55,6 +55,12 @@ CREATE TABLE IF NOT EXISTS users (
     use_pattern      INTEGER DEFAULT 0,
     use_htf          INTEGER DEFAULT 0,
     use_session      INTEGER DEFAULT 0,
+    smc_use_bos      INTEGER DEFAULT 1,
+    smc_use_ob       INTEGER DEFAULT 1,
+    smc_use_fvg      INTEGER DEFAULT 0,
+    smc_use_sweep    INTEGER DEFAULT 0,
+    smc_use_choch    INTEGER DEFAULT 0,
+    smc_use_conf     INTEGER DEFAULT 0,
 
     atr_period       INTEGER DEFAULT 14,
     atr_mult         REAL    DEFAULT 1.0,
@@ -131,6 +137,12 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN long_cfg TEXT DEFAULT '{}'",
             "ALTER TABLE users ADD COLUMN short_cfg TEXT DEFAULT '{}'",
             "ALTER TABLE users ADD COLUMN use_session INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN smc_use_bos   INTEGER DEFAULT 1",
+            "ALTER TABLE users ADD COLUMN smc_use_ob    INTEGER DEFAULT 1",
+            "ALTER TABLE users ADD COLUMN smc_use_fvg   INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN smc_use_sweep INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN smc_use_choch INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN smc_use_conf  INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try:

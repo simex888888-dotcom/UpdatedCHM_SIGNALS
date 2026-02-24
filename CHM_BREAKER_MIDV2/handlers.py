@@ -24,6 +24,7 @@ from keyboards import (
     kb_pivots, kb_long_pivots, kb_short_pivots,
     kb_ema, kb_long_ema, kb_short_ema,
     kb_filters, kb_long_filters, kb_short_filters,
+    kb_smc, kb_long_smc, kb_short_smc,
     kb_quality, kb_long_quality, kb_short_quality,
     kb_cooldown, kb_long_cooldown, kb_short_cooldown,
     kb_sl, kb_long_sl, kb_short_sl,
@@ -515,6 +516,60 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await cb.answer()
         await safe_edit(cb, "⚙️ <b>Настройки ЛОНГ</b>", kb_long_settings())
 
+    @dp.callback_query(F.data == "menu_long_smc")
+    async def menu_long_smc(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "⚡ <b>SMC условия ЛОНГ</b>", kb_long_smc(user))
+
+    @dp.callback_query(F.data == "long_smc_toggle_bos")
+    async def long_smc_toggle_bos(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.long_cfg); cfg.smc_use_bos = not cfg.smc_use_bos
+        await cb.answer("BOS ЛОНГ " + ("✅" if cfg.smc_use_bos else "❌"))
+        user.long_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ЛОНГ</b>", kb_long_smc(user))
+
+    @dp.callback_query(F.data == "long_smc_toggle_ob")
+    async def long_smc_toggle_ob(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.long_cfg); cfg.smc_use_ob = not cfg.smc_use_ob
+        await cb.answer("OB ЛОНГ " + ("✅" if cfg.smc_use_ob else "❌"))
+        user.long_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ЛОНГ</b>", kb_long_smc(user))
+
+    @dp.callback_query(F.data == "long_smc_toggle_fvg")
+    async def long_smc_toggle_fvg(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.long_cfg); cfg.smc_use_fvg = not cfg.smc_use_fvg
+        await cb.answer("FVG ЛОНГ " + ("✅" if cfg.smc_use_fvg else "❌"))
+        user.long_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ЛОНГ</b>", kb_long_smc(user))
+
+    @dp.callback_query(F.data == "long_smc_toggle_sweep")
+    async def long_smc_toggle_sweep(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.long_cfg); cfg.smc_use_sweep = not cfg.smc_use_sweep
+        await cb.answer("Sweep ЛОНГ " + ("✅" if cfg.smc_use_sweep else "❌"))
+        user.long_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ЛОНГ</b>", kb_long_smc(user))
+
+    @dp.callback_query(F.data == "long_smc_toggle_choch")
+    async def long_smc_toggle_choch(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.long_cfg); cfg.smc_use_choch = not cfg.smc_use_choch
+        await cb.answer("CHOCH ЛОНГ " + ("✅" if cfg.smc_use_choch else "❌"))
+        user.long_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ЛОНГ</b>", kb_long_smc(user))
+
+    @dp.callback_query(F.data == "long_smc_toggle_conf")
+    async def long_smc_toggle_conf(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.long_cfg); cfg.smc_use_conf = not cfg.smc_use_conf
+        await cb.answer("Confluence ЛОНГ " + ("✅" if cfg.smc_use_conf else "❌"))
+        user.long_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ЛОНГ</b>", kb_long_smc(user))
+
     @dp.callback_query(F.data == "menu_long_pivots")
     async def menu_long_pivots(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
@@ -814,6 +869,60 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await cb.answer()
         await safe_edit(cb, "⚙️ <b>Настройки ШОРТ</b>", kb_short_settings())
 
+    @dp.callback_query(F.data == "menu_short_smc")
+    async def menu_short_smc(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "⚡ <b>SMC условия ШОРТ</b>", kb_short_smc(user))
+
+    @dp.callback_query(F.data == "short_smc_toggle_bos")
+    async def short_smc_toggle_bos(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.short_cfg); cfg.smc_use_bos = not cfg.smc_use_bos
+        await cb.answer("BOS ШОРТ " + ("✅" if cfg.smc_use_bos else "❌"))
+        user.short_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ШОРТ</b>", kb_short_smc(user))
+
+    @dp.callback_query(F.data == "short_smc_toggle_ob")
+    async def short_smc_toggle_ob(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.short_cfg); cfg.smc_use_ob = not cfg.smc_use_ob
+        await cb.answer("OB ШОРТ " + ("✅" if cfg.smc_use_ob else "❌"))
+        user.short_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ШОРТ</b>", kb_short_smc(user))
+
+    @dp.callback_query(F.data == "short_smc_toggle_fvg")
+    async def short_smc_toggle_fvg(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.short_cfg); cfg.smc_use_fvg = not cfg.smc_use_fvg
+        await cb.answer("FVG ШОРТ " + ("✅" if cfg.smc_use_fvg else "❌"))
+        user.short_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ШОРТ</b>", kb_short_smc(user))
+
+    @dp.callback_query(F.data == "short_smc_toggle_sweep")
+    async def short_smc_toggle_sweep(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.short_cfg); cfg.smc_use_sweep = not cfg.smc_use_sweep
+        await cb.answer("Sweep ШОРТ " + ("✅" if cfg.smc_use_sweep else "❌"))
+        user.short_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ШОРТ</b>", kb_short_smc(user))
+
+    @dp.callback_query(F.data == "short_smc_toggle_choch")
+    async def short_smc_toggle_choch(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.short_cfg); cfg.smc_use_choch = not cfg.smc_use_choch
+        await cb.answer("CHOCH ШОРТ " + ("✅" if cfg.smc_use_choch else "❌"))
+        user.short_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ШОРТ</b>", kb_short_smc(user))
+
+    @dp.callback_query(F.data == "short_smc_toggle_conf")
+    async def short_smc_toggle_conf(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg = TradeCfg.from_json(user.short_cfg); cfg.smc_use_conf = not cfg.smc_use_conf
+        await cb.answer("Confluence ШОРТ " + ("✅" if cfg.smc_use_conf else "❌"))
+        user.short_cfg = cfg.to_json(); await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия ШОРТ</b>", kb_short_smc(user))
+
     @dp.callback_query(F.data == "menu_short_pivots")
     async def menu_short_pivots(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
@@ -1105,6 +1214,61 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def menu_settings(cb: CallbackQuery):
         await cb.answer()
         await safe_edit(cb, "⚙️ <b>Настройки ОБА</b>", kb_settings())
+
+    # ── SMC меню (общие) ────────────────────────────────────────────────────
+    @dp.callback_query(F.data == "menu_smc")
+    async def menu_smc(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "⚡ <b>SMC условия входа</b>", kb_smc(user))
+
+    @dp.callback_query(F.data == "smc_toggle_bos")
+    async def smc_toggle_bos(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.smc_use_bos = not user.smc_use_bos
+        await cb.answer("BOS " + ("✅" if user.smc_use_bos else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия входа</b>", kb_smc(user))
+
+    @dp.callback_query(F.data == "smc_toggle_ob")
+    async def smc_toggle_ob(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.smc_use_ob = not user.smc_use_ob
+        await cb.answer("Order Block " + ("✅" if user.smc_use_ob else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия входа</b>", kb_smc(user))
+
+    @dp.callback_query(F.data == "smc_toggle_fvg")
+    async def smc_toggle_fvg(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.smc_use_fvg = not user.smc_use_fvg
+        await cb.answer("FVG " + ("✅" if user.smc_use_fvg else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия входа</b>", kb_smc(user))
+
+    @dp.callback_query(F.data == "smc_toggle_sweep")
+    async def smc_toggle_sweep(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.smc_use_sweep = not user.smc_use_sweep
+        await cb.answer("Sweep " + ("✅" if user.smc_use_sweep else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия входа</b>", kb_smc(user))
+
+    @dp.callback_query(F.data == "smc_toggle_choch")
+    async def smc_toggle_choch(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.smc_use_choch = not user.smc_use_choch
+        await cb.answer("CHOCH " + ("✅" if user.smc_use_choch else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия входа</b>", kb_smc(user))
+
+    @dp.callback_query(F.data == "smc_toggle_conf")
+    async def smc_toggle_conf(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.smc_use_conf = not user.smc_use_conf
+        await cb.answer("Daily Confluence " + ("✅" if user.smc_use_conf else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "⚡ <b>SMC условия входа</b>", kb_smc(user))
 
     # Общие настройки (ОБА) — пивоты, EMA, фильтры, и т.д.
     @dp.callback_query(F.data == "menu_pivots")
