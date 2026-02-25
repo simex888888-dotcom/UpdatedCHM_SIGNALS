@@ -471,9 +471,13 @@ class CHMIndicator:
         long_level  = None
         long_type   = ""
 
+        # Подтверждение: последняя свеча должна быть бычьей (close > open)
+        last_candle_bull = df["close"].iloc[-1] > df["open"].iloc[-1]
+
         for sup in sup_vals.values[::-1]:
             dist = abs(c_now - sup) / atr_now
-            near_support = dist < 1.5
+            # Цена должна быть ВЫШЕ поддержки (не ниже!) и не слишком далеко
+            near_support = dist < 1.0 and c_now >= sup
             prev_low     = df["low"].iloc[-3:-1].min()
             bounced      = prev_low <= sup + zone and c_now > sup
             if near_support or bounced:
@@ -493,17 +497,21 @@ class CHMIndicator:
             rsi_ok     = (rsi_now < cfg.RSI_OB) if cfg.USE_RSI_FILTER else True
             vol_ok     = (vol_ratio >= cfg.VOL_MULT) if cfg.USE_VOLUME_FILTER else True
             pattern_ok = bool(bull_pat) if cfg.USE_PATTERN_FILTER else True
-            # Даём сигнал если тренд и RSI ok + хотя бы объём или паттерн
-            long_signal = trend_ok and htf_ok and rsi_ok and (vol_ok or pattern_ok)
+            # Требуем подтверждение бычьей свечи + тренд и RSI ok + объём или паттерн
+            long_signal = last_candle_bull and trend_ok and htf_ok and rsi_ok and (vol_ok or pattern_ok)
 
         # ── СИГНАЛ SHORT ─────────────────────────────────
         short_signal = False
         short_level  = None
         short_type   = ""
 
+        # Подтверждение: последняя свеча должна быть медвежьей (close < open)
+        last_candle_bear = df["close"].iloc[-1] < df["open"].iloc[-1]
+
         for res in res_vals.values[::-1]:
             dist     = abs(c_now - res) / atr_now
-            near_res = dist < 1.5
+            # Цена должна быть НИЖЕ сопротивления (не выше!) и не слишком далеко
+            near_res = dist < 1.0 and c_now <= res
             prev_high = df["high"].iloc[-3:-1].max()
             rejected  = prev_high >= res - zone and c_now < res
             if near_res or rejected:
@@ -523,13 +531,16 @@ class CHMIndicator:
             rsi_ok     = (rsi_now > cfg.RSI_OS) if cfg.USE_RSI_FILTER else True
             vol_ok     = (vol_ratio >= cfg.VOL_MULT) if cfg.USE_VOLUME_FILTER else True
             pattern_ok = bool(bear_pat) if cfg.USE_PATTERN_FILTER else True
-            short_signal = trend_ok and htf_ok and rsi_ok and (vol_ok or pattern_ok)
+            # Требуем подтверждение медвежьей свечи + тренд и RSI ok + объём или паттерн
+            short_signal = last_candle_bear and trend_ok and htf_ok and rsi_ok and (vol_ok or pattern_ok)
 
         if long_signal and short_signal:
+            # RSI >= 50 = бычий импульс → глушим SHORT, оставляем LONG
+            # RSI < 50  = медвежий импульс → глушим LONG, оставляем SHORT
             if rsi_now >= 50:
-                long_signal  = False
-            else:
                 short_signal = False
+            else:
+                long_signal  = False
 
         if not long_signal and not short_signal:
             return None
@@ -539,7 +550,7 @@ class CHMIndicator:
 
         if long_signal:
             entry   = c_now
-            sl      = min(df["low"].iloc[-3:].min(), long_level - zone) - atr_now * cfg.ATR_MULT * 0.5
+            sl      = min(df["low"].iloc[-3:].min(), long_level - zone) - atr_now * cfg.ATR_MULT * 0.7
             sl      = min(sl, entry * (1 - cfg.MAX_RISK_PCT / 100))
             risk    = entry - sl
             tp1     = entry + risk * cfg.TP1_RR
@@ -549,7 +560,7 @@ class CHMIndicator:
             btype   = long_type
         else:
             entry   = c_now
-            sl      = max(df["high"].iloc[-3:].max(), short_level + zone) + atr_now * cfg.ATR_MULT * 0.5
+            sl      = max(df["high"].iloc[-3:].max(), short_level + zone) + atr_now * cfg.ATR_MULT * 0.7
             sl      = max(sl, entry * (1 + cfg.MAX_RISK_PCT / 100))
             risk    = sl - entry
             tp1     = entry - risk * cfg.TP1_RR

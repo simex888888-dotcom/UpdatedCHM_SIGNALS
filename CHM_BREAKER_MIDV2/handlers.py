@@ -896,13 +896,19 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
             v = float(key.split("_")[-1])
             if cfg: cfg.max_risk_pct = v
             else:   user.max_risk_pct = v
+        elif key.startswith("set_signal_risk_"):
+            v = float(key.split("_")[-1])
+            if cfg: cfg.max_signal_risk_pct = v
+            else:   user.max_signal_risk_pct = v
 
         if prefix == "long_" and cfg:    user.set_long_cfg(cfg)
         elif prefix == "short_" and cfg:  user.set_short_cfg(cfg)
 
     @dp.callback_query(F.data.startswith("set_atr_") | F.data.startswith("set_risk_") |
+                       F.data.startswith("set_signal_risk_") |
                        F.data.startswith("long_set_atr_") | F.data.startswith("short_set_atr_") |
-                       F.data.startswith("long_set_risk_") | F.data.startswith("short_set_risk_"))
+                       F.data.startswith("long_set_risk_") | F.data.startswith("short_set_risk_") |
+                       F.data.startswith("long_set_signal_risk_") | F.data.startswith("short_set_signal_risk_"))
     async def cb_set_sl(call: CallbackQuery):
         user = await _get_user(call, um)
         if not user: return
@@ -1041,6 +1047,25 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
 
     # ─────────────────────────────────────────────────────────────────────
     #  Уведомления
+    # ─────────────────────────────────────────────────────────────────────
+    #  Уровень риска сигнала
+    # ─────────────────────────────────────────────────────────────────────
+
+    @dp.callback_query(F.data == "menu_risk_level")
+    async def cb_menu_risk_level(call: CallbackQuery):
+        user = await _get_user(call, um)
+        if not user: return
+        await _answer(call, "🚦 <b>Уровень риска сигнала</b>", kb.kb_risk_level(user))
+
+    @dp.callback_query(F.data.startswith("set_risk_level_"))
+    async def cb_set_risk_level(call: CallbackQuery):
+        user = await _get_user(call, um)
+        if not user: return
+        val = call.data.replace("set_risk_level_", "")   # all | low | medium | high
+        user.min_risk_level = val
+        await um.save(user)
+        await _answer(call, "🚦 <b>Уровень риска сигнала</b>", kb.kb_risk_level(user))
+
     # ─────────────────────────────────────────────────────────────────────
 
     @dp.callback_query(F.data == "menu_notify")

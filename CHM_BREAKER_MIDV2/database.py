@@ -143,6 +143,8 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN smc_use_sweep INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN smc_use_choch INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN smc_use_conf  INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN max_signal_risk_pct REAL DEFAULT 0.0",
+            "ALTER TABLE users ADD COLUMN min_risk_level TEXT DEFAULT 'all'",
         ]
         for sql in migrations:
             try:
