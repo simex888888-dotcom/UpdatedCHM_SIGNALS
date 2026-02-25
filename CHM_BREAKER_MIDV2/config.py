@@ -23,7 +23,7 @@ class Config:
     #  🔑 TELEGRAM
     # ════════════════════════════════════════════════
 
-    TELEGRAM_TOKEN = os.getenv("BOT_TOKEN_CHM")
+    TELEGRAM_TOKEN = os.getenv("8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k")
 
 
     # Твой Telegram ID — станешь администратором
