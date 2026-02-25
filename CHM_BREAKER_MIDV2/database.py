@@ -145,6 +145,7 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN smc_use_conf  INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN max_signal_risk_pct REAL DEFAULT 0.0",
             "ALTER TABLE users ADD COLUMN min_risk_level TEXT DEFAULT 'all'",
+            "ALTER TABLE users ADD COLUMN analysis_mode TEXT DEFAULT 'both'",
         ]
         for sql in migrations:
             try:

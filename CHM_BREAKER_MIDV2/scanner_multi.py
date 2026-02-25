@@ -333,6 +333,7 @@ class MultiScanner:
         cfg.SMC_USE_SWEEP      = user.smc_use_sweep
         cfg.SMC_USE_CHOCH      = user.smc_use_choch
         cfg.SMC_USE_CONF       = user.smc_use_conf
+        cfg.ANALYSIS_MODE      = user.analysis_mode
         if user.user_id not in self._indicators:
             self._indicators[user.user_id] = CHMIndicator(cfg)
         return self._indicators[user.user_id]

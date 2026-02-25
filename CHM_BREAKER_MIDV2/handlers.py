@@ -1067,6 +1067,25 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
         await _answer(call, "🚦 <b>Уровень риска сигнала</b>", kb.kb_risk_level(user))
 
     # ─────────────────────────────────────────────────────────────────────
+    #  Режим анализа (Уровни / SMC / Оба)
+    # ─────────────────────────────────────────────────────────────────────
+
+    @dp.callback_query(F.data == "menu_analysis_mode")
+    async def cb_menu_analysis_mode(call: CallbackQuery):
+        user = await _get_user(call, um)
+        if not user: return
+        await _answer(call, "🔬 <b>Режим анализа сигналов</b>", kb.kb_analysis_mode(user))
+
+    @dp.callback_query(F.data.startswith("set_analysis_mode_"))
+    async def cb_set_analysis_mode(call: CallbackQuery):
+        user = await _get_user(call, um)
+        if not user: return
+        val = call.data.replace("set_analysis_mode_", "")   # levels | smc | both
+        user.analysis_mode = val
+        await um.save(user)
+        await _answer(call, "🔬 <b>Режим анализа сигналов</b>", kb.kb_analysis_mode(user))
+
+    # ─────────────────────────────────────────────────────────────────────
 
     @dp.callback_query(F.data == "menu_notify")
     async def cb_menu_notify(call: CallbackQuery):

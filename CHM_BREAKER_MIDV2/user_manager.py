@@ -65,6 +65,7 @@ class TradeCfg:
     cooldown_bars:   int   = 5
     max_signal_risk_pct: float = 0.0   # фильтр риска: 0.0 = выкл, иначе макс. % стопа
     min_risk_level:  str  = "all"      # фильтр уровня: all | low | medium | high
+    analysis_mode:   str  = "both"     # режим анализа: levels | smc | both
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -137,6 +138,7 @@ class UserSettings:
     cooldown_bars:    int   = 5
     max_signal_risk_pct: float = 0.0   # фильтр риска: 0.0 = выкл, иначе макс. % стопа
     min_risk_level:   str  = "all"     # фильтр уровня: all | low | medium | high
+    analysis_mode:    str  = "both"    # режим анализа: levels | smc | both
 
     notify_signal:    bool  = True
     notify_breakout:  bool  = False
@@ -183,6 +185,7 @@ class UserSettings:
             min_quality=self.min_quality, cooldown_bars=self.cooldown_bars,
             max_signal_risk_pct=self.max_signal_risk_pct,
             min_risk_level=self.min_risk_level,
+            analysis_mode=self.analysis_mode,
         )
 
     def get_long_cfg(self) -> TradeCfg:

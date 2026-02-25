@@ -474,30 +474,42 @@ class CHMIndicator:
         # Подтверждение: последняя свеча должна быть бычьей (close > open)
         last_candle_bull = df["close"].iloc[-1] > df["open"].iloc[-1]
 
-        for sup in sup_vals.values[::-1]:
-            dist = abs(c_now - sup) / atr_now
-            # Цена должна быть ВЫШЕ поддержки (не ниже!) и не слишком далеко
-            near_support = dist < 1.0 and c_now >= sup
-            prev_low     = df["low"].iloc[-3:-1].min()
-            bounced      = prev_low <= sup + zone and c_now > sup
-            if near_support or bounced:
-                long_level = sup
-                long_type  = "Отбой от поддержки"
-                break
+        amode = getattr(cfg, "ANALYSIS_MODE", "both")
 
-        for res in res_vals.values[::-1]:
-            if df["close"].iloc[-2] < res and c_now > res + zone * 0.5:
-                long_level = res
-                long_type  = "Пробой сопротивления"
-                break
+        # ── Режим УРОВНИ: ищем отбой/пробой уровней ──────────────────────────
+        if amode in ("levels", "both"):
+            for sup in sup_vals.values[::-1]:
+                dist = abs(c_now - sup) / atr_now
+                near_support = dist < 1.0 and c_now >= sup
+                prev_low     = df["low"].iloc[-3:-1].min()
+                bounced      = prev_low <= sup + zone and c_now > sup
+                if near_support or bounced:
+                    long_level = sup
+                    long_type  = "Отбой от поддержки"
+                    break
 
+            for res in res_vals.values[::-1]:
+                if df["close"].iloc[-2] < res and c_now > res + zone * 0.5:
+                    long_level = res
+                    long_type  = "Пробой сопротивления"
+                    break
+
+        # ── Режим SMC: ищем BOS как основной сигнал входа ────────────────────
+        if amode == "smc":
+            # В SMC-режиме вход даётся когда есть BOS в нужном направлении
+            # Уровень = текущая цена (вход по рынку), long_level ставим в c_now
+            bos_long = self._detect_bos(df, "LONG")
+            if bos_long:
+                long_level = c_now
+                long_type  = "SMC: Break of Structure"
+
+        # ── Общие условия для LONG ────────────────────────────────────────────
         if long_level is not None:
             trend_ok   = bull_local or neutral or not cfg.USE_HTF_FILTER
             htf_ok     = htf_bull or not cfg.USE_HTF_FILTER
             rsi_ok     = (rsi_now < cfg.RSI_OB) if cfg.USE_RSI_FILTER else True
             vol_ok     = (vol_ratio >= cfg.VOL_MULT) if cfg.USE_VOLUME_FILTER else True
             pattern_ok = bool(bull_pat) if cfg.USE_PATTERN_FILTER else True
-            # Требуем подтверждение бычьей свечи + тренд и RSI ok + объём или паттерн
             long_signal = last_candle_bull and trend_ok and htf_ok and rsi_ok and (vol_ok or pattern_ok)
 
         # ── СИГНАЛ SHORT ─────────────────────────────────
@@ -508,30 +520,38 @@ class CHMIndicator:
         # Подтверждение: последняя свеча должна быть медвежьей (close < open)
         last_candle_bear = df["close"].iloc[-1] < df["open"].iloc[-1]
 
-        for res in res_vals.values[::-1]:
-            dist     = abs(c_now - res) / atr_now
-            # Цена должна быть НИЖЕ сопротивления (не выше!) и не слишком далеко
-            near_res = dist < 1.0 and c_now <= res
-            prev_high = df["high"].iloc[-3:-1].max()
-            rejected  = prev_high >= res - zone and c_now < res
-            if near_res or rejected:
-                short_level = res
-                short_type  = "Отбой от сопротивления"
-                break
+        # ── Режим УРОВНИ ──────────────────────────────────────────────────────
+        if amode in ("levels", "both"):
+            for res in res_vals.values[::-1]:
+                dist     = abs(c_now - res) / atr_now
+                near_res = dist < 1.0 and c_now <= res
+                prev_high = df["high"].iloc[-3:-1].max()
+                rejected  = prev_high >= res - zone and c_now < res
+                if near_res or rejected:
+                    short_level = res
+                    short_type  = "Отбой от сопротивления"
+                    break
 
-        for sup in sup_vals.values[::-1]:
-            if df["close"].iloc[-2] > sup and c_now < sup - zone * 0.5:
-                short_level = sup
-                short_type  = "Пробой поддержки"
-                break
+            for sup in sup_vals.values[::-1]:
+                if df["close"].iloc[-2] > sup and c_now < sup - zone * 0.5:
+                    short_level = sup
+                    short_type  = "Пробой поддержки"
+                    break
 
+        # ── Режим SMC ─────────────────────────────────────────────────────────
+        if amode == "smc":
+            bos_short = self._detect_bos(df, "SHORT")
+            if bos_short:
+                short_level = c_now
+                short_type  = "SMC: Break of Structure"
+
+        # ── Общие условия для SHORT ────────────────────────────────────────────
         if short_level is not None:
             trend_ok   = bear_local or neutral or not cfg.USE_HTF_FILTER
             htf_ok     = htf_bear or not cfg.USE_HTF_FILTER
             rsi_ok     = (rsi_now > cfg.RSI_OS) if cfg.USE_RSI_FILTER else True
             vol_ok     = (vol_ratio >= cfg.VOL_MULT) if cfg.USE_VOLUME_FILTER else True
             pattern_ok = bool(bear_pat) if cfg.USE_PATTERN_FILTER else True
-            # Требуем подтверждение медвежьей свечи + тренд и RSI ok + объём или паттерн
             short_signal = last_candle_bear and trend_ok and htf_ok and rsi_ok and (vol_ok or pattern_ok)
 
         if long_signal and short_signal:
@@ -550,7 +570,11 @@ class CHMIndicator:
 
         if long_signal:
             entry   = c_now
-            sl      = min(df["low"].iloc[-3:].min(), long_level - zone) - atr_now * cfg.ATR_MULT * 0.7
+            # В SMC-режиме long_level == c_now — ставим SL чисто по ATR
+            if amode == "smc":
+                sl  = entry - atr_now * cfg.ATR_MULT * 1.5
+            else:
+                sl  = min(df["low"].iloc[-3:].min(), long_level - zone) - atr_now * cfg.ATR_MULT * 0.7
             sl      = min(sl, entry * (1 - cfg.MAX_RISK_PCT / 100))
             risk    = entry - sl
             tp1     = entry + risk * cfg.TP1_RR
@@ -560,7 +584,10 @@ class CHMIndicator:
             btype   = long_type
         else:
             entry   = c_now
-            sl      = max(df["high"].iloc[-3:].max(), short_level + zone) + atr_now * cfg.ATR_MULT * 0.7
+            if amode == "smc":
+                sl  = entry + atr_now * cfg.ATR_MULT * 1.5
+            else:
+                sl  = max(df["high"].iloc[-3:].max(), short_level + zone) + atr_now * cfg.ATR_MULT * 0.7
             sl      = max(sl, entry * (1 + cfg.MAX_RISK_PCT / 100))
             risk    = sl - entry
             tp1     = entry - risk * cfg.TP1_RR

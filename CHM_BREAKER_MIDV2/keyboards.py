@@ -30,21 +30,25 @@ def _mark(current, val) -> str:
 
 def trend_text(trend: dict) -> str:
     if not trend:
-        return "🌍 <b>Тренд BTC / ETH:</b> загрузка...\n"
-    lines = ["🌍 <b>Тренд BTC / ETH:</b>"]
-    for sym, label in [("BTC", "BTC"), ("ETH", "ETH")]:
+        return "🌍 <b>Тренд рынка:</b> загрузка...\n"
+
+    _labels = {"📈": "Бычий", "📉": "Медвежий", "↔️": "Боковик", "❓": "—"}
+
+    def _tf_line(d: dict, tf: str) -> str:
+        t = d.get(tf, {})
+        em  = t.get("emoji", "❓")
+        txt = t.get("trend", "—")
+        return f"{em} {txt}"
+
+    lines = ["🌍 <b>Тренд рынка:</b>"]
+    for sym in ("BTC", "ETH"):
         d = trend.get(sym, {})
         if not d:
             continue
-        t1h = d.get("1h",  {})
-        t4h = d.get("4h",  {})
-        t1d = d.get("1D",  {})
-        lines.append(
-            f"<b>{label}</b>  "
-            f"{t1h.get('emoji','❓')} 1h  "
-            f"{t4h.get('emoji','❓')} 4h  "
-            f"{t1d.get('emoji','❓')} 1D"
-        )
+        l1h = _tf_line(d, "1h")
+        l4h = _tf_line(d, "4h")
+        l1d = _tf_line(d, "1D")
+        lines.append(f"<b>{sym}:</b>  1h: {l1h}  ·  4h: {l4h}  ·  1D: {l1d}")
     return "\n".join(lines) + "\n"
 
 
@@ -183,6 +187,7 @@ def _settings_menu(prefix: str, back_cb: str) -> InlineKeyboardMarkup:
     p = prefix
     return InlineKeyboardMarkup(inline_keyboard=[
         _noop("── Анализ рынка ─────────────────────────────────────"),
+        _btn("🔬 Режим анализа",              "menu_analysis_mode"),
         _btn("⚡ SMC условия",             "menu_" + p + "smc"),
         _btn("📐 Пивоты / S&R",           "menu_" + p + "pivots"),
         _btn("📉 EMA тренд",               "menu_" + p + "ema"),
@@ -362,6 +367,26 @@ def kb_risk_level(user: UserSettings) -> InlineKeyboardMarkup:
         _noop("🟢 Низкий = ⭐⭐⭐⭐ и ⭐⭐⭐⭐⭐ сигналы"),
         _noop("🟡 Умеренный = ⭐⭐⭐ сигналы"),
         _noop("🔴 Высокий = ⭐ и ⭐⭐ сигналы"),
+        _back("menu_settings"),
+    ])
+
+
+# ══════════════════════════════════════════════════════════════════════════
+#  РЕЖИМ АНАЛИЗА
+# ══════════════════════════════════════════════════════════════════════════
+
+def kb_analysis_mode(user: UserSettings) -> InlineKeyboardMarkup:
+    cur = getattr(user, "analysis_mode", "both")
+    def _m(val): return "✅ " if cur == val else "⬜ "
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _noop("── Выбери метод анализа ─────────────────────────────────"),
+        _btn(_m("both")   + "⚡ Уровни + SMC (рекомендуется)",   "set_analysis_mode_both"),
+        _btn(_m("levels") + "📐 Только уровни (S&R / пивоты)",   "set_analysis_mode_levels"),
+        _btn(_m("smc")    + "🔮 Только SMC (BOS / OB / FVG)",    "set_analysis_mode_smc"),
+        _noop("── Что это значит? ────────────────────────────────────────"),
+        _noop("📐 Уровни — вход при отбое/пробое S&R уровней"),
+        _noop("🔮 SMC — вход по структуре рынка (BOS/OB/FVG)"),
+        _noop("⚡ Оба — уровень должен совпасть со структурой"),
         _back("menu_settings"),
     ])
 
