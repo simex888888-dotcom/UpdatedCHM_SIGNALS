@@ -80,120 +80,65 @@ def make_signal_text(sig: SignalResult, user: UserSettings, change_24h=None) -> 
     return "\n".join(lines)
 
 
-# ── Вспомогательная: вычислить все условия с учётом флагов пользователя ───
-#
-# Возвращает:
-#   active_conds  — list of (ok: bool, label: str, enabled: bool)
-#   matched       — int, число True среди enabled
-#   total         — int, число enabled условий
-#
-# ВАЖНО: логика определения ok_* должна быть идентична indicator.py.
-# Только enabled=True условия входят в счёт matched/total.
-# Disabled условия показываются в чеклисте как ⬜ и не влияют на счёт.
-
-def _eval_conditions(sig: SignalResult, user: UserSettings) -> tuple:
-    is_long    = sig.direction == "LONG"
-    rsi_val    = getattr(sig, "rsi", 50.0)
-    vol_ratio  = getattr(sig, "volume_ratio", 1.0)
-    pattern    = getattr(sig, "pattern", "") or ""
-    trend_htf  = getattr(sig, "trend_htf", "") or ""
-    session_nm = getattr(sig, "session_name", "") or "—"
-
-    # ── Вычисляем результат каждого условия ───────────────────────────────
-    ok_bos   = bool(getattr(sig, "has_bos",      False))
-    ok_ob    = bool(getattr(sig, "has_ob",        False))
-    ok_fvg   = bool(getattr(sig, "has_fvg",       False))
-    ok_liq   = bool(getattr(sig, "has_liq_sweep", False))
-    ok_choch = bool(getattr(sig, "has_choch",      False))
-    ok_conf  = bool(getattr(sig, "htf_confluence", False))
-    ok_sess  = bool(getattr(sig, "session_prime",  False))
-
-    # RSI: перепродан для лонга, перекуплен для шорта
-    ok_rsi = (rsi_val < user.rsi_os) if is_long else (rsi_val > user.rsi_ob)
-
-    # Объём: выше порога пользователя
-    ok_vol = vol_ratio >= user.vol_mult
-
-    # Паттерн: любая непустая строка
-    ok_pat = bool(pattern)
-
-    # HTF тренд: совпадает с направлением
-    ok_htf = ("бычий" in trend_htf.lower() or "bull" in trend_htf.lower()) if is_long \
-             else ("медвежий" in trend_htf.lower() or "bear" in trend_htf.lower())
-
-    # ── Метки для чеклиста ────────────────────────────────────────────────
-    rsi_lbl = (
-        f"RSI {rsi_val:.1f} — {'перепродан 🔽' if is_long else 'перекуплен 🔼'}"
-        if ok_rsi
-        else f"RSI {rsi_val:.1f} — нейтральный"
-    )
-    vol_lbl  = f"Объём ×{vol_ratio:.1f} {'— выше порога' if ok_vol else '— ниже порога'}"
-    pat_lbl  = f"Паттерн: {pattern}" if ok_pat else "Паттерн — не обнаружен"
-    htf_lbl  = f"HTF тренд: {trend_htf}" if trend_htf else "HTF тренд — нет данных"
-    sess_lbl = f"Сессия: {session_nm}"
-
-    # ── Список (ok, label, enabled) — порядок фиксирован ─────────────────
-    # enabled определяется флагами пользователя
-    all_conds = [
-        # SMC структура
-        (ok_bos,   "BOS — пробой структуры рынка",        user.smc_use_bos),
-        (ok_ob,    "Order Block — зона интереса",          user.smc_use_ob),
-        (ok_fvg,   "FVG — дисбаланс / имбаланс",          user.smc_use_fvg),
-        (ok_liq,   "Sweep ликвидности",                    user.smc_use_sweep),
-        (ok_choch, "CHOCH — смена характера структуры",    user.smc_use_choch),
-        # Технические фильтры
-        (ok_rsi,   rsi_lbl,                                user.use_rsi),
-        (ok_vol,   vol_lbl,                                user.use_volume),
-        (ok_pat,   pat_lbl,                                user.use_pattern),
-        (ok_htf,   htf_lbl,                                user.use_htf),
-        # Контекст рынка
-        (ok_conf,  "Daily Confluence",                     user.smc_use_conf),
-        (ok_sess,  sess_lbl,                               user.use_session),
-    ]
-
-    matched = sum(ok for ok, _lbl, enabled in all_conds if enabled)
-    total   = sum(1  for _ok, _lbl, enabled in all_conds if enabled)
-    return all_conds, matched, total
-
-
 # ── Текст чеклиста подтверждений ──────────────────────────────────────────
 
 def make_checklist_text(sig: SignalResult, user: UserSettings) -> str:
-    is_long = sig.direction == "LONG"
-    all_conds, matched, total = _eval_conditions(sig, user)
+    is_long  = sig.direction == "LONG"
+    ok_bos   = bool(getattr(sig, "has_bos",       False))
+    ok_ob    = bool(getattr(sig, "has_ob",         False))
+    ok_fvg   = bool(getattr(sig, "has_fvg",        False))
+    ok_liq   = bool(getattr(sig, "has_liq_sweep",  False))
+    ok_choch = bool(getattr(sig, "has_choch",       False))
+    ok_conf  = bool(getattr(sig, "htf_confluence",  False))
+    ok_sess  = bool(getattr(sig, "session_prime",   False))
+    session_nm = getattr(sig, "session_name", "") or "нет данных"
 
-    # Сортируем: сначала SMC (индексы 0-4), потом техника (5-8), потом контекст (9-10)
-    smc_group  = all_conds[0:5]
-    tech_group = all_conds[5:9]
-    ctx_group  = all_conds[9:11]
+    rsi_val = getattr(sig, "rsi", 50.0)
+    ok_rsi  = (rsi_val < getattr(user, "rsi_os", 35)) if is_long else (rsi_val > getattr(user, "rsi_ob", 65))
+    rsi_lbl = f"RSI {rsi_val:.1f} — {'перепродан 🔽' if (ok_rsi and is_long) else 'перекуплен 🔼' if (ok_rsi and not is_long) else 'нейтральный'}"
 
-    bar = "▓" * matched + "░" * (total - matched)
+    vol_ratio = getattr(sig, "volume_ratio", 1.0)
+    ok_vol    = vol_ratio >= 1.2
+    vol_lbl   = f"Объём ×{vol_ratio:.1f} {'— выше среднего' if ok_vol else '— слабый'}"
 
-    def row(ok, lbl, enabled):
-        if not enabled:
-            return f"⬜  <i>{lbl} — выключено</i>"
-        return ("✅" if ok else "❌") + "  " + lbl
+    pattern = getattr(sig, "pattern", "") or ""
+    ok_pat  = bool(pattern)
+    pat_lbl = f"Паттерн: {pattern}" if ok_pat else "Паттерн — не подтверждён"
+
+    trend_htf = getattr(sig, "trend_htf", "") or ""
+    ok_htf    = ("бычий" in trend_htf.lower() or "bull" in trend_htf.lower()) if is_long \
+                else ("медвежий" in trend_htf.lower() or "bear" in trend_htf.lower())
+    htf_lbl   = f"HTF тренд: {trend_htf}" if trend_htf else "HTF тренд — нет данных"
+
+    conds   = [ok_bos, ok_ob, ok_fvg, ok_liq, ok_rsi, ok_vol, ok_pat, ok_htf, ok_choch, ok_conf, ok_sess]
+    matched = sum(conds)
+    total   = len(conds)
+    bar     = "▓" * matched + "░" * (total - matched)
+
+    def r(ok, lbl): return ("✅" if ok else "❌") + "  " + lbl
 
     direction = "LONG" if is_long else "SHORT"
     lines = [
         f"📋 <b>Подтверждения · {sig.symbol} {direction}</b>",
         "",
         "<b>── SMC Структура ──</b>",
-    ]
-    for ok, lbl, enabled in smc_group:
-        lines.append(row(ok, lbl, enabled))
-
-    lines += ["", "<b>── Технические фильтры ──</b>"]
-    for ok, lbl, enabled in tech_group:
-        lines.append(row(ok, lbl, enabled))
-
-    lines += ["", "<b>── Контекст рынка ──</b>"]
-    for ok, lbl, enabled in ctx_group:
-        lines.append(row(ok, lbl, enabled))
-
-    lines += [
+        r(ok_bos,   "BOS — пробой структуры рынка"),
+        r(ok_ob,    "Order Block — зона интереса"),
+        r(ok_fvg,   "FVG — дисбаланс / имбаланс"),
+        r(ok_liq,   "Sweep ликвидности"),
+        r(ok_choch, "CHOCH — смена характера структуры"),
         "",
-        f"<code>[{bar}]  {matched}/{total} активных условий</code>",
+        "<b>── Технические фильтры ──</b>",
+        r(ok_rsi,   rsi_lbl),
+        r(ok_vol,   vol_lbl),
+        r(ok_pat,   pat_lbl),
+        r(ok_htf,   htf_lbl),
+        "",
+        "<b>── Контекст рынка ──</b>",
+        r(ok_conf,  "Daily Confluence"),
+        r(ok_sess,  f"Сессия: {session_nm}"),
+        "",
+        f"<code>[{bar}]  {matched}/{total} условий</code>",
     ]
     return "\n".join(lines)
 
@@ -217,9 +162,23 @@ def make_signal_keyboard(trade_id: str, matched: int, total: int) -> InlineKeybo
 # ── Подсчёт совпадений для кнопки ─────────────────────────────────────────
 
 def count_conditions(sig: SignalResult, user: UserSettings) -> tuple:
-    """Возвращает (matched, total) — только по включённым условиям."""
-    _, matched, total = _eval_conditions(sig, user)
-    return matched, total
+    is_long  = sig.direction == "LONG"
+    ok_bos   = bool(getattr(sig, "has_bos",       False))
+    ok_ob    = bool(getattr(sig, "has_ob",         False))
+    ok_fvg   = bool(getattr(sig, "has_fvg",        False))
+    ok_liq   = bool(getattr(sig, "has_liq_sweep",  False))
+    ok_choch = bool(getattr(sig, "has_choch",       False))
+    ok_conf  = bool(getattr(sig, "htf_confluence",  False))
+    ok_sess  = bool(getattr(sig, "session_prime",   False))
+    rsi_val   = getattr(sig, "rsi", 50.0)
+    ok_rsi    = (rsi_val < getattr(user, "rsi_os", 35)) if is_long else (rsi_val > getattr(user, "rsi_ob", 65))
+    ok_vol    = getattr(sig, "volume_ratio", 1.0) >= 1.2
+    ok_pat    = bool(getattr(sig, "pattern", ""))
+    trend_htf = getattr(sig, "trend_htf", "") or ""
+    ok_htf    = ("бычий" in trend_htf.lower() or "bull" in trend_htf.lower()) if is_long \
+                else ("медвежий" in trend_htf.lower() or "bear" in trend_htf.lower())
+    conds = [ok_bos, ok_ob, ok_fvg, ok_liq, ok_rsi, ok_vol, ok_pat, ok_htf, ok_choch, ok_conf, ok_sess]
+    return sum(conds), len(conds)
 
 
 # ── UserScanner ────────────────────────────────────────────────────────────
@@ -433,10 +392,6 @@ class MultiScanner:
                     continue
 
                 if sig is None or sig.quality < user.min_quality:
-                    continue
-
-                # Фильтр по риску: пропускаем если стоп слишком далеко
-                if user.max_signal_risk_pct > 0 and sig.risk_pct > user.max_signal_risk_pct:
                     continue
 
                 if user.notify_signal:

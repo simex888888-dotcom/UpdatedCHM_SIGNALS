@@ -370,10 +370,6 @@ def _sl_kb(cfg: TradeCfg, prefix: str, back_cb: str) -> InlineKeyboardMarkup:
     for v, d in [(0.5,"0.5%"), (1.0,"1.0%"), (1.5,"1.5% ⭐"), (2.0,"2.0%"), (3.0,"3.0%")]:
         rows.append(_btn(_mark(cfg.max_risk_pct, v) + d, p + "set_risk_" + str(v)))
 
-    rows.append(_noop("── Фильтр: пропустить сигнал если стоп > X% ─────────────"))
-    for v, d in [(0.0,"Выкл ⭐"), (1.0,"≤ 1.0%"), (1.5,"≤ 1.5%"), (2.0,"≤ 2.0%"), (3.0,"≤ 3.0%"), (5.0,"≤ 5.0%")]:
-        rows.append(_btn(_mark(cfg.max_signal_risk_pct, v) + d, p + "set_signal_risk_" + str(v)))
-
     rows.append(_back(back_cb))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
