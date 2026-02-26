@@ -383,3 +383,14 @@ def kb_subscribe(config) -> InlineKeyboardMarkup:
         _btn("📩 Написать администратору", "noop"),
         _btn("ℹ️ Узнать подробнее /subscribe", "noop"),
     ])
+
+# Добавь это в самый конец keyboards.py
+def kb_signal_result(symbol: str) -> InlineKeyboardMarkup:
+    """Клавиатура: График + Назад"""
+    clean_symbol = symbol.replace("-SWAP", "").replace("-", "")
+    tv_url = f"https://www.tradingview.com/chart/?symbol=OKX:{clean_symbol}.P"
+    
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 График TradingView", url=tv_url)],
+        _back("back_main") # Используем твою функцию _back
+    ])
