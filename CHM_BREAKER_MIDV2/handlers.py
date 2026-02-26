@@ -345,7 +345,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
         await um.save(user)
         await _answer(call, "📈 <b>ЛОНГ сканер</b>", kb.kb_mode_long(user))
 
-    @dp.callbackquery(F.data == "toggle_short")
+    @dp.callback_query(F.data == "toggle_short")
     async def cb_toggle_short(call: CallbackQuery):
         user = await _get_user(call, um)
         if not user:
@@ -355,7 +355,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
         await um.save(user)
         await _answer(call, "📉 <b>ШОРТ сканер</b>", kb.kb_mode_short(user))
 
-    @dp.callbackquery(F.data == "toggle_both")
+    @dp.callback_query(F.data == "toggle_both")
     async def cb_toggle_both(call: CallbackQuery):
         user = await _get_user(call, um)
         if not user:
