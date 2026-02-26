@@ -259,42 +259,58 @@ class MultiScanner:
             self._user_scanners[user_id] = UserScanner(user_id)
         return self._user_scanners[user_id]
 
-    def _get_indicator(self, user: UserSettings) -> CHMIndicator:
+        def _get_indicator(self, user: UserSettings, direction: str = "both") -> CHMIndicator:
+        """
+        direction: "long" | "short" | "both"
+        Для long/short берём per-direction cfg, иначе shared.
+        """
+        if direction == "long":
+            cfg_src = user.get_long_cfg()
+            tf      = getattr(user, "long_tf", user.timeframe)
+        elif direction == "short":
+            cfg_src = user.get_short_cfg()
+            tf      = getattr(user, "short_tf", user.timeframe)
+        else:
+            cfg_src = user.shared_cfg
+            tf      = user.timeframe
+
         cfg = self.config
-        # ── Все настройки пользователя → в конфиг индикатора ──────────────
-        cfg.TIMEFRAME          = user.timeframe
-        cfg.PIVOT_STRENGTH     = user.pivot_strength
-        cfg.MAX_LEVEL_AGE      = user.max_level_age
-        cfg.ZONE_BUFFER        = user.zone_buffer
-        cfg.EMA_FAST           = user.ema_fast
-        cfg.EMA_SLOW           = user.ema_slow
-        cfg.HTF_EMA_PERIOD     = user.htf_ema_period
-        cfg.RSI_PERIOD         = user.rsi_period
-        cfg.RSI_OB             = user.rsi_ob
-        cfg.RSI_OS             = user.rsi_os
-        cfg.VOL_MULT           = user.vol_mult
-        cfg.VOL_LEN            = user.vol_len
-        cfg.ATR_PERIOD         = user.atr_period
-        cfg.ATR_MULT           = user.atr_mult
-        cfg.MAX_RISK_PCT       = user.max_risk_pct
-        cfg.TP1_RR             = user.tp1_rr
-        cfg.TP2_RR             = user.tp2_rr
-        cfg.TP3_RR             = user.tp3_rr
-        cfg.COOLDOWN_BARS      = user.cooldown_bars
-        cfg.USE_RSI_FILTER     = user.use_rsi
-        cfg.USE_VOLUME_FILTER  = user.use_volume
-        cfg.USE_PATTERN_FILTER = user.use_pattern
-        cfg.USE_HTF_FILTER     = user.use_htf
+        cfg.TIMEFRAME          = tf
+        cfg.PIVOT_STRENGTH     = cfg_src.pivot_strength
+        cfg.MAX_LEVEL_AGE      = cfg_src.max_level_age
+        cfg.ZONE_BUFFER        = cfg_src.zone_buffer
+        cfg.EMA_FAST           = cfg_src.ema_fast
+        cfg.EMA_SLOW           = cfg_src.ema_slow
+        cfg.HTF_EMA_PERIOD     = cfg_src.htf_ema_period
+        cfg.RSI_PERIOD         = cfg_src.rsi_period
+        cfg.RSI_OB             = cfg_src.rsi_ob
+        cfg.RSI_OS             = cfg_src.rsi_os
+        cfg.VOL_MULT           = cfg_src.vol_mult
+        cfg.VOL_LEN            = cfg_src.vol_len
+        cfg.ATR_PERIOD         = cfg_src.atr_period
+        cfg.ATR_MULT           = cfg_src.atr_mult
+        cfg.MAX_RISK_PCT       = cfg_src.max_risk_pct
+        cfg.TP1_RR             = cfg_src.tp1_rr
+        cfg.TP2_RR             = cfg_src.tp2_rr
+        cfg.TP3_RR             = cfg_src.tp3_rr
+        cfg.COOLDOWN_BARS      = cfg_src.cooldown_bars
+        cfg.USE_RSI_FILTER     = cfg_src.use_rsi
+        cfg.USE_VOLUME_FILTER  = cfg_src.use_volume
+        cfg.USE_PATTERN_FILTER = cfg_src.use_pattern
+        cfg.USE_HTF_FILTER     = cfg_src.use_htf
         cfg.USE_SESSION_FILTER = user.use_session
-        cfg.SMC_USE_BOS        = user.smc_use_bos
-        cfg.SMC_USE_OB         = user.smc_use_ob
-        cfg.SMC_USE_FVG        = user.smc_use_fvg
-        cfg.SMC_USE_SWEEP      = user.smc_use_sweep
-        cfg.SMC_USE_CHOCH      = user.smc_use_choch
-        cfg.SMC_USE_CONF       = user.smc_use_conf
-        if user.user_id not in self._indicators:
-            self._indicators[user.user_id] = CHMIndicator(cfg)
-        return self._indicators[user.user_id]
+        cfg.SMC_USE_BOS        = cfg_src.smc_use_bos
+        cfg.SMC_USE_OB         = cfg_src.smc_use_ob
+        cfg.SMC_USE_FVG        = cfg_src.smc_use_fvg
+        cfg.SMC_USE_SWEEP      = cfg_src.smc_use_sweep
+        cfg.SMC_USE_CHOCH      = cfg_src.smc_use_choch
+        cfg.SMC_USE_CONF       = cfg_src.smc_use_conf
+
+        key = f"{user.user_id}_{direction}"
+        if key not in self._indicators:
+            self._indicators[key] = CHMIndicator(cfg)
+        return self._indicators[key]
+   
 
     async def _load_coins(self, min_vol: float) -> list:
         now = time.time()
@@ -384,12 +400,22 @@ class MultiScanner:
         except Exception as e:
             log.error(f"Ошибка отправки {user.user_id}: {e}")
 
-    async def _scan_for_user(self, user: UserSettings, coins: list):
-        indicator = self._get_indicator(user)
-        signals   = 0
-        chunk     = self.config.CHUNK_SIZE
+        async def _scan_for_user(self, user: UserSettings, coins: list):
+        """
+        Учитывает user.long_active / user.short_active / user.active+scan_mode.
+        Если включён только лонг — шлёт только LONG, и наоборот.
+        """
 
-        # Фильтр сессий — если включён, пропускаем азиатскую/ночную сессию
+        signals = 0
+        chunk   = self.config.CHUNK_SIZE
+
+        # какие направления сканировать
+        scan_long  = user.long_active or (user.active and user.scan_mode == "both")
+        scan_short = user.short_active or (user.active and user.scan_mode == "both")
+        if not scan_long and not scan_short:
+            return 0
+
+        # фильтр по сессии
         if user.use_session:
             from indicator import CHMIndicator as _Ind
             session_name, session_prime = _Ind._get_session()
@@ -400,33 +426,50 @@ class MultiScanner:
                 )
                 return 0
 
-        for i in range(0, len(coins), chunk):
-            batch = coins[i: i + chunk]
-            dfs   = await asyncio.gather(
-                *[self._get_candles(s, user.timeframe) for s in batch]
-            )
+        directions = []
+        if scan_long:
+            directions.append(("LONG",  "long"))
+        if scan_short:
+            directions.append(("SHORT", "short"))
 
-            for symbol, df in zip(batch, dfs):
-                if df is None or len(df) < 60:
-                    continue
-                df_htf = await self._get_htf(symbol) if user.use_htf else None
+        for dir_label, dir_key in directions:
+            indicator = self._get_indicator(user, direction=dir_key)
 
-                try:
-                    sig = indicator.analyze(symbol, df, df_htf)
-                except Exception as e:
-                    log.debug(f"{symbol}: {e}")
-                    continue
+            for i in range(0, len(coins), chunk):
+                batch = coins[i: i + chunk]
+                dfs   = await asyncio.gather(
+                    *[self._get_candles(s, indicator.cfg.TIMEFRAME) for s in batch]
+                )
 
-                if sig is None or sig.quality < user.min_quality:
-                    continue
+                for symbol, df in zip(batch, dfs):
+                    if df is None or len(df) < 60:
+                        continue
+                    df_htf = await self._get_htf(symbol) if user.use_htf else None
 
-                if user.notify_signal:
-                    await self._send_signal(user, sig)
-                signals += 1
+                    try:
+                        sig = indicator.analyze(symbol, df, df_htf)
+                    except Exception as e:
+                        log.debug(f"{symbol}: {e}")
+                        continue
 
-            await asyncio.sleep(self.config.CHUNK_SLEEP)
+                    if sig is None:
+                        continue
+
+                    # ГЛАВНАЯ ПРОВЕРКА: направление
+                    if sig.direction != dir_label:
+                        continue
+
+                    if sig.quality < user.min_quality:
+                        continue
+
+                    if user.notify_signal:
+                        await self._send_signal(user, sig)
+                    signals += 1
+
+                await asyncio.sleep(self.config.CHUNK_SLEEP)
 
         return signals
+
 
     async def scan_all_users(self):
         active = await self.um.get_active_users()
