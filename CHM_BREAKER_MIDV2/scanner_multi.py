@@ -1,13 +1,15 @@
 """
-scanner_multi.py — Мульти-пользовательский сканер
-Версия 4.1 — профессиональный формат сигнала с ✅/❌ чеклистом
+scanner_multi.py — Мульти-пользовательский сканер v4.8
+LONG/SHORT с раздельными настройками и фильтром направлений
 """
 
 import asyncio
+import hashlib
 import logging
 import time
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
 from user_manager import UserManager, UserSettings
 from fetcher import BinanceFetcher
@@ -16,10 +18,9 @@ from indicator import CHMIndicator, SignalResult
 log = logging.getLogger("CHM.MultiScanner")
 
 
-# ── Утилиты форматирования ─────────────────────────────────────────────────
+# ── Утилиты форматирования ────────────────────────────────────────────────
 
 def _fmt(v: float) -> str:
-    """Умное форматирование цены без лишних нулей."""
     if v >= 1000:
         return f"{v:,.2f}"
     if v >= 1:
@@ -30,39 +31,60 @@ def _fmt(v: float) -> str:
 
 
 def _pct(entry: float, target: float) -> str:
-    return f"{abs((target - entry) / entry * 100):.2f}%"
+    return f"{abs((target - entry) / entry * 100):.1f}%"
 
 
-def _row(ok: bool, label: str) -> str:
-    return f"{'✅' if ok else '❌'}  {label}"
+def _risk_level(quality: int) -> str:
+    if quality >= 5:
+        return "low"
+    if quality >= 4:
+        return "low"
+    if quality >= 3:
+        return "medium"
+    return "high"
 
 
-# ── Главная функция формирования сигнала ──────────────────────────────────
+# ── Компактный текст сигнала ──────────────────────────────────────────────
 
 def make_signal_text(sig: SignalResult, user: UserSettings, change_24h=None) -> str:
-    NL     = "\n"
     is_long = sig.direction == "LONG"
+    risk    = abs(sig.entry - sig.sl)
+    tp1     = sig.entry + risk * user.tp1_rr if is_long else sig.entry - risk * user.tp1_rr
+    tp2     = sig.entry + risk * user.tp2_rr if is_long else sig.entry - risk * user.tp2_rr
+    tp3     = sig.entry + risk * user.tp3_rr if is_long else sig.entry - risk * user.tp3_rr
 
-    # Шапка направления
-    if is_long:
-        header   = "🟢  <b>LONG СИГНАЛ</b>"
-        arrow_em = "📈"
-        dir_txt  = "ЛОНГ"
+    header  = "🟢 <b>LONG</b>" if is_long else "🔴 <b>SHORT</b>"
+    stars   = "⭐" * sig.quality + "☆" * (5 - sig.quality)
+    sl_sign = "−"
+    tp_sign = "+"
+
+    if sig.quality >= 5:
+        risk_mark = "🟢 Низкий"
+    elif sig.quality >= 4:
+        risk_mark = "🟡 Умеренный"
+    elif sig.quality >= 3:
+        risk_mark = "🟠 Средний"
     else:
-        header   = "🔴  <b>SHORT СИГНАЛ</b>"
-        arrow_em = "📉"
-        dir_txt  = "ШОРТ"
+        risk_mark = "🔴 Высокий"
 
-    stars = "⭐" * sig.quality + "☆" * (5 - sig.quality)
+    session_nm = getattr(sig, "session_name", "") or "—"
 
-    # Ценовые уровни
-    risk = abs(sig.entry - sig.sl)
-    tp1  = sig.entry + risk * user.tp1_rr if is_long else sig.entry - risk * user.tp1_rr
-    tp2  = sig.entry + risk * user.tp2_rr if is_long else sig.entry - risk * user.tp2_rr
-    tp3  = sig.entry + risk * user.tp3_rr if is_long else sig.entry - risk * user.tp3_rr
+    lines = [
+        f"{header} · <b>{sig.symbol}</b>",
+        stars,
+        "",
+        f"💰 Вход       <code>{_fmt(sig.entry)}</code>",
+        f"🛑 Стоп       <code>{_fmt(sig.sl)}</code>  <i>{sl_sign}{_pct(sig.entry, sig.sl)}</i>",
+        "",
+        f"🎯 Цель 1     <code>{_fmt(tp1)}</code>  <i>{tp_sign}{_pct(sig.entry, tp1)} · {user.tp1_rr}R</i>",
+        f"🎯 Цель 2     <code>{_fmt(tp2)}</code>  <i>{tp_sign}{_pct(sig.entry, tp2)} · {user.tp2_rr}R</i>",
+        f"🏆 Цель 3     <code>{_fmt(tp3)}</code>  <i>{tp_sign}{_pct(sig.entry, tp3)} · {user.tp3_rr}R</i>",
+        "",
+        f"⚠️ Риск       {risk_mark}",
+        f"⏱ Таймфрейм  {user.timeframe}",
+        f"🕐 Сессия     {session_nm}",
+    ]
 
-    # 24h данные
-    ch24_line = ""
     if change_24h:
         ch  = change_24h.get("change_pct", 0)
         vol = change_24h.get("volume_usdt", 0)
@@ -73,162 +95,127 @@ def make_signal_text(sig: SignalResult, user: UserSettings, change_24h=None) -> 
             vol_str = f"${vol/1_000_000:.1f}M"
         else:
             vol_str = f"${vol:,.0f}"
-        ch24_line = f"📅  24h:  {em} {ch:+.2f}%   Объём: {vol_str}"
+        lines += ["", f"📅 24h  {em} {ch:+.2f}%   {vol_str}"]
 
-    # ── SMC чеклист ───────────────────────────────────
+    lines += ["", "⚡ <i>CHM Laboratory — CHM BREAKER</i>"]
+    return "\n".join(lines)
 
-    # SMC структура
-    ok_bos  = bool(getattr(sig, "has_bos", False))
-    ok_ob   = bool(getattr(sig, "has_ob", False))
-    ok_fvg  = bool(getattr(sig, "has_fvg", False))
-    ok_liq  = bool(getattr(sig, "has_liq_sweep", False))
 
-    row_bos = _row(ok_bos, "BOS — пробой структуры рынка")
-    row_ob  = _row(ok_ob,  "Order Block — зона интереса SMC")
-    row_fvg = _row(ok_fvg, "FVG — дисбаланс / имбаланс")
-    row_liq = _row(ok_liq, "Sweep ликвидности (ложный пробой)")
+# ── Оценка условий для чеклиста ───────────────────────────────────────────
 
-    # ── Новые v4.2 ────────────────────────────────────
-    ok_choch   = bool(getattr(sig, "has_choch", False))
-    ok_conf    = bool(getattr(sig, "htf_confluence", False))
-    session_nm = getattr(sig, "session_name", "")
-    ok_sess    = bool(getattr(sig, "session_prime", False))
+def _eval_conditions(sig: SignalResult, user: UserSettings) -> tuple:
+    is_long    = sig.direction == "LONG"
+    rsi_val    = getattr(sig, "rsi", 50.0)
+    vol_ratio  = getattr(sig, "volume_ratio", 1.0)
+    pattern    = getattr(sig, "pattern", "") or ""
+    trend_htf  = getattr(sig, "trend_htf", "") or ""
+    session_nm = getattr(sig, "session_name", "") or "—"
 
-    row_choch  = _row(ok_choch, "CHOCH — смена характера структуры")
-    row_conf   = _row(ok_conf,  "Daily Confluence — уровень дневного TF")
-    row_sess   = _row(ok_sess,  f"Сессия: {session_nm}" if session_nm else "Сессия: нет данных")
+    ok_bos   = bool(getattr(sig, "has_bos",      False))
+    ok_ob    = bool(getattr(sig, "has_ob",       False))
+    ok_fvg   = bool(getattr(sig, "has_fvg",      False))
+    ok_liq   = bool(getattr(sig, "has_liq_sweep", False))
+    ok_choch = bool(getattr(sig, "has_choch",    False))
+    ok_conf  = bool(getattr(sig, "htf_confluence", False))
+    ok_sess  = bool(getattr(sig, "session_prime",  False))
 
-    # RSI
-    rsi_val = getattr(sig, "rsi", 50.0)
-    rsi_os  = getattr(user, "rsi_os", 40)
-    rsi_ob  = getattr(user, "rsi_ob", 60)
-    if is_long:
-        ok_rsi  = rsi_val < rsi_os
-        rsi_lbl = f"RSI {rsi_val:.1f} — {'перепродан 🔽' if ok_rsi else 'нейтральный'}"
-    else:
-        ok_rsi  = rsi_val > rsi_ob
-        rsi_lbl = f"RSI {rsi_val:.1f} — {'перекуплен 🔼' if ok_rsi else 'нейтральный'}"
-    row_rsi = _row(ok_rsi, rsi_lbl)
+    ok_rsi = (rsi_val < user.rsi_os) if is_long else (rsi_val > user.rsi_ob)
+    ok_vol = vol_ratio >= user.vol_mult
+    ok_pat = bool(pattern)
+    ok_htf = ("бычий" in trend_htf.lower() or "bull" in trend_htf.lower()) if is_long \
+             else ("медвежий" in trend_htf.lower() or "bear" in trend_htf.lower())
 
-    # Объём
-    vol_ratio = getattr(sig, "volume_ratio", 1.0)
-    ok_vol    = vol_ratio >= 1.2
-    row_vol   = _row(ok_vol, f"Объём: x{vol_ratio:.1f} выше среднего" if ok_vol else f"Объём: x{vol_ratio:.1f} — слабый")
+    rsi_lbl = (
+        f"RSI {rsi_val:.1f} — {'перепродан 🔽' if is_long else 'перекуплен 🔼'}"
+        if ok_rsi else f"RSI {rsi_val:.1f} — нейтральный"
+    )
+    vol_lbl  = f"Объём ×{vol_ratio:.1f} {'— выше порога' if ok_vol else '— ниже порога'}"
+    pat_lbl  = f"Паттерн: {pattern}" if ok_pat else "Паттерн — не обнаружен"
+    htf_lbl  = f"HTF тренд: {trend_htf}" if trend_htf else "HTF тренд — нет данных"
+    sess_lbl = f"Сессия: {session_nm}"
 
-    # Паттерн
-    pattern = getattr(sig, "pattern", "") or ""
-    ok_pat  = bool(pattern)
-    row_pat = _row(ok_pat, f"Паттерн: {pattern}" if ok_pat else "Паттерн: не подтверждён")
-
-    # HTF тренд
-    trend_htf = getattr(sig, "trend_htf", "") or ""
-    if is_long:
-        ok_htf = "бычий" in trend_htf.lower() or "bull" in trend_htf.lower()
-    else:
-        ok_htf = "медвежий" in trend_htf.lower() or "bear" in trend_htf.lower()
-    if trend_htf:
-        row_htf = _row(ok_htf, f"HTF тренд: {trend_htf}")
-    else:
-        row_htf = _row(False, "HTF тренд: нет данных")
-        ok_htf  = False
-
-    # ── Итоговый рейтинг совпадений ───────────────────
-    conditions  = [ok_bos, ok_ob, ok_fvg, ok_liq, ok_rsi, ok_vol, ok_pat, ok_htf, ok_choch, ok_conf, ok_sess]
-    matched     = sum(conditions)
-    total_conds = len(conditions)
-    bar_filled  = "▓" * matched
-    bar_empty   = "░" * (total_conds - matched)
-    score_line  = f"[{bar_filled}{bar_empty}]  {matched}/{total_conds} условий"
-
-    # ── Метка риска ───────────────────────────────────
-    if sig.quality >= 5:
-        risk_mark = "🟢 НИЗКИЙ"
-    elif sig.quality >= 4:
-        risk_mark = "🟡 УМЕРЕННЫЙ"
-    elif sig.quality >= 3:
-        risk_mark = "🟠 СРЕДНИЙ"
-    else:
-        risk_mark = "🔴 ВЫСОКИЙ"
-
-    trend_local = getattr(sig, "trend_local", "") or "—"
-    break_type  = getattr(sig, "breakout_type", "") or dir_txt
-
-    # ── Сборка ────────────────────────────────────────
-    parts = [
-        header,
-        f"       {stars}",
-        "",
-        f"💎  <b>{sig.symbol}</b>   {arrow_em}  <i>{break_type}</i>",
-        "",
-        "┌─ ТОРГОВЫЙ ПЛАН ─────────────────────",
-        f"│  💰 Вход:    <code>{_fmt(sig.entry)}</code>",
-        f"│  🛑 Стоп:    <code>{_fmt(sig.sl)}</code>  (-{sig.risk_pct:.2f}%)",
-        "│",
-        f"│  🎯 Цель 1:  <code>{_fmt(tp1)}</code>  (+{_pct(sig.entry, tp1)})  [{user.tp1_rr}R]",
-        f"│  🎯 Цель 2:  <code>{_fmt(tp2)}</code>  (+{_pct(sig.entry, tp2)})  [{user.tp2_rr}R]",
-        f"│  🏆 Цель 3:  <code>{_fmt(tp3)}</code>  (+{_pct(sig.entry, tp3)})  [{user.tp3_rr}R]",
-        "│",
-        f"│  ⚠️  Риск: {risk_mark}",
-        "└──────────────────────────────────────",
-        "",
-        "┌─ SMC СТРУКТУРА ─────────────────────",
-        f"│  {row_bos}",
-        f"│  {row_ob}",
-        f"│  {row_fvg}",
-        f"│  {row_liq}",
-        f"│  {row_choch}",
-        "├─ ТЕХНИЧЕСКИЕ ФИЛЬТРЫ ───────────────",
-        f"│  {row_rsi}",
-        f"│  {row_vol}",
-        f"│  {row_pat}",
-        f"│  {row_htf}",
-        "├─ КОНТЕКСТ РЫНКА ────────────────────",
-        f"│  {row_conf}",
-        f"│  {row_sess}",
-        "├─ ИТОГ ──────────────────────────────",
-        f"│  {score_line}",
-        "└──────────────────────────────────────",
-        "",
-        f"📊  Тренд (TF):  <b>{trend_local}</b>",
+    all_conds = [
+        (ok_bos,   "BOS — пробой структуры рынка",        user.smc_use_bos),
+        (ok_ob,    "Order Block — зона интереса",         user.smc_use_ob),
+        (ok_fvg,   "FVG — дисбаланс / имбаланс",          user.smc_use_fvg),
+        (ok_liq,   "Sweep ликвидности",                   user.smc_use_sweep),
+        (ok_choch, "CHOCH — смена характера структуры",   user.smc_use_choch),
+        (ok_rsi,   rsi_lbl,                               user.use_rsi),
+        (ok_vol,   vol_lbl,                               user.use_volume),
+        (ok_pat,   pat_lbl,                               user.use_pattern),
+        (ok_htf,   htf_lbl,                               user.use_htf),
+        (ok_conf,  "Daily Confluence",                    user.smc_use_conf),
+        (ok_sess,  sess_lbl,                              user.use_session),
     ]
 
-    if ch24_line:
-        parts.append(ch24_line)
+    matched = sum(ok for ok, _lbl, enabled in all_conds if enabled)
+    total   = sum(1  for _ok, _lbl, enabled in all_conds if enabled)
+    return all_conds, matched, total
 
-    parts += [
+
+def make_checklist_text(sig: SignalResult, user: UserSettings) -> str:
+    is_long = sig.direction == "LONG"
+    all_conds, matched, total = _eval_conditions(sig, user)
+
+    smc_group  = all_conds[0:5]
+    tech_group = all_conds[5:9]
+    ctx_group  = all_conds[9:11]
+
+    bar = "▓" * matched + "░" * (total - matched)
+
+    def row(ok, lbl, enabled):
+        if not enabled:
+            return f"⬜  <i>{lbl} — выключено</i>"
+        return ("✅" if ok else "❌") + "  " + lbl
+
+    direction = "LONG" if is_long else "SHORT"
+    lines = [
+        f"📋 <b>Подтверждения · {sig.symbol} {direction}</b>",
         "",
-        "⚡ <i>CHM Laboratory — CHM BREAKER</i>",
+        "<b>── SMC Структура ──</b>",
     ]
+    for ok, lbl, enabled in smc_group:
+        lines.append(row(ok, lbl, enabled))
 
-    return NL.join(parts)
+    lines += ["", "<b>── Технические фильтры ──</b>"]
+    for ok, lbl, enabled in tech_group:
+        lines.append(row(ok, lbl, enabled))
+
+    lines += ["", "<b>── Контекст рынка ──</b>"]
+    for ok, lbl, enabled in ctx_group:
+        lines.append(row(ok, lbl, enabled))
+
+    lines += [
+        "",
+        f"<code>[{bar}]  {matched}/{total} активных условий</code>",
+    ]
+    return "\n".join(lines)
 
 
-# ── Клавиатура под сигналом ────────────────────────────────────────────────
-
-def make_signal_keyboard(trade_id: str):
-    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
-    def btn(text: str, cb: str) -> list:
-        return [InlineKeyboardButton(text=text, callback_data=cb)]
-
+def make_signal_keyboard(trade_id: str, matched: int, total: int) -> InlineKeyboardMarkup:
+    def b(text, cb): return InlineKeyboardButton(text=text, callback_data=cb)
     return InlineKeyboardMarkup(inline_keyboard=[
-        btn("🎯 TP1",        f"res_TP1_{trade_id}"),
-        btn("🎯 TP2",        f"res_TP2_{trade_id}"),
-        btn("🏆 TP3",        f"res_TP3_{trade_id}"),
-        btn("❌ Стоп-лосс", f"res_SL_{trade_id}"),
-        btn("⏭ Пропустить", f"res_SKIP_{trade_id}"),
+        [
+            b(f"📋 Усл. {matched}/{total}", f"sig_checks_{trade_id}"),
+            b("📊 График",                  f"sig_chart_{trade_id}"),
+        ],
+        [
+            b("🔕 Скрыть",     f"sig_hide_{trade_id}"),
+            b("📈 Статистика", f"sig_stats_{trade_id}"),
+        ],
     ])
 
 
-# ── UserScanner ────────────────────────────────────────────────────────────
+def count_conditions(sig: SignalResult, user: UserSettings) -> tuple:
+    _, matched, total = _eval_conditions(sig, user)
+    return matched, total
+
 
 class UserScanner:
     def __init__(self, user_id: int):
         self.user_id   = user_id
         self.last_scan = 0.0
 
-
-# ── MultiScanner ──────────────────────────────────────────────────────────
 
 class MultiScanner:
 
@@ -245,6 +232,7 @@ class MultiScanner:
         self._user_scanners:   dict = {}
         self._indicators:      dict = {}
         self._trend_cache:     dict = {}
+        self._sig_cache:       dict = {}
         self._perf = {"cycles": 0, "signals": 0, "api_calls": 0}
 
     def get_trend(self) -> dict:
@@ -254,63 +242,90 @@ class MultiScanner:
         total = len(self._candle_cache)
         return {**self._perf, "cache": {"size": total, "ratio": 0}}
 
+    def get_sig_cache(self) -> dict:
+        return self._sig_cache
+
     def _get_us(self, user_id: int) -> UserScanner:
         if user_id not in self._user_scanners:
             self._user_scanners[user_id] = UserScanner(user_id)
         return self._user_scanners[user_id]
 
-        def _get_indicator(self, user: UserSettings, direction: str = "both") -> CHMIndicator:
-        """
-        direction: "long" | "short" | "both"
-        Для long/short берём per-direction cfg, иначе shared.
-        """
+    async def _update_trend(self):
+        """Обновляет тренд BTC/ETH."""
+        _ema = CHMIndicator._ema
+        result = {}
+        for symbol in ("BTCUSDT", "ETHUSDT"):
+            sym_data = {}
+            for tf, label in [("1h", "1h"), ("4h", "4h"), ("1D", "1D")]:
+                try:
+                    df = await self.fetcher.get_candles(symbol, tf, limit=250)
+                    if df is None or len(df) < 60:
+                        continue
+                    close = df["close"]
+                    ema50 = _ema(close, 50).iloc[-1]
+                    ema200 = _ema(close, 200).iloc[-1]
+                    c_now = close.iloc[-1]
+                    if c_now > ema50 > ema200:
+                        sym_data[label] = {"emoji": "📈", "trend": "бычий"}
+                    elif c_now < ema50 < ema200:
+                        sym_data[label] = {"emoji": "📉", "trend": "медвежий"}
+                    else:
+                        sym_data[label] = {"emoji": "↔️", "trend": "боковик"}
+                except Exception as e:
+                    log.debug(f"trend {symbol} {tf}: {e}")
+            key = "BTC" if "BTC" in symbol else "ETH"
+            result[key] = sym_data
+        self._trend_cache = result
+
+    def _get_indicator(self, user: UserSettings, direction: str = "both") -> CHMIndicator:
+        """Настраивает CHMIndicator под конкретное направление."""
         if direction == "long":
-            cfg_src = user.get_long_cfg()
-            tf      = getattr(user, "long_tf", user.timeframe)
+            d_cfg = user.get_long_cfg()
+            tf    = getattr(user, "long_tf", user.timeframe)
         elif direction == "short":
-            cfg_src = user.get_short_cfg()
-            tf      = getattr(user, "short_tf", user.timeframe)
+            d_cfg = user.get_short_cfg()
+            tf    = getattr(user, "short_tf", user.timeframe)
         else:
-            cfg_src = user.shared_cfg
-            tf      = user.timeframe
+            d_cfg = user.shared_cfg
+            tf    = user.timeframe
 
         cfg = self.config
         cfg.TIMEFRAME          = tf
-        cfg.PIVOT_STRENGTH     = cfg_src.pivot_strength
-        cfg.MAX_LEVEL_AGE      = cfg_src.max_level_age
-        cfg.ZONE_BUFFER        = cfg_src.zone_buffer
-        cfg.EMA_FAST           = cfg_src.ema_fast
-        cfg.EMA_SLOW           = cfg_src.ema_slow
-        cfg.HTF_EMA_PERIOD     = cfg_src.htf_ema_period
-        cfg.RSI_PERIOD         = cfg_src.rsi_period
-        cfg.RSI_OB             = cfg_src.rsi_ob
-        cfg.RSI_OS             = cfg_src.rsi_os
-        cfg.VOL_MULT           = cfg_src.vol_mult
-        cfg.VOL_LEN            = cfg_src.vol_len
-        cfg.ATR_PERIOD         = cfg_src.atr_period
-        cfg.ATR_MULT           = cfg_src.atr_mult
-        cfg.MAX_RISK_PCT       = cfg_src.max_risk_pct
-        cfg.TP1_RR             = cfg_src.tp1_rr
-        cfg.TP2_RR             = cfg_src.tp2_rr
-        cfg.TP3_RR             = cfg_src.tp3_rr
-        cfg.COOLDOWN_BARS      = cfg_src.cooldown_bars
-        cfg.USE_RSI_FILTER     = cfg_src.use_rsi
-        cfg.USE_VOLUME_FILTER  = cfg_src.use_volume
-        cfg.USE_PATTERN_FILTER = cfg_src.use_pattern
-        cfg.USE_HTF_FILTER     = cfg_src.use_htf
+        cfg.PIVOT_STRENGTH     = d_cfg.pivot_strength
+        cfg.MAX_LEVEL_AGE      = d_cfg.max_level_age
+        cfg.ZONE_BUFFER        = d_cfg.zone_buffer
+        cfg.EMA_FAST           = d_cfg.ema_fast
+        cfg.EMA_SLOW           = d_cfg.ema_slow
+        cfg.HTF_EMA_PERIOD     = d_cfg.htf_ema_period
+        cfg.RSI_PERIOD         = d_cfg.rsi_period
+        cfg.RSI_OB             = d_cfg.rsi_ob
+        cfg.RSI_OS             = d_cfg.rsi_os
+        cfg.VOL_MULT           = d_cfg.vol_mult
+        cfg.VOL_LEN            = d_cfg.vol_len
+        cfg.ATR_PERIOD         = d_cfg.atr_period
+        cfg.ATR_MULT           = d_cfg.atr_mult
+        cfg.MAX_RISK_PCT       = d_cfg.max_risk_pct
+        cfg.TP1_RR             = d_cfg.tp1_rr
+        cfg.TP2_RR             = d_cfg.tp2_rr
+        cfg.TP3_RR             = d_cfg.tp3_rr
+        cfg.COOLDOWN_BARS      = d_cfg.cooldown_bars
+        cfg.USE_RSI_FILTER     = d_cfg.use_rsi
+        cfg.USE_VOLUME_FILTER  = d_cfg.use_volume
+        cfg.USE_PATTERN_FILTER = d_cfg.use_pattern
+        cfg.USE_HTF_FILTER     = d_cfg.use_htf
         cfg.USE_SESSION_FILTER = user.use_session
-        cfg.SMC_USE_BOS        = cfg_src.smc_use_bos
-        cfg.SMC_USE_OB         = cfg_src.smc_use_ob
-        cfg.SMC_USE_FVG        = cfg_src.smc_use_fvg
-        cfg.SMC_USE_SWEEP      = cfg_src.smc_use_sweep
-        cfg.SMC_USE_CHOCH      = cfg_src.smc_use_choch
-        cfg.SMC_USE_CONF       = cfg_src.smc_use_conf
+        cfg.SMC_USE_BOS        = d_cfg.smc_use_bos
+        cfg.SMC_USE_OB         = d_cfg.smc_use_ob
+        cfg.SMC_USE_FVG        = d_cfg.smc_use_fvg
+        cfg.SMC_USE_SWEEP      = d_cfg.smc_use_sweep
+        cfg.SMC_USE_CHOCH      = d_cfg.smc_use_choch
+        cfg.SMC_USE_CONF       = d_cfg.smc_use_conf
+        cfg.ANALYSIS_MODE      = d_cfg.analysis_mode
 
         key = f"{user.user_id}_{direction}"
         if key not in self._indicators:
             self._indicators[key] = CHMIndicator(cfg)
         return self._indicators[key]
-   
 
     async def _load_coins(self, min_vol: float) -> list:
         now = time.time()
@@ -354,8 +369,6 @@ class MultiScanner:
         change_24h = await self.fetcher.get_24h_change(sig.symbol)
         text       = make_signal_text(sig, user, change_24h)
 
-        # Сохраняем сделку для трекинга
-        import hashlib
         import database as db
         trade_id = hashlib.md5(
             f"{user.user_id}{sig.symbol}{sig.direction}{int(time.time())}".encode()
@@ -378,7 +391,8 @@ class MultiScanner:
         except Exception as e:
             log.debug(f"db_save_trade: {e}")
 
-        kb = make_signal_keyboard(trade_id)
+        matched, total = count_conditions(sig, user)
+        kb = make_signal_keyboard(trade_id, matched, total)
 
         try:
             await self.bot.send_message(
@@ -402,20 +416,17 @@ class MultiScanner:
 
     async def _scan_for_user(self, user: UserSettings, coins: list):
         """
-        Учитывает user.long_active / user.short_active / user.active+scan_mode.
-        Если включён только лонг — шлёт только LONG, и наоборот.
+        Учитывает long_active / short_active / scan_mode.
+        Если включён только Лонг — отправляет только LONG сигналы, и наоборот.
         """
-
         signals = 0
         chunk   = self.config.CHUNK_SIZE
 
-        # какие направления сканировать
         scan_long  = user.long_active or (user.active and user.scan_mode == "both")
         scan_short = user.short_active or (user.active and user.scan_mode == "both")
         if not scan_long and not scan_short:
             return 0
 
-        # фильтр по сессии
         if user.use_session:
             from indicator import CHMIndicator as _Ind
             session_name, session_prime = _Ind._get_session()
@@ -426,19 +437,20 @@ class MultiScanner:
                 )
                 return 0
 
-        directions = []
+        dirs = []
         if scan_long:
-            directions.append(("LONG",  "long"))
+            dirs.append(("LONG",  "long"))
         if scan_short:
-            directions.append(("SHORT", "short"))
+            dirs.append(("SHORT", "short"))
 
-        for dir_label, dir_key in directions:
+        for dir_label, dir_key in dirs:
             indicator = self._get_indicator(user, direction=dir_key)
+            tf = self.config.TIMEFRAME
 
             for i in range(0, len(coins), chunk):
                 batch = coins[i: i + chunk]
                 dfs   = await asyncio.gather(
-                    *[self._get_candles(s, indicator.cfg.TIMEFRAME) for s in batch]
+                    *[self._get_candles(s, tf) for s in batch]
                 )
 
                 for symbol, df in zip(batch, dfs):
@@ -454,13 +466,20 @@ class MultiScanner:
 
                     if sig is None:
                         continue
-
-                    # ГЛАВНАЯ ПРОВЕРКА: направление
                     if sig.direction != dir_label:
                         continue
-
                     if sig.quality < user.min_quality:
                         continue
+
+                    if user.max_signal_risk_pct > 0 and getattr(sig, "risk_pct", 0) > user.max_signal_risk_pct:
+                        continue
+
+                    if user.min_risk_level != "all":
+                        rl = _risk_level(sig.quality)
+                        if user.min_risk_level == "low" and rl != "low":
+                            continue
+                        if user.min_risk_level == "medium" and rl not in ("low", "medium"):
+                            continue
 
                     if user.notify_signal:
                         await self._send_signal(user, sig)
@@ -470,8 +489,6 @@ class MultiScanner:
 
         return signals
 
-
-       
     async def scan_all_users(self):
         active = await self.um.get_active_users()
         if not active:
@@ -479,6 +496,11 @@ class MultiScanner:
 
         now = time.time()
         self._perf["cycles"] += 1
+
+        try:
+            await self._update_trend()
+        except Exception as e:
+            log.debug(f"trend update error: {e}")
 
         for user in active:
             us = self._get_us(user.user_id)
@@ -491,7 +513,7 @@ class MultiScanner:
             log.info(f"  → Сигналов: {signals}")
 
     async def run_forever(self):
-        log.info("🔄 Мульти-сканер запущен")
+        log.info("🔄 Мульти-сканер запущен v4.8")
         while True:
             try:
                 await self.scan_all_users()
