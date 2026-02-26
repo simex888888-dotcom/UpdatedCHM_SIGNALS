@@ -123,28 +123,26 @@ def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
     stars  = "⭐" * sig.quality + "☆" * (5 - sig.quality)
     header = "🟢 <b>LONG СИГНАЛ</b>" if sig.direction == "LONG" else "🔴 <b>SHORT СИГНАЛ</b>"
     emoji  = "📈" if sig.direction == "LONG" else "📉"
-    risk   = abs(sig.entry - sig.sl)
-    sign   = 1 if sig.direction == "LONG" else -1
-    tp1    = sig.entry + sign * risk * cfg.tp1_rr
-    tp2    = sig.entry + sign * risk * cfg.tp2_rr
-    tp3    = sig.entry + sign * risk * cfg.tp3_rr
+    
+    counter_trend_warn = "\n⚠️ <b>ВНИМАНИЕ: Сделка против тренда (Контр-тренд)</b>" if sig.is_counter_trend else ""
 
     def pct(t): return abs((t - sig.entry) / sig.entry * 100)
 
     NL = "\n"
     return (
         header + NL + NL +
-        "💎 <b>" + sig.symbol + "</b>  " + emoji + "  " + sig.breakout_type + NL +
+        "💎 <b>" + sig.symbol + "</b>  " + emoji + "  <b>" + sig.breakout_type + "</b>" + 
+        counter_trend_warn + NL +
         "⭐ Качество: " + stars + NL + NL +
+        "🧠 <b>Анализ:</b> <i>" + sig.human_explanation + "</i>" + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
         "💰 Вход:    <code>" + "{:.6g}".format(sig.entry) + "</code>" + NL +
         "🛑 Стоп:    <code>" + "{:.6g}".format(sig.sl) + "</code>  <i>(-" + "{:.2f}".format(sig.risk_pct) + "%)</i>" + NL + NL +
-        "🎯 Цель 1: <code>" + "{:.6g}".format(tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(tp1)) + "%)</i>" + NL +
-        "🎯 Цель 2: <code>" + "{:.6g}".format(tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(tp2)) + "%)</i>" + NL +
-        "🏆 Цель 3: <code>" + "{:.6g}".format(tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(tp3)) + "%)</i>" + NL +
+        "🎯 Цель 1: <code>" + "{:.6g}".format(sig.tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp1)) + "%)</i>" + NL +
+        "🎯 Цель 2: <code>" + "{:.6g}".format(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
+        "🏆 Цель 3: <code>" + "{:.6g}".format(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL + NL +
-        "📊 " + sig.trend_local + "  |  RSI: <code>" + "{:.1f}".format(sig.rsi) + "</code>  |  Vol: <code>x" + "{:.1f}".format(sig.volume_ratio) + "</code>" + NL +
-        "🕯 Паттерн: " + sig.pattern + NL + NL +
+        "📊 " + sig.trend_local + "  |  RSI: <code>" + "{:.1f}".format(sig.rsi) + "</code>  |  Vol: <code>x" + "{:.1f}".format(sig.volume_ratio) + "</code>" + NL + NL +
         "⚡ <i>CHM Laboratory — CHM BREAKER</i>" + NL + NL +
         "👇 <i>Отметь результат когда сделка закроется:</i>"
     )

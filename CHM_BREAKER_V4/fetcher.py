@@ -191,51 +191,35 @@ class OKXFetcher:
             pass
         return None
 
+ 
     async def get_global_trend(self) -> dict:
         """
-        Анализирует глобальный тренд по BTC и ETH на дневном TF.
-        Возвращает dict с оценкой тренда для каждого актива.
+        Анализирует глобальный тренд по BTC и ETH на таймфреймах H1, H4 и D1.
         """
-        import pandas as pd
         result = {}
+        tfs = {"1H": "H1", "4H": "H4", "1D": "D1"}
+        
         for symbol in ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]:
-            try:
-                df = await self.get_candles(symbol, "1D", limit=220)
-                if df is None or len(df) < 50:
-                    result[symbol] = {"trend": "неизвестен", "emoji": "❓", "detail": "нет данных"}
-                    continue
-
-                close = df["close"]
-                ema50  = close.ewm(span=50,  adjust=False).mean().iloc[-1]
-                ema200 = close.ewm(span=200, adjust=False).mean().iloc[-1]
-                price  = close.iloc[-1]
-
-                # Считаем угол EMA50 за последние 5 свечей
-                ema50_series = close.ewm(span=50, adjust=False).mean()
-                slope = (ema50_series.iloc[-1] - ema50_series.iloc[-6]) / ema50_series.iloc[-6] * 100
-
-                if price > ema50 > ema200 and slope > 0.3:
-                    trend, emoji = "сильный бычий", "🟢🟢"
-                elif price > ema50 > ema200:
-                    trend, emoji = "бычий", "🟢"
-                elif price > ema200 and price < ema50:
-                    trend, emoji = "нейтральный/слабый", "🟡"
-                elif price < ema50 < ema200 and slope < -0.3:
-                    trend, emoji = "сильный медвежий", "🔴🔴"
-                elif price < ema50 < ema200:
-                    trend, emoji = "медвежий", "🔴"
-                else:
-                    trend, emoji = "нейтральный", "⚪"
-
-                name = "BTC" if "BTC" in symbol else "ETH"
-                result[name] = {
-                    "trend": trend,
-                    "emoji": emoji,
-                    "price": price,
-                    "ema50": ema50,
-                    "ema200": ema200,
-                }
-            except Exception as e:
-                name = "BTC" if "BTC" in symbol else "ETH"
-                result[name] = {"trend": "ошибка", "emoji": "❓", "detail": str(e)}
+            name = "BTC" if "BTC" in symbol else "ETH"
+            result[name] = {"trend_text": ""}
+            trend_strs = []
+            
+            for okx_tf, hum_tf in tfs.items():
+                try:
+                    df = await self.get_candles(symbol, okx_tf, limit=60)
+                    if df is None or len(df) < 50: continue
+                    
+                    close = df["close"]
+                    ema50  = close.ewm(span=50, adjust=False).mean().iloc[-1]
+                    price  = close.iloc[-1]
+                    
+                    if price > ema50 * 1.002: trend = "🟢"
+                    elif price < ema50 * 0.998: trend = "🔴"
+                    else: trend = "⚪"
+                    
+                    trend_strs.append(f"{hum_tf}: {trend}")
+                except Exception:
+                    trend_strs.append(f"{hum_tf}: ❓")
+            
+            result[name]["trend_text"] = " | ".join(trend_strs)
         return result

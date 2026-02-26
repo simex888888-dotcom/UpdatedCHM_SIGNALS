@@ -2,7 +2,11 @@
 handlers.py v4 — мультисканнинг ЛОНГ + ШОРТ + ОБА
 Правило: cb.answer() ВСЕГДА первым, до любых await с БД.
 """
-
+import io
+import matplotlib
+matplotlib.use('Agg') # Чтобы не требовал GUI
+import matplotlib.pyplot as plt
+from aiogram.types import BufferedInputFile
 import asyncio
 import logging
 from dataclasses import fields
@@ -421,7 +425,48 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await cb.answer()
         user  = await um.get_or_create(cb.from_user.id)
         stats = await db.db_get_user_stats(user.user_id)
-        await safe_edit(cb, stats_text(user, stats), kb_back())
+        trades = await db.db_get_user_trades(user.user_id)
+        
+        text = stats_text(user, stats)
+        
+        if not trades or len(trades) < 2:
+            await safe_edit(cb, text, kb_back())
+            return
+
+        # Генерация графика
+        equity = [0.0]
+        for t in trades:
+            if t["result"] in ("TP1", "TP2", "TP3", "SL"):
+                equity.append(equity[-1] + t["result_rr"])
+
+        plt.figure(figsize=(8, 4))
+        plt.plot(equity, color='#00d26a' if equity[-1] >= 0 else '#f6465d', linewidth=2)
+        plt.fill_between(range(len(equity)), equity, alpha=0.1, color='#00d26a' if equity[-1] >= 0 else '#f6465d')
+        plt.title(f"Кривая доходности (Risk/Reward) - @{user.username or 'Trader'}", color='white')
+        plt.grid(True, linestyle='--', alpha=0.3)
+        plt.gca().set_facecolor('#1e1e2d')
+        plt.gcf().patch.set_facecolor('#1e1e2d')
+        plt.gca().tick_params(colors='white')
+        plt.axhline(0, color='white', linewidth=0.5, alpha=0.5)
+        plt.ylabel("Профит (в R)", color='white')
+        plt.xlabel("Количество сделок", color='white')
+        
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+
+        photo = BufferedInputFile(buf.getvalue(), filename="equity.png")
+        
+        # Удаляем старое текстовое сообщение и шлем фото со статистикой
+        await cb.message.delete()
+        await bot.send_photo(
+            chat_id=cb.message.chat.id,
+            photo=photo,
+            caption=text,
+            parse_mode="HTML",
+            reply_markup=kb_back()
+        )
 
     # ─── РЕЖИМ ЛОНГ ───────────────────────────────────
 
