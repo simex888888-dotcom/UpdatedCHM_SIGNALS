@@ -29,7 +29,7 @@ TRIAL_SECONDS = 3600
 class TradeCfg:
     """Торговые параметры одного направления или общие."""
     timeframe:       str   = "1h"
-    scan_interval:   int   = 3600
+    scan_interval:   int   = 4 * 3600
     pivot_strength:  int   = 7
     max_level_age:   int   = 100
     max_retest_bars: int   = 30
@@ -63,6 +63,8 @@ class TradeCfg:
     min_volume_usdt: float = 1_000_000
     min_quality:     int   = 2
     cooldown_bars:   int   = 5
+    max_signal_risk_pct: float = 0.0   # фильтр риска: 0.0 = выкл, иначе макс. % стопа
+    min_risk_level:  str  = "all"      # фильтр уровня: all | low | medium | high
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -133,6 +135,8 @@ class UserSettings:
     min_volume_usdt:  float = 1_000_000
     min_quality:      int   = 2
     cooldown_bars:    int   = 5
+    max_signal_risk_pct: float = 0.0   # фильтр риска: 0.0 = выкл, иначе макс. % стопа
+    min_risk_level:   str  = "all"     # фильтр уровня: all | low | medium | high
 
     notify_signal:    bool  = True
     notify_breakout:  bool  = False
@@ -177,6 +181,8 @@ class UserSettings:
             tp1_rr=self.tp1_rr, tp2_rr=self.tp2_rr, tp3_rr=self.tp3_rr,
             min_volume_usdt=self.min_volume_usdt,
             min_quality=self.min_quality, cooldown_bars=self.cooldown_bars,
+            max_signal_risk_pct=self.max_signal_risk_pct,
+            min_risk_level=self.min_risk_level,
         )
 
     def get_long_cfg(self) -> TradeCfg:

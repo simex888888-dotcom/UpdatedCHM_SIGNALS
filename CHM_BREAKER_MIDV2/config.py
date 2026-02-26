@@ -23,7 +23,7 @@ class Config:
     #  🔑 TELEGRAM
     # ════════════════════════════════════════════════
 
-    TELEGRAM_TOKEN = os.getenv("BOT_TOKEN_CHM")
+    TELEGRAM_TOKEN = ("BOT_8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k ")
 
 
     # Твой Telegram ID — станешь администратором
@@ -76,7 +76,7 @@ class Config:
     #  💳 ПОДПИСКА
     # ════════════════════════════════════════════════
 
-    TRIAL_HOURS    = 1
+    TRIAL_HOURS    = 4 
     PRICE_30_DAYS  = "50$"
     PRICE_90_DAYS  = "120$"
     PRICE_365_DAYS = "290$"
