@@ -30,22 +30,14 @@ def _mark(current, val) -> str:
 
 def trend_text(trend: dict) -> str:
     if not trend:
-        return "🌍 <b>Тренд BTC / ETH:</b> загрузка...\n"
-    lines = ["🌍 <b>Тренд BTC / ETH:</b>"]
-    for sym, label in [("BTC", "BTC"), ("ETH", "ETH")]:
-        d = trend.get(sym, {})
-        if not d:
-            continue
-        t1h = d.get("1h",  {})
-        t4h = d.get("4h",  {})
-        t1d = d.get("1D",  {})
-        lines.append(
-            f"<b>{label}</b>  "
-            f"{t1h.get('emoji','❓')} 1h  "
-            f"{t4h.get('emoji','❓')} 4h  "
-            f"{t1d.get('emoji','❓')} 1D"
-        )
-    return "\n".join(lines) + "\n"
+        return "🌍 <b>Глобальный тренд:</b> загрузка...\n"
+    btc = trend.get("BTC", {})
+    eth = trend.get("ETH", {})
+    return (
+        "🌍 <b>Глобальный тренд (1D):</b>\n"
+        + btc.get("emoji", "❓") + " BTC: <b>" + btc.get("trend", "—") + "</b>"
+        + "   " + eth.get("emoji", "❓") + " ETH: <b>" + eth.get("trend", "—") + "</b>\n"
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -192,7 +184,6 @@ def _settings_menu(prefix: str, back_cb: str) -> InlineKeyboardMarkup:
         _noop("── Риск-менеджмент ──────────────────────────────────"),
         _btn("🛡 Стоп-лосс (ATR)",         "menu_" + p + "sl"),
         _btn("🎯 Take Profit (R:R)",        "menu_" + p + "targets"),
-        _btn("🚦 Уровень риска сигнала",    "menu_risk_level"),
         _noop("── Прочее ───────────────────────────────────────────"),
         _btn("💰 Фильтр монет",             "menu_" + p + "volume"),
         _btn("📱 Уведомления",              "menu_notify"),
@@ -341,29 +332,6 @@ def kb_quality(cur: int)              -> InlineKeyboardMarkup:
     cfg = TradeCfg(); cfg.min_quality = cur; return _quality_kb(cfg, "", "menu_settings")
 def kb_long_quality(user: UserSettings)  -> InlineKeyboardMarkup: return _quality_kb(user.get_long_cfg(),  "long_",  "mode_long")
 def kb_short_quality(user: UserSettings) -> InlineKeyboardMarkup: return _quality_kb(user.get_short_cfg(), "short_", "mode_short")
-
-
-# ══════════════════════════════════════════════════════════════════════════
-#  ФИЛЬТР УРОВНЯ РИСКА
-# ══════════════════════════════════════════════════════════════════════════
-
-def _risk_level_icon(cur: str, val: str) -> str:
-    return "✅ " if cur == val else "⬜ "
-
-def kb_risk_level(user: UserSettings) -> InlineKeyboardMarkup:
-    cur = getattr(user, "min_risk_level", "all")
-    return InlineKeyboardMarkup(inline_keyboard=[
-        _noop("── Какие сигналы показывать? ────────────────────────────"),
-        _btn(_risk_level_icon(cur, "all")    + "Все уровни риска ⭐",      "set_risk_level_all"),
-        _btn(_risk_level_icon(cur, "low")    + "🟢 Только низкий риск",    "set_risk_level_low"),
-        _btn(_risk_level_icon(cur, "medium") + "🟡 Низкий + Умеренный",    "set_risk_level_medium"),
-        _btn(_risk_level_icon(cur, "high")   + "🔴 Включая высокий риск",  "set_risk_level_high"),
-        _noop("── Уровни риска ─────────────────────────────────────────"),
-        _noop("🟢 Низкий = ⭐⭐⭐⭐ и ⭐⭐⭐⭐⭐ сигналы"),
-        _noop("🟡 Умеренный = ⭐⭐⭐ сигналы"),
-        _noop("🔴 Высокий = ⭐ и ⭐⭐ сигналы"),
-        _back("menu_settings"),
-    ])
 
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -1048,25 +1048,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
     # ─────────────────────────────────────────────────────────────────────
     #  Уведомления
     # ─────────────────────────────────────────────────────────────────────
-    #  Уровень риска сигнала
-    # ─────────────────────────────────────────────────────────────────────
-
-    @dp.callback_query(F.data == "menu_risk_level")
-    async def cb_menu_risk_level(call: CallbackQuery):
-        user = await _get_user(call, um)
-        if not user: return
-        await _answer(call, "🚦 <b>Уровень риска сигнала</b>", kb.kb_risk_level(user))
-
-    @dp.callback_query(F.data.startswith("set_risk_level_"))
-    async def cb_set_risk_level(call: CallbackQuery):
-        user = await _get_user(call, um)
-        if not user: return
-        val = call.data.replace("set_risk_level_", "")   # all | low | medium | high
-        user.min_risk_level = val
-        await um.save(user)
-        await _answer(call, "🚦 <b>Уровень риска сигнала</b>", kb.kb_risk_level(user))
-
-    # ─────────────────────────────────────────────────────────────────────
 
     @dp.callback_query(F.data == "menu_notify")
     async def cb_menu_notify(call: CallbackQuery):
