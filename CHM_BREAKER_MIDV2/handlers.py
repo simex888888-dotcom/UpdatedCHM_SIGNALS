@@ -530,6 +530,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
         await _answer(call, "⚡ <b>SMC условия — ШОРТ</b>", kb.kb_short_smc(user))
 
     def _smc_toggle(field: str, user: UserSettings) -> bool:
+        """Тоггл shared SMC-полей на самом пользователе.
+        field: smc_use_bos / smc_use_ob / smc_use_fvg / smc_use_sweep / smc_use_choch / smc_use_conf
+        """
         cur = getattr(user, field)
         setattr(user, field, not cur)
         return not cur
@@ -537,32 +540,36 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
     @dp.callback_query(F.data.startswith("smc_toggle_"))
     async def cb_smc_toggle(call: CallbackQuery):
         user = await _get_user(call, um)
-        if not user: return
-        raw = call.data  # e.g. "smc_toggle_bos" / "long_smc_toggle_ob"
+        if not user:
+            return
 
-        # определяем prefix
+        raw = call.data  # e.g. "smc_toggle_bos" / "long_smc_toggle_ob" / "short_smc_toggle_fvg"
+
+        # базовый префикс для всех SMC полей
+        KEY_PREFIX = "smc_use_"
+
+        # определяем prefix (shared / long / short) и имя поля
         if raw.startswith("long_smc_toggle_"):
             prefix = "long_"
-            key    = raw.replace("long_smc_toggle_", "smc_use_")
-            back   = "mode_long"
-            mkb    = kb.kb_long_smc
+            # "long_smc_toggle_bos" → "bos" → "smc_use_bos"
+            key = KEY_PREFIX + raw.replace("long_smc_toggle_", "")
+            mkb = kb.kb_long_smc
         elif raw.startswith("short_smc_toggle_"):
             prefix = "short_"
-            key    = raw.replace("short_smc_toggle_", "smc_use_")
-            back   = "mode_short"
-            mkb    = kb.kb_short_smc
+            key = KEY_PREFIX + raw.replace("short_smc_toggle_", "")
+            mkb = kb.kb_short_smc
         else:
             prefix = ""
-            key    = raw.replace("smc_toggle_", "smc_use_")
-            back   = "menu_settings"
-            mkb    = kb.kb_smc
+            key = KEY_PREFIX + raw.replace("smc_toggle_", "")
+            mkb = kb.kb_smc
 
-        # Переключаем на объекте пользователя (shared для "" и long/short через cfg)
+        # shared-настройки — на самом пользователе
         if prefix == "":
             _smc_toggle(key, user)
             await um.save(user)
             await _answer(call, "⚡ <b>SMC условия входа</b>", mkb(user))
         else:
+            # per-direction cfg (long_cfg / short_cfg)
             cfg = user.get_long_cfg() if prefix == "long_" else user.get_short_cfg()
             cur = getattr(cfg, key)
             setattr(cfg, key, not cur)
@@ -573,6 +580,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
             await um.save(user)
             dir_name = "ЛОНГ" if prefix == "long_" else "ШОРТ"
             await _answer(call, f"⚡ <b>SMC условия — {dir_name}</b>", mkb(user))
+
 
     # ─────────────────────────────────────────────────────────────────────
     #  Пивоты
