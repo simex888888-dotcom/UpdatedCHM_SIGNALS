@@ -332,44 +332,42 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
         if not user: return
         await _answer(call, "⚡ <b>Сканер ОБА</b>", kb.kb_mode_both(user))
 
-    # ─────────────────────────────────────────────────────────────────────
     #  Переключатели вкл/выкл
     # ─────────────────────────────────────────────────────────────────────
 
     @dp.callback_query(F.data == "toggle_long")
     async def cb_toggle_long(call: CallbackQuery):
         user = await _get_user(call, um)
-        if not user: return
+        if not user:
+            return
+        # независимое включение/выключение LONG
         user.long_active = not user.long_active
-        if user.long_active:
-            user.short_active = False
-            user.active = False
         await um.save(user)
         await _answer(call, "📈 <b>ЛОНГ сканер</b>", kb.kb_mode_long(user))
 
-    @dp.callback_query(F.data == "toggle_short")
+    @dp.callbackquery(F.data == "toggle_short")
     async def cb_toggle_short(call: CallbackQuery):
         user = await _get_user(call, um)
-        if not user: return
+        if not user:
+            return
+        # независимое включение/выключение SHORT
         user.short_active = not user.short_active
-        if user.short_active:
-            user.long_active = False
-            user.active = False
         await um.save(user)
         await _answer(call, "📉 <b>ШОРТ сканер</b>", kb.kb_mode_short(user))
 
-    @dp.callback_query(F.data == "toggle_both")
+    @dp.callbackquery(F.data == "toggle_both")
     async def cb_toggle_both(call: CallbackQuery):
         user = await _get_user(call, um)
-        if not user: return
-        was_active = user.active and user.scan_mode == "both"
-        user.active     = not was_active
-        user.scan_mode  = "both"
-        user.long_active  = False
-        user.short_active = False
+        if not user:
+            return
+        # BOTH управляет только общим флагом, не трогая long/short
+        was_active = user.scan_mode == "both" and user.active
+        user.scan_mode = "both"
+        user.active    = not was_active
         await um.save(user)
-        await _answer(call, "⚡ <b>Сканер ОБА</b>", kb.kb_mode_both(user))
+        await _answer(call, "📊 <b>BOTH режим</b>", kb.kb_mode_both(user))
 
+    
     # ─────────────────────────────────────────────────────────────────────
     #  Сброс настроек
     # ─────────────────────────────────────────────────────────────────────
