@@ -400,7 +400,7 @@ class MultiScanner:
         except Exception as e:
             log.error(f"Ошибка отправки {user.user_id}: {e}")
 
-        async def _scan_for_user(self, user: UserSettings, coins: list):
+    async def _scan_for_user(self, user: UserSettings, coins: list):
         """
         Учитывает user.long_active / user.short_active / user.active+scan_mode.
         Если включён только лонг — шлёт только LONG, и наоборот.
@@ -471,6 +471,7 @@ class MultiScanner:
         return signals
 
 
+       
     async def scan_all_users(self):
         active = await self.um.get_active_users()
         if not active:
