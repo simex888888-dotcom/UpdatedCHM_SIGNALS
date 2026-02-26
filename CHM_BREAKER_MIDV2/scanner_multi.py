@@ -471,8 +471,10 @@ class MultiScanner:
                     if sig.quality < user.min_quality:
                         continue
 
-                    if user.max_signal_risk_pct > 0 and getattr(sig, "risk_pct", 0) > user.max_signal_risk_pct:
+                    max_sig_risk = getattr(user, "max_signal_risk_pct", 0)
+                    if max_sig_risk > 0 and getattr(sig, "risk_pct", 0) > max_sig_risk:
                         continue
+
 
                     if user.min_risk_level != "all":
                         rl = _risk_level(sig.quality)
