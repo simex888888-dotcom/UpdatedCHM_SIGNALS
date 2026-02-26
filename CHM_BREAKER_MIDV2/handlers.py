@@ -332,42 +332,44 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
         if not user: return
         await _answer(call, "⚡ <b>Сканер ОБА</b>", kb.kb_mode_both(user))
 
+    # ─────────────────────────────────────────────────────────────────────
     #  Переключатели вкл/выкл
     # ─────────────────────────────────────────────────────────────────────
 
     @dp.callback_query(F.data == "toggle_long")
     async def cb_toggle_long(call: CallbackQuery):
         user = await _get_user(call, um)
-        if not user:
-            return
-        # независимое включение/выключение LONG
+        if not user: return
         user.long_active = not user.long_active
+        if user.long_active:
+            user.short_active = False
+            user.active = False
         await um.save(user)
         await _answer(call, "📈 <b>ЛОНГ сканер</b>", kb.kb_mode_long(user))
 
     @dp.callback_query(F.data == "toggle_short")
     async def cb_toggle_short(call: CallbackQuery):
         user = await _get_user(call, um)
-        if not user:
-            return
-        # независимое включение/выключение SHORT
+        if not user: return
         user.short_active = not user.short_active
+        if user.short_active:
+            user.long_active = False
+            user.active = False
         await um.save(user)
         await _answer(call, "📉 <b>ШОРТ сканер</b>", kb.kb_mode_short(user))
 
     @dp.callback_query(F.data == "toggle_both")
     async def cb_toggle_both(call: CallbackQuery):
         user = await _get_user(call, um)
-        if not user:
-            return
-        # BOTH управляет только общим флагом, не трогая long/short
-        was_active = user.scan_mode == "both" and user.active
-        user.scan_mode = "both"
-        user.active    = not was_active
+        if not user: return
+        was_active = user.active and user.scan_mode == "both"
+        user.active     = not was_active
+        user.scan_mode  = "both"
+        user.long_active  = False
+        user.short_active = False
         await um.save(user)
-        await _answer(call, "📊 <b>BOTH режим</b>", kb.kb_mode_both(user))
+        await _answer(call, "⚡ <b>Сканер ОБА</b>", kb.kb_mode_both(user))
 
-    
     # ─────────────────────────────────────────────────────────────────────
     #  Сброс настроек
     # ─────────────────────────────────────────────────────────────────────
@@ -509,86 +511,68 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
     #  SMC
     # ─────────────────────────────────────────────────────────────────────
 
-    def _smc_toggle(field: str, user: UserSettings) -> bool:
-        """Переключение shared SMC-полей на самом пользователе.
-        field: smc_use_bos / smc_use_ob / smc_use_fvg / smc_use_sweep / smc_use_choch / smc_use_conf
-        """
-        cur = getattr(user, field)
-        setattr(user, field, not cur)
-        return not cur
-
     @dp.callback_query(F.data == "menu_smc")
     async def cb_menu_smc(call: CallbackQuery):
         user = await _get_user(call, um)
-        if not user:
-            return
+        if not user: return
         await _answer(call, "⚡ <b>SMC условия входа</b>", kb.kb_smc(user))
 
     @dp.callback_query(F.data == "menu_long_smc")
     async def cb_menu_long_smc(call: CallbackQuery):
         user = await _get_user(call, um)
-        if not user:
-            return
+        if not user: return
         await _answer(call, "⚡ <b>SMC условия — ЛОНГ</b>", kb.kb_long_smc(user))
 
     @dp.callback_query(F.data == "menu_short_smc")
     async def cb_menu_short_smc(call: CallbackQuery):
         user = await _get_user(call, um)
-        if not user:
-            return
+        if not user: return
         await _answer(call, "⚡ <b>SMC условия — ШОРТ</b>", kb.kb_short_smc(user))
+
+    def _smc_toggle(field: str, user: UserSettings) -> bool:
+        cur = getattr(user, field)
+        setattr(user, field, not cur)
+        return not cur
 
     @dp.callback_query(F.data.startswith("smc_toggle_"))
     async def cb_smc_toggle(call: CallbackQuery):
-        """Обработка всех SMC-кнопок:
-        smc_toggle_*          → shared (user.smc_use_*)
-        long_smc_toggle_*     → long_cfg.smc_use_*
-        short_smc_toggle_*    → short_cfg.smc_use_*
-        """
         user = await _get_user(call, um)
-        if not user:
-            return
+        if not user: return
+        raw = call.data  # e.g. "smc_toggle_bos" / "long_smc_toggle_ob"
 
-        raw = call.data                  # "smc_toggle_bos" / "long_smc_toggle_ob" / ...
-        KEY_PREFIX = "smc_use_"
-
-        # определяем режим и целевое поле TradeCfg/UserSettings
+        # определяем prefix
         if raw.startswith("long_smc_toggle_"):
             prefix = "long_"
-            key    = KEY_PREFIX + raw.replace("long_smc_toggle_", "")
+            key    = raw.replace("long_smc_toggle_", "smc_use_")
+            back   = "mode_long"
             mkb    = kb.kb_long_smc
-            title  = "ЛОНГ"
         elif raw.startswith("short_smc_toggle_"):
             prefix = "short_"
-            key    = KEY_PREFIX + raw.replace("short_smc_toggle_", "")
+            key    = raw.replace("short_smc_toggle_", "smc_use_")
+            back   = "mode_short"
             mkb    = kb.kb_short_smc
-            title  = "ШОРТ"
         else:
             prefix = ""
-            key    = KEY_PREFIX + raw.replace("smc_toggle_", "")
+            key    = raw.replace("smc_toggle_", "smc_use_")
+            back   = "menu_settings"
             mkb    = kb.kb_smc
-            title  = "входа"
 
-        # shared-настройки на самом пользователе
+        # Переключаем на объекте пользователя (shared для "" и long/short через cfg)
         if prefix == "":
             _smc_toggle(key, user)
             await um.save(user)
             await _answer(call, "⚡ <b>SMC условия входа</b>", mkb(user))
-            return
-
-        # per-direction cfg: long_cfg / short_cfg
-        cfg = user.get_long_cfg() if prefix == "long_" else user.get_short_cfg()
-        cur = getattr(cfg, key)
-        setattr(cfg, key, not cur)
-
-        if prefix == "long_":
-            user.set_long_cfg(cfg)
         else:
-            user.set_short_cfg(cfg)
-
-        await um.save(user)
-        await _answer(call, f"⚡ <b>SMC условия — {title}</b>", mkb(user))
-
+            cfg = user.get_long_cfg() if prefix == "long_" else user.get_short_cfg()
+            cur = getattr(cfg, key)
+            setattr(cfg, key, not cur)
+            if prefix == "long_":
+                user.set_long_cfg(cfg)
+            else:
+                user.set_short_cfg(cfg)
+            await um.save(user)
+            dir_name = "ЛОНГ" if prefix == "long_" else "ШОРТ"
+            await _answer(call, f"⚡ <b>SMC условия — {dir_name}</b>", mkb(user))
 
     # ─────────────────────────────────────────────────────────────────────
     #  Пивоты
@@ -912,19 +896,13 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
             v = float(key.split("_")[-1])
             if cfg: cfg.max_risk_pct = v
             else:   user.max_risk_pct = v
-        elif key.startswith("set_signal_risk_"):
-            v = float(key.split("_")[-1])
-            if cfg: cfg.max_signal_risk_pct = v
-            else:   user.max_signal_risk_pct = v
 
         if prefix == "long_" and cfg:    user.set_long_cfg(cfg)
         elif prefix == "short_" and cfg:  user.set_short_cfg(cfg)
 
     @dp.callback_query(F.data.startswith("set_atr_") | F.data.startswith("set_risk_") |
-                       F.data.startswith("set_signal_risk_") |
                        F.data.startswith("long_set_atr_") | F.data.startswith("short_set_atr_") |
-                       F.data.startswith("long_set_risk_") | F.data.startswith("short_set_risk_") |
-                       F.data.startswith("long_set_signal_risk_") | F.data.startswith("short_set_signal_risk_"))
+                       F.data.startswith("long_set_risk_") | F.data.startswith("short_set_risk_"))
     async def cb_set_sl(call: CallbackQuery):
         user = await _get_user(call, um)
         if not user: return
@@ -1063,44 +1041,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
 
     # ─────────────────────────────────────────────────────────────────────
     #  Уведомления
-    # ─────────────────────────────────────────────────────────────────────
-    #  Уровень риска сигнала
-    # ─────────────────────────────────────────────────────────────────────
-
-    @dp.callback_query(F.data == "menu_risk_level")
-    async def cb_menu_risk_level(call: CallbackQuery):
-        user = await _get_user(call, um)
-        if not user: return
-        await _answer(call, "🚦 <b>Уровень риска сигнала</b>", kb.kb_risk_level(user))
-
-    @dp.callback_query(F.data.startswith("set_risk_level_"))
-    async def cb_set_risk_level(call: CallbackQuery):
-        user = await _get_user(call, um)
-        if not user: return
-        val = call.data.replace("set_risk_level_", "")   # all | low | medium | high
-        user.min_risk_level = val
-        await um.save(user)
-        await _answer(call, "🚦 <b>Уровень риска сигнала</b>", kb.kb_risk_level(user))
-
-    # ─────────────────────────────────────────────────────────────────────
-    #  Режим анализа (Уровни / SMC / Оба)
-    # ─────────────────────────────────────────────────────────────────────
-
-    @dp.callback_query(F.data == "menu_analysis_mode")
-    async def cb_menu_analysis_mode(call: CallbackQuery):
-        user = await _get_user(call, um)
-        if not user: return
-        await _answer(call, "🔬 <b>Режим анализа сигналов</b>", kb.kb_analysis_mode(user))
-
-    @dp.callback_query(F.data.startswith("set_analysis_mode_"))
-    async def cb_set_analysis_mode(call: CallbackQuery):
-        user = await _get_user(call, um)
-        if not user: return
-        val = call.data.replace("set_analysis_mode_", "")   # levels | smc | both
-        user.analysis_mode = val
-        await um.save(user)
-        await _answer(call, "🔬 <b>Режим анализа сигналов</b>", kb.kb_analysis_mode(user))
-
     # ─────────────────────────────────────────────────────────────────────
 
     @dp.callback_query(F.data == "menu_notify")

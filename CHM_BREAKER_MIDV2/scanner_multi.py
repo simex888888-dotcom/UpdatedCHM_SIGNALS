@@ -11,7 +11,7 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import Config
-from usermanager import UserManager, UserSettings
+from user_manager import UserManager, UserSettings
 from fetcher import BinanceFetcher
 from indicator import CHMIndicator, SignalResult
 
@@ -30,14 +30,6 @@ def _pct(entry: float, target: float) -> str:
     return f"{abs((target - entry) / entry * 100):.1f}%"
 
 
-def _risk_level(quality: int) -> str:
-    """Уровень риска по качеству сигнала (совпадает с отображением в сигнале)."""
-    if quality >= 5: return "low"
-    if quality >= 4: return "low"
-    if quality >= 3: return "medium"
-    return "high"
-
-
 # ── Компактный текст сигнала ──────────────────────────────────────────────
 
 def make_signal_text(sig: SignalResult, user: UserSettings, change_24h=None) -> str:
@@ -49,8 +41,8 @@ def make_signal_text(sig: SignalResult, user: UserSettings, change_24h=None) -> 
 
     header  = "🟢 <b>LONG</b>"  if is_long else "🔴 <b>SHORT</b>"
     stars   = "⭐" * sig.quality + "☆" * (5 - sig.quality)
-    sl_sign = "−"   # стоп всегда со знаком минус (убыток)
-    tp_sign = "+"   # цели всегда со знаком плюс (прибыль)
+    sl_sign = "−" if is_long else "+"
+    tp_sign = "+" if is_long else "−"
 
     if sig.quality >= 5:   risk_mark = "🟢 Низкий"
     elif sig.quality >= 4: risk_mark = "🟡 Умеренный"
@@ -268,34 +260,6 @@ class MultiScanner:
     def get_sig_cache(self) -> dict:
         return self._sig_cache
 
-    async def _update_trend(self):
-        """Обновляет тренд BTC и ETH по трём таймфреймам: 1h, 4h, 1D."""
-        _ema = CHMIndicator._ema
-        result = {}
-        for symbol in ("BTCUSDT", "ETHUSDT"):
-            sym_data = {}
-            for tf, label in [("1h", "1h"), ("4h", "4h"), ("1D", "1D")]:
-                try:
-                    df = await self.fetcher.get_candles(symbol, tf, limit=250)
-                    if df is None or len(df) < 60:
-                        sym_data[label] = {"emoji": "❓", "trend": "—"}
-                        continue
-                    close   = df["close"]
-                    ema50   = _ema(close, 50).iloc[-1]
-                    ema200  = _ema(close, 200).iloc[-1]
-                    c_now   = close.iloc[-1]
-                    if c_now > ema50 and ema50 > ema200:
-                        sym_data[label] = {"emoji": "📈", "trend": "Бычий"}
-                    elif c_now < ema50 and ema50 < ema200:
-                        sym_data[label] = {"emoji": "📉", "trend": "Медвежий"}
-                    else:
-                        sym_data[label] = {"emoji": "↔️", "trend": "Боковик"}
-                except Exception:
-                    sym_data[label] = {"emoji": "❓", "trend": "—"}
-            key = "BTC" if "BTC" in symbol else "ETH"
-            result[key] = sym_data
-        self._trend_cache = result
-
     def _get_us(self, user_id: int) -> UserScanner:
         if user_id not in self._user_scanners:
             self._user_scanners[user_id] = UserScanner(user_id)
@@ -333,7 +297,6 @@ class MultiScanner:
         cfg.SMC_USE_SWEEP      = user.smc_use_sweep
         cfg.SMC_USE_CHOCH      = user.smc_use_choch
         cfg.SMC_USE_CONF       = user.smc_use_conf
-        cfg.ANALYSIS_MODE      = user.analysis_mode
         if user.user_id not in self._indicators:
             self._indicators[user.user_id] = CHMIndicator(cfg)
         return self._indicators[user.user_id]
@@ -472,17 +435,6 @@ class MultiScanner:
                 if sig is None or sig.quality < user.min_quality:
                     continue
 
-                # Фильтр по риску: пропускаем если стоп слишком далеко
-                if user.max_signal_risk_pct > 0 and sig.risk_pct > user.max_signal_risk_pct:
-                    continue
-
-                # Фильтр по уровню риска (low/medium/high/all)
-                if user.min_risk_level != "all":
-                    _rl = _risk_level(sig.quality)
-                    if user.min_risk_level == "low"    and _rl != "low":    continue
-                    if user.min_risk_level == "medium" and _rl not in ("low", "medium"): continue
-                    if user.min_risk_level == "high":  pass  # любой уровень проходит
-
                 if user.notify_signal:
                     await self._send_signal(user, sig)
                 signals += 1
@@ -498,12 +450,6 @@ class MultiScanner:
 
         now = time.time()
         self._perf["cycles"] += 1
-
-        # Обновляем тренд BTC/ETH раз в цикл
-        try:
-            await self._update_trend()
-        except Exception as e:
-            log.debug(f"trend update error: {e}")
 
         for user in active:
             us = self._get_us(user.user_id)
