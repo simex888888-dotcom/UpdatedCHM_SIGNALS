@@ -320,7 +320,7 @@ class MultiScanner:
         cfg.SMC_USE_SWEEP      = d_cfg.smc_use_sweep
         cfg.SMC_USE_CHOCH      = d_cfg.smc_use_choch
         cfg.SMC_USE_CONF       = d_cfg.smc_use_conf
-        cfg.ANALYSIS_MODE      = d_cfg.analysis_mode
+        cfg.ANALYSIS_MODE      = getattr(d_cfg, "analysis_mode", getattr(user, "analysis_mode", "both"))
 
         key = f"{user.user_id}_{direction}"
         if key not in self._indicators:
