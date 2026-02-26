@@ -4,6 +4,3 @@ aiohttp==3.9.3
 pandas==2.1.4
 numpy==1.26.3
 certifi==2024.2.2
-Pillow
-matplotlib==3.8.2
-pyTelegramBotAPI
