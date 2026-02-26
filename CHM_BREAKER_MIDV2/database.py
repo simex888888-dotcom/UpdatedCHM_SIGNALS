@@ -266,13 +266,6 @@ async def db_get_user_trades(user_id: int) -> list[dict]:
             return [dict(r) for r in rows]
 
 
-async def db_reset_user_trades(user_id: int):
-    async with _lock:
-        async with aiosqlite.connect(_db_path) as db:
-            await db.execute("DELETE FROM trades WHERE user_id=?", (user_id,))
-            await db.commit()
-
-
 async def db_get_user_stats(user_id: int) -> dict:
     trades = await db_get_user_trades(user_id)
     if not trades:
