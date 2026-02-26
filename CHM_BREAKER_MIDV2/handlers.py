@@ -509,75 +509,85 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner: MultiS
     #  SMC
     # ─────────────────────────────────────────────────────────────────────
 
-    @dp.callback_query(F.data == "menu_smc")
-    async def cb_menu_smc(call: CallbackQuery):
-        user = await _get_user(call, um)
-        if not user: return
-        await _answer(call, "⚡ <b>SMC условия входа</b>", kb.kb_smc(user))
-
-    @dp.callback_query(F.data == "menu_long_smc")
-    async def cb_menu_long_smc(call: CallbackQuery):
-        user = await _get_user(call, um)
-        if not user: return
-        await _answer(call, "⚡ <b>SMC условия — ЛОНГ</b>", kb.kb_long_smc(user))
-
-    @dp.callback_query(F.data == "menu_short_smc")
-    async def cb_menu_short_smc(call: CallbackQuery):
-        user = await _get_user(call, um)
-        if not user: return
-        await _answer(call, "⚡ <b>SMC условия — ШОРТ</b>", kb.kb_short_smc(user))
-
     def _smc_toggle(field: str, user: UserSettings) -> bool:
-        """Тоггл shared SMC-полей на самом пользователе.
+        """Переключение shared SMC-полей на самом пользователе.
         field: smc_use_bos / smc_use_ob / smc_use_fvg / smc_use_sweep / smc_use_choch / smc_use_conf
         """
         cur = getattr(user, field)
         setattr(user, field, not cur)
         return not cur
 
+    @dp.callback_query(F.data == "menu_smc")
+    async def cb_menu_smc(call: CallbackQuery):
+        user = await _get_user(call, um)
+        if not user:
+            return
+        await _answer(call, "⚡ <b>SMC условия входа</b>", kb.kb_smc(user))
+
+    @dp.callback_query(F.data == "menu_long_smc")
+    async def cb_menu_long_smc(call: CallbackQuery):
+        user = await _get_user(call, um)
+        if not user:
+            return
+        await _answer(call, "⚡ <b>SMC условия — ЛОНГ</b>", kb.kb_long_smc(user))
+
+    @dp.callback_query(F.data == "menu_short_smc")
+    async def cb_menu_short_smc(call: CallbackQuery):
+        user = await _get_user(call, um)
+        if not user:
+            return
+        await _answer(call, "⚡ <b>SMC условия — ШОРТ</b>", kb.kb_short_smc(user))
+
     @dp.callback_query(F.data.startswith("smc_toggle_"))
     async def cb_smc_toggle(call: CallbackQuery):
+        """Обработка всех SMC-кнопок:
+        smc_toggle_*          → shared (user.smc_use_*)
+        long_smc_toggle_*     → long_cfg.smc_use_*
+        short_smc_toggle_*    → short_cfg.smc_use_*
+        """
         user = await _get_user(call, um)
         if not user:
             return
 
-        raw = call.data  # e.g. "smc_toggle_bos" / "long_smc_toggle_ob" / "short_smc_toggle_fvg"
-
-        # базовый префикс для всех SMC полей
+        raw = call.data                  # "smc_toggle_bos" / "long_smc_toggle_ob" / ...
         KEY_PREFIX = "smc_use_"
 
-        # определяем prefix (shared / long / short) и имя поля
+        # определяем режим и целевое поле TradeCfg/UserSettings
         if raw.startswith("long_smc_toggle_"):
             prefix = "long_"
-            # "long_smc_toggle_bos" → "bos" → "smc_use_bos"
-            key = KEY_PREFIX + raw.replace("long_smc_toggle_", "")
-            mkb = kb.kb_long_smc
+            key    = KEY_PREFIX + raw.replace("long_smc_toggle_", "")
+            mkb    = kb.kb_long_smc
+            title  = "ЛОНГ"
         elif raw.startswith("short_smc_toggle_"):
             prefix = "short_"
-            key = KEY_PREFIX + raw.replace("short_smc_toggle_", "")
-            mkb = kb.kb_short_smc
+            key    = KEY_PREFIX + raw.replace("short_smc_toggle_", "")
+            mkb    = kb.kb_short_smc
+            title  = "ШОРТ"
         else:
             prefix = ""
-            key = KEY_PREFIX + raw.replace("smc_toggle_", "")
-            mkb = kb.kb_smc
+            key    = KEY_PREFIX + raw.replace("smc_toggle_", "")
+            mkb    = kb.kb_smc
+            title  = "входа"
 
-        # shared-настройки — на самом пользователе
+        # shared-настройки на самом пользователе
         if prefix == "":
             _smc_toggle(key, user)
             await um.save(user)
             await _answer(call, "⚡ <b>SMC условия входа</b>", mkb(user))
+            return
+
+        # per-direction cfg: long_cfg / short_cfg
+        cfg = user.get_long_cfg() if prefix == "long_" else user.get_short_cfg()
+        cur = getattr(cfg, key)
+        setattr(cfg, key, not cur)
+
+        if prefix == "long_":
+            user.set_long_cfg(cfg)
         else:
-            # per-direction cfg (long_cfg / short_cfg)
-            cfg = user.get_long_cfg() if prefix == "long_" else user.get_short_cfg()
-            cur = getattr(cfg, key)
-            setattr(cfg, key, not cur)
-            if prefix == "long_":
-                user.set_long_cfg(cfg)
-            else:
-                user.set_short_cfg(cfg)
-            await um.save(user)
-            dir_name = "ЛОНГ" if prefix == "long_" else "ШОРТ"
-            await _answer(call, f"⚡ <b>SMC условия — {dir_name}</b>", mkb(user))
+            user.set_short_cfg(cfg)
+
+        await um.save(user)
+        await _answer(call, f"⚡ <b>SMC условия — {title}</b>", mkb(user))
 
 
     # ─────────────────────────────────────────────────────────────────────
