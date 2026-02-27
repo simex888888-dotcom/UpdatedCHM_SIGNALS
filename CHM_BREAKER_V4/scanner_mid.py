@@ -1,11 +1,14 @@
 """
 scanner_mid.py — мультисканнинг для 50-500 пользователей
-CHM BREAKER v4.2 Classic (без SMC)
 
-v4.2.1 — изменено:
-  • result_keyboard() — добавлены кнопки 📊 Статистика и 📈 График
-  • signal_text()     — исправлен \n, добавлена плашка контр-тренда
-  • _send()           — передаёт symbol в result_keyboard
+МУЛЬТИСКАННИНГ:
+  Каждый пользователь может иметь одновременно активными:
+    • ЛОНГ сканер — своя TF, интервал, настройки
+    • ШОРТ сканер — своя TF, интервал, настройки
+    • ОБА — общие настройки (режим совместимости)
+
+  Сканер создаёт ScanJob на каждую активную комбинацию (user, direction).
+  Группировка по TF сохраняется — одни свечи для всех.
 """
 
 import asyncio
@@ -35,13 +38,14 @@ Direction = Literal["LONG", "SHORT", "BOTH"]
 
 @dataclass
 class ScanJob:
+    """Один прогон сканера: пользователь + направление + конфиг."""
     user:      UserSettings
-    direction: Direction
+    direction: Direction     # "LONG" | "SHORT" | "BOTH"
     cfg:       TradeCfg
 
     @property
     def job_key(self) -> str:
-        return f"{self.user.user_id}_{self.direction}"
+        return str(self.user.user_id) + "_" + self.direction
 
     @property
     def tf(self) -> str:
@@ -85,170 +89,94 @@ class IndConfig:
 
 def _cfg_to_ind(cfg: TradeCfg) -> IndConfig:
     return IndConfig(
-        TIMEFRAME=cfg.timeframe,
-        PIVOT_STRENGTH=cfg.pivot_strength,
-        ATR_PERIOD=cfg.atr_period,
-        ATR_MULT=cfg.atr_mult,
-        MAX_RISK_PCT=cfg.max_risk_pct,
-        EMA_FAST=cfg.ema_fast,
-        EMA_SLOW=cfg.ema_slow,
-        RSI_PERIOD=cfg.rsi_period,
-        RSI_OB=cfg.rsi_ob,
-        RSI_OS=cfg.rsi_os,
-        VOL_MULT=cfg.vol_mult,
-        VOL_LEN=cfg.vol_len,
-        MAX_LEVEL_AGE=cfg.max_level_age,
-        MAX_RETEST_BARS=cfg.max_retest_bars,
-        COOLDOWN_BARS=cfg.cooldown_bars,
-        ZONE_BUFFER=cfg.zone_buffer,
-        TP1_RR=cfg.tp1_rr,
-        TP2_RR=cfg.tp2_rr,
-        TP3_RR=cfg.tp3_rr,
+        TIMEFRAME=cfg.timeframe, PIVOT_STRENGTH=cfg.pivot_strength,
+        ATR_PERIOD=cfg.atr_period, ATR_MULT=cfg.atr_mult,
+        MAX_RISK_PCT=cfg.max_risk_pct, EMA_FAST=cfg.ema_fast, EMA_SLOW=cfg.ema_slow,
+        RSI_PERIOD=cfg.rsi_period, RSI_OB=cfg.rsi_ob, RSI_OS=cfg.rsi_os,
+        VOL_MULT=cfg.vol_mult, VOL_LEN=cfg.vol_len,
+        MAX_LEVEL_AGE=cfg.max_level_age, MAX_RETEST_BARS=cfg.max_retest_bars,
+        COOLDOWN_BARS=cfg.cooldown_bars, ZONE_BUFFER=cfg.zone_buffer,
+        TP1_RR=cfg.tp1_rr, TP2_RR=cfg.tp2_rr, TP3_RR=cfg.tp3_rr,
         HTF_EMA_PERIOD=cfg.htf_ema_period,
-        USE_RSI_FILTER=cfg.use_rsi,
-        USE_VOLUME_FILTER=cfg.use_volume,
-        USE_PATTERN_FILTER=cfg.use_pattern,
-        USE_HTF_FILTER=cfg.use_htf,
+        USE_RSI_FILTER=cfg.use_rsi, USE_VOLUME_FILTER=cfg.use_volume,
+        USE_PATTERN_FILTER=cfg.use_pattern, USE_HTF_FILTER=cfg.use_htf,
     )
 
 
-# ══════════════════════════════════════════════════════
-# TELEGRAM — КНОПКИ И ТЕКСТ СИГНАЛА   ← изменено v4.2.1
-# ══════════════════════════════════════════════════════
+# ── Telegram ─────────────────────────────────────────
 
-def result_keyboard(trade_id: str, symbol: str) -> InlineKeyboardMarkup:
+def _tv_url(symbol: str) -> str:
+    """Конвертирует OKX символ в ссылку TradingView.
+    BTC-USDT-SWAP → https://www.tradingview.com/chart/?symbol=OKX:BTCUSDT.P
     """
-    Три ряда кнопок под сигналом:
-      1. TP1 / TP2 / TP3
-      2. SL  / Пропустил
-      3. 📊 Статистика  /  📈 График (ссылка TradingView)
+    clean = symbol.replace("-SWAP", "").replace("-", "")
+    return "https://www.tradingview.com/chart/?symbol=OKX:" + clean + ".P"
 
-    symbol нужен для формирования URL на TradingView.
-    Формат OKX: BTC-USDT → на TV: OKXUSDT (убираем дефис).
-    """
-    # OKX тикер "BTC-USDT" → TV символ "OKXBTCUSDT"
-    tv_symbol = "OKX" + symbol.replace("-", "")
-    tv_url    = f"https://www.tradingview.com/chart/?symbol={tv_symbol}"
 
+def signal_compact_keyboard(trade_id: str, symbol: str) -> InlineKeyboardMarkup:
+    """Компактная клавиатура под сигналом: График | Статистика | Результат →"""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(
-                text="🎯 TP1",
-                callback_data=f"res_TP1_{trade_id}",
-            ),
-            InlineKeyboardButton(
-                text="🎯 TP2",
-                callback_data=f"res_TP2_{trade_id}",
-            ),
-            InlineKeyboardButton(
-                text="🏆 TP3",
-                callback_data=f"res_TP3_{trade_id}",
-            ),
+            InlineKeyboardButton(text="📈 График",     url=_tv_url(symbol)),
+            InlineKeyboardButton(text="📊 Статистика", callback_data="my_stats"),
         ],
         [
-            InlineKeyboardButton(
-                text="❌ SL",
-                callback_data=f"res_SL_{trade_id}",
-            ),
-            InlineKeyboardButton(
-                text="⏭ Пропустил",
-                callback_data=f"res_SKIP_{trade_id}",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="📊 Статистика",
-                callback_data=f"stat_{trade_id}",
-            ),
-            InlineKeyboardButton(
-                text="📈 График",
-                url=tv_url,
-            ),
+            InlineKeyboardButton(text="📋 Записать результат ▾", callback_data="sig_records_" + trade_id),
         ],
     ])
 
 
-def _fmt(p: float) -> str:
-    return f"{p:.6g}"
-
-
-def _pct(value: float, entry: float) -> str:
-    return f"{abs((value - entry) / entry * 100):.2f}"
+def trade_records_keyboard(trade_id: str) -> InlineKeyboardMarkup:
+    """Подменю записи результата сделки."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎯 TP1", callback_data="res_TP1_" + trade_id),
+            InlineKeyboardButton(text="🎯 TP2", callback_data="res_TP2_" + trade_id),
+            InlineKeyboardButton(text="🏆 TP3", callback_data="res_TP3_" + trade_id),
+        ],
+        [
+            InlineKeyboardButton(text="❌ Стоп-лосс",  callback_data="res_SL_"   + trade_id),
+            InlineKeyboardButton(text="⏭ Пропустил",  callback_data="res_SKIP_" + trade_id),
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Назад",      callback_data="sig_back_" + trade_id),
+        ],
+    ])
 
 
 def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
-    """
-    HTML-сообщение сигнала v4.2.1.
+    stars  = "⭐" * sig.quality + "☆" * (5 - sig.quality)
+    header = "🟢 <b>LONG СИГНАЛ</b>" if sig.direction == "LONG" else "🔴 <b>SHORT СИГНАЛ</b>"
+    emoji  = "📈" if sig.direction == "LONG" else "📉"
+    
+    counter_trend_warn = (
+        "\n🔶 <b>━━━ ⚠️ КОНТР-ТРЕНД ━━━</b> 🔶"
+        "\n<i>Сделка идёт ПРОТИВ основного тренда — повышенный риск!</i>"
+    ) if sig.is_counter_trend else ""
 
-    Исправлено: убраны литеральные \\n (теперь нормальные переносы).
-    Добавлено: плашка КОНТР-ТРЕНД выделена жирным красным текстом.
-    """
-    is_long   = sig.direction == "LONG"
-    emoji_dir = "📈" if is_long else "📉"
-    header    = "🟢 <b>LONG СИГНАЛ</b>" if is_long else "🔴 <b>SHORT СИГНАЛ</b>"
-    stars     = "⭐" * sig.quality + "☆" * (5 - sig.quality)
+    def pct(t): return abs((t - sig.entry) / sig.entry * 100)
 
-    # Плашка тренда — контр-тренд выделяется жирным
-    if sig.is_counter_trend:
-        trend_label = "⚠️ <b>КОНТР-ТРЕНД</b>"
-    else:
-        trend_label = "✅ <b>ПО ТРЕНДУ</b>"
-
-    explanation = sig.human_explanation or "Сигнал по стратегии."
-    trend_htf   = sig.trend_htf or "⏸ Выкл"
-
-    # Блок причин качества
-    reasons_block = ""
-    if sig.reasons:
-        reasons_block = (
-            "\n📋 <b>Факторы качества:</b>\n"
-            + "\n".join(f"  {r}" for r in sig.reasons)
-        )
-
-    lines = [
-        f"{header}  {emoji_dir}  {trend_label}",
-        "",
-        f"💎 <b>{sig.symbol}</b>  |  {sig.breakout_type}",
-        f"⭐ Качество: {stars}",
-        "",
-        "💬 <b>Логика входа:</b>",
-        f"<i>{explanation}</i>",
-        "",
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        f"💰 Вход:    <code>{_fmt(sig.entry)}</code>",
-        f"🛑 Стоп:    <code>{_fmt(sig.sl)}</code>  "
-        f"<i>(-{sig.risk_pct:.2f}%)</i>",
-        "",
-        f"🎯 Цель 1: <code>{_fmt(sig.tp1)}</code>  "
-        f"<i>(+{_pct(sig.tp1, sig.entry)}%  ×{cfg.tp1_rr}R)</i>",
-        f"🎯 Цель 2: <code>{_fmt(sig.tp2)}</code>  "
-        f"<i>(+{_pct(sig.tp2, sig.entry)}%  ×{cfg.tp2_rr}R)</i>",
-        f"🏆 Цель 3: <code>{_fmt(sig.tp3)}</code>  "
-        f"<i>(+{_pct(sig.tp3, sig.entry)}%  ×{cfg.tp3_rr}R)</i>",
-        "━━━━━━━━━━━━━━━━━━━━━━",
-        "",
-        f"📊 Тренд:  Локал {sig.trend_local}  |  HTF {trend_htf}",
-        f"🎛 RSI: <code>{sig.rsi:.1f}</code>  "
-        f"|  Объём: <code>×{sig.volume_ratio:.1f}</code>",
-        f"🕯 Паттерн: {sig.pattern or '—'}",
-    ]
-
-    if reasons_block:
-        lines.append(reasons_block)
-
-    lines += [
-        "",
-        "⚡ <i>CHM Laboratory — CHM GEL SIGNALS</i>",
-        "",
-        "👇 <i>Отметь результат или открой график:</i>",
-    ]
-
-    return "\n".join(lines)
+    NL = "\n"
+    return (
+        header + NL + NL +
+        "💎 <b>" + sig.symbol + "</b>  " + emoji + "  <b>" + sig.breakout_type + "</b>" + 
+        counter_trend_warn + NL +
+        "⭐ Качество: " + stars + NL + NL +
+        "🧠 <b>Анализ:</b> <i>" + sig.human_explanation + "</i>" + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL +
+        "💰 Вход:    <code>" + "{:.6g}".format(sig.entry) + "</code>" + NL +
+        "🛑 Стоп:    <code>" + "{:.6g}".format(sig.sl) + "</code>  <i>(-" + "{:.2f}".format(sig.risk_pct) + "%)</i>" + NL + NL +
+        "🎯 Цель 1: <code>" + "{:.6g}".format(sig.tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp1)) + "%)</i>" + NL +
+        "🎯 Цель 2: <code>" + "{:.6g}".format(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
+        "🏆 Цель 3: <code>" + "{:.6g}".format(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL + NL +
+        "📊 " + sig.trend_local + "  |  RSI: <code>" + "{:.1f}".format(sig.rsi) + "</code>  |  Vol: <code>x" + "{:.1f}".format(sig.volume_ratio) + "</code>" + NL + NL +
+        "⚡ <i>CHM Laboratory — CHM BREAKER</i>" + NL + NL +
+        "👇 <i>Отметь результат когда сделка закроется:</i>"
+    )
 
 
-# ══════════════════════════════════════════════════════
-# ОСНОВНОЙ СКАНЕР
-# ══════════════════════════════════════════════════════
+# ── Основной сканер ──────────────────────────────────
 
 class MidScanner:
 
@@ -258,20 +186,22 @@ class MidScanner:
         self.um      = um
         self.fetcher = OKXFetcher()
 
+        # Кэш индикаторов: job_key → CHMIndicator
         self._indicators:  dict[str, CHMIndicator] = {}
         self._ind_configs: dict[str, IndConfig]    = {}
-        self._last_scan:   dict[str, float]        = {}
+
+        # Когда последний раз сканировали (job_key → timestamp)
+        self._last_scan: dict[str, float] = {}
 
         self._api_sem = asyncio.Semaphore(config.API_CONCURRENCY)
         self._queue:   asyncio.Queue = asyncio.Queue()
 
         self._perf = {
-            "cycles":    0,
-            "users":     0,
-            "signals":   0,
-            "api_calls": 0,
+            "cycles": 0, "users": 0,
+            "signals": 0, "api_calls": 0,
         }
 
+        # Глобальный тренд
         self._global_trend:     dict  = {}
         self._trend_updated_at: float = 0
         self._trend_ttl:        int   = 3600
@@ -295,11 +225,11 @@ class MidScanner:
                 btc = self._global_trend.get("BTC", {})
                 eth = self._global_trend.get("ETH", {})
                 log.info(
-                    f"🌍 Тренд: BTC={btc.get('trend', '?')} "
-                    f"ETH={eth.get('trend', '?')}"
+                    "🌍 Тренд: BTC=" + btc.get("trend", "?") +
+                    " ETH=" + eth.get("trend", "?")
                 )
             except Exception as e:
-                log.warning(f"Тренд: {e}")
+                log.warning("Тренд: " + str(e))
 
     def get_trend(self) -> dict:
         return self._global_trend
@@ -317,10 +247,10 @@ class MidScanner:
         )
         if coins:
             await cache.set_coins(coins)
-            log.info(f"   Монет: {len(coins)}")
+            log.info("   Монет: " + str(len(coins)))
         return coins or []
 
-    # ── Свечи ────────────────────────────────────────
+    # ── Свечи (кэш → OKX) ────────────────────────────
 
     async def _fetch(self, symbol: str, tf: str):
         df = await cache.get_candles(symbol, tf)
@@ -335,6 +265,8 @@ class MidScanner:
             if df is not None:
                 await cache.set_candles(symbol, tf, df, self.cfg.CACHE_TTL)
             return df
+
+    # ── Загрузка свечей для TF ────────────────────────
 
     async def _load_tf_candles(self, tf: str, coins: list) -> dict:
         result   = {}
@@ -355,34 +287,41 @@ class MidScanner:
     # ── Анализ одного задания ─────────────────────────
 
     async def _run_job(self, job: ScanJob, candles: dict):
-        ind  = self._indicator(job)
-        user = job.user
-        cfg  = job.cfg
+        ind     = self._indicator(job)
+        user    = job.user
+        cfg     = job.cfg
+        signals = 0
 
         for sym, df in candles.items():
             df_htf = await self._fetch(sym, "1D") if cfg.use_htf else None
             try:
                 sig = ind.analyze(sym, df, df_htf)
             except Exception as e:
-                log.debug(f"{sym}: {e}")
+                log.debug(sym + ": " + str(e))
                 continue
-
             if sig is None or sig.quality < cfg.min_quality:
                 continue
-
+            # Фильтр направления
             if job.direction == "LONG"  and sig.direction != "LONG":  continue
             if job.direction == "SHORT" and sig.direction != "SHORT": continue
 
+            # Фильтр тренд-сигналов — пропускаем контр-трендовые если включено
+            if cfg.trend_only and sig.is_counter_trend:
+                continue
+
             if user.notify_signal:
                 await self._send(user, sig, cfg)
+            signals += 1
 
         self._perf["users"] += 1
+        return signals
 
-    # ── Отправка сигнала  ← изменено v4.2.1 ──────────
+    # ── Отправка сигнала ──────────────────────────────
 
     async def _send(self, user: UserSettings, sig: SignalResult, cfg: TradeCfg):
-        trade_id = f"{user.user_id}_{int(time.time() * 1000)}"
-
+        trade_id = str(user.user_id) + "_" + str(int(time.time() * 1000))
+        risk     = abs(sig.entry - sig.sl)
+        sign     = 1 if sig.direction == "LONG" else -1
         await db.db_add_trade({
             "trade_id":      trade_id,
             "user_id":       user.user_id,
@@ -390,45 +329,39 @@ class MidScanner:
             "direction":     sig.direction,
             "entry":         sig.entry,
             "sl":            sig.sl,
-            "tp1":           sig.tp1,
-            "tp2":           sig.tp2,
-            "tp3":           sig.tp3,
+            "tp1":           sig.entry + sign * risk * cfg.tp1_rr,
+            "tp2":           sig.entry + sign * risk * cfg.tp2_rr,
+            "tp3":           sig.entry + sign * risk * cfg.tp3_rr,
             "tp1_rr":        cfg.tp1_rr,
             "tp2_rr":        cfg.tp2_rr,
             "tp3_rr":        cfg.tp3_rr,
             "quality":       sig.quality,
             "timeframe":     cfg.timeframe,
             "breakout_type": sig.breakout_type,
-            "pattern":       sig.pattern,
-            "rsi":           sig.rsi,
-            "vol_ratio":     sig.volume_ratio,
-            "is_counter":    sig.is_counter_trend,
             "created_at":    time.time(),
         })
-
         try:
             await self.bot.send_message(
                 user.user_id,
                 signal_text(sig, cfg),
                 parse_mode="HTML",
-                # ← передаём symbol для кнопки График
-                reply_markup=result_keyboard(trade_id, sig.symbol),
+                reply_markup=signal_compact_keyboard(trade_id, sig.symbol),
             )
             user.signals_received += 1
             await self.um.save(user)
             self._perf["signals"] += 1
             log.info(
-                f"✅ {sig.symbol} {sig.direction} ⭐{sig.quality} "
-                f"RSI={sig.rsi:.1f} Vol=×{sig.volume_ratio:.1f} "
-                f"→ @{user.username or user.user_id}"
+                "✅ " + sig.symbol + " " + sig.direction +
+                " ⭐" + str(sig.quality) +
+                " → @" + (user.username or str(user.user_id))
             )
         except TelegramForbiddenError:
-            user.long_active  = False
+            user.long_active = False
             user.short_active = False
-            user.active       = False
+            user.active = False
             await self.um.save(user)
         except Exception as e:
-            log.error(f"Ошибка отправки {user.user_id}: {e}")
+            log.error("Ошибка отправки " + str(user.user_id) + ": " + str(e))
 
     # ── Воркер ───────────────────────────────────────
 
@@ -441,61 +374,68 @@ class MidScanner:
             except asyncio.TimeoutError:
                 break
             try:
-                await self._run_job(job, candles_by_tf.get(job.tf, {}))
+                candles = candles_by_tf.get(job.tf, {})
+                await self._run_job(job, candles)
             except Exception as e:
-                log.error(f"Воркер {wid} ошибка: {e}")
+                log.error("Воркер " + str(wid) + " ошибка: " + str(e))
             finally:
                 self._queue.task_done()
 
-    # ── Уведомление об истечении подписки ─────────────
+    # ── Уведомление об истечении ──────────────────────
 
     async def _notify_expired(self, user: UserSettings):
         try:
-            was_trial         = user.sub_status == "trial"
+            was_trial     = user.sub_status == "trial"
             user.long_active  = False
             user.short_active = False
             user.active       = False
             await self.um.save(user)
             cfg = self.cfg
-            text = (
-                "⏰ <b>Пробный период завершён!</b>\n\n"
-                f"📅 30 дней — <b>{cfg.PRICE_30_DAYS}</b>\n"
-                f"📅 90 дней — <b>{cfg.PRICE_90_DAYS}</b>\n\n"
-                f"💳 {cfg.PAYMENT_INFO}"
-            ) if was_trial else (
-                "⏰ <b>Подписка истекла!</b>\n\n"
-                f"📅 30 дней — <b>{cfg.PRICE_30_DAYS}</b>\n"
-                f"💳 {cfg.PAYMENT_INFO}"
-            )
+            if was_trial:
+                text = (
+                    "⏰ <b>Пробный период завершён!</b>\n\n"
+                    "📅 30 дней  — <b>" + cfg.PRICE_30_DAYS + "</b>\n"
+                    "📅 90 дней  — <b>" + cfg.PRICE_90_DAYS + "</b>\n\n"
+                    "💳 " + cfg.PAYMENT_INFO
+                )
+            else:
+                text = (
+                    "⏰ <b>Подписка истекла!</b>\n\n"
+                    "📅 30 дней  — <b>" + cfg.PRICE_30_DAYS + "</b>\n"
+                    "💳 " + cfg.PAYMENT_INFO
+                )
             await self.bot.send_message(user.user_id, text, parse_mode="HTML")
         except Exception:
             pass
 
-    # ── Построить задания для пользователя ───────────
+    # ── Построить список заданий для пользователя ─────
 
     @staticmethod
-    def _build_jobs(
-        user: UserSettings,
-        now: float,
-        last_scan: dict,
-    ) -> list[ScanJob]:
+    def _build_jobs(user: UserSettings, now: float, last_scan: dict) -> list[ScanJob]:
+        """
+        Возвращает список ScanJob для всех активных направлений пользователя.
+        Задание включается если прошёл нужный интервал.
+        """
         jobs = []
 
+        # ЛОНГ сканер
         if user.long_active:
             cfg = user.get_long_cfg()
-            key = f"{user.user_id}_LONG"
+            key = str(user.user_id) + "_LONG"
             if now - last_scan.get(key, 0) >= cfg.scan_interval:
                 jobs.append(ScanJob(user=user, direction="LONG", cfg=cfg))
 
+        # ШОРТ сканер
         if user.short_active:
             cfg = user.get_short_cfg()
-            key = f"{user.user_id}_SHORT"
+            key = str(user.user_id) + "_SHORT"
             if now - last_scan.get(key, 0) >= cfg.scan_interval:
                 jobs.append(ScanJob(user=user, direction="SHORT", cfg=cfg))
 
+        # Режим ОБА (legacy / совместимость)
         if user.active and user.scan_mode == "both":
             cfg = user.shared_cfg()
-            key = f"{user.user_id}_BOTH"
+            key = str(user.user_id) + "_BOTH"
             if now - last_scan.get(key, 0) >= cfg.scan_interval:
                 jobs.append(ScanJob(user=user, direction="BOTH", cfg=cfg))
 
@@ -511,24 +451,28 @@ class MidScanner:
         if not users:
             return
 
-        now      = time.time()
-        all_jobs: list[ScanJob] = []
+        now = time.time()
 
+        # Строим все задания
+        all_jobs: list[ScanJob] = []
         for u in users:
             has, _ = u.check_access()
             if not has:
                 await self._notify_expired(u)
                 continue
-            all_jobs.extend(self._build_jobs(u, now, self._last_scan))
+            jobs = self._build_jobs(u, now, self._last_scan)
+            all_jobs.extend(jobs)
 
         if not all_jobs:
             return
 
         log.info(
-            f"🔍 Цикл #{self._perf['cycles'] + 1}: "
-            f"{len(all_jobs)} заданий ({len(users)} юзеров)"
+            "🔍 Цикл #" + str(self._perf["cycles"] + 1) +
+            ": " + str(len(all_jobs)) + " заданий (" +
+            str(len(users)) + " юзеров)"
         )
 
+        # Группируем задания по TF
         tf_groups: dict[str, list[ScanJob]] = defaultdict(list)
         for job in all_jobs:
             tf_groups[job.tf].append(job)
@@ -536,22 +480,24 @@ class MidScanner:
         min_vol = min(j.cfg.min_volume_usdt for j in all_jobs)
         coins   = await self._load_coins(min_vol)
 
+        # Загружаем свечи один раз для каждого TF
         candles_by_tf: dict[str, dict] = {}
         for tf, tf_jobs in tf_groups.items():
             log.info(
-                f"  📥 TF={tf}: {len(coins)} монет "
-                f"для {len(tf_jobs)} заданий"
+                "  📥 TF=" + tf + ": " + str(len(coins)) +
+                " монет для " + str(len(tf_jobs)) + " заданий"
             )
             candles_by_tf[tf] = await self._load_tf_candles(tf, coins)
 
+        # Ставим в очередь и обновляем last_scan
         for job in all_jobs:
             self._last_scan[job.job_key] = now
             await self._queue.put(job)
 
+        # Запускаем воркеров
         n = min(self.cfg.SCAN_WORKERS, self._queue.qsize())
         if n == 0:
             return
-
         workers = [
             asyncio.create_task(self._worker(i, candles_by_tf))
             for i in range(n)
@@ -563,27 +509,26 @@ class MidScanner:
         elapsed = time.time() - start
         cs      = cache.cache_stats()
         self._perf["cycles"] += 1
-
         log.info(
-            f"  ✅ {elapsed:.1f}с | "
-            f"Сигналов: {self._perf['signals']} | "
-            f"API: {self._perf['api_calls']} | "
-            f"Кэш: {cs.get('size', 0)} ключей, "
-            f"{cs.get('ratio', 0)}% хит"
+            "  ✅ " + "{:.1f}".format(elapsed) + "с | " +
+            "Сигналов: " + str(self._perf["signals"]) + " | " +
+            "API: " + str(self._perf["api_calls"]) + " | " +
+            "Кэш: " + str(cs.get("size", 0)) + " ключей, " +
+            str(cs.get("ratio", 0)) + "% хит"
         )
 
     async def run_forever(self):
         log.info(
-            f"🚀 MidScanner v4.2 Classic | "
-            f"Воркеров: {self.cfg.SCAN_WORKERS} | "
-            f"API: {self.cfg.API_CONCURRENCY}"
+            "🚀 MidScanner v4 | Воркеров: " + str(self.cfg.SCAN_WORKERS) +
+            " | API: " + str(self.cfg.API_CONCURRENCY)
         )
         while True:
             try:
                 await self._cycle()
             except Exception as e:
-                log.error(f"Ошибка цикла: {e}", exc_info=True)
+                log.error("Ошибка цикла: " + str(e), exc_info=True)
             await asyncio.sleep(self.cfg.SCAN_LOOP_SLEEP)
 
     def get_perf(self) -> dict:
-        return {**self._perf, "cache": cache.cache_stats()}
+        cs = cache.cache_stats()
+        return {**self._perf, "cache": cs}
