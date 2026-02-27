@@ -2,6 +2,11 @@
 database.py — SQLite через aiosqlite
 Не требует сервера. Идеально для 50-500 пользователей.
 Выдерживает ~1000 запросов/сек на запись, ~10k на чтение.
+
+v4.2.1 — добавлено:
+  • Колонки trades: pattern, rsi, vol_ratio, is_counter
+  • Миграция для существующих БД
+  • skipped в db_get_user_stats()
 """
 
 import aiosqlite
@@ -102,14 +107,19 @@ CREATE TABLE IF NOT EXISTS trades (
     quality       INTEGER DEFAULT 1,
     timeframe     TEXT    DEFAULT '1h',
     breakout_type TEXT    DEFAULT '',
+    pattern       TEXT    DEFAULT '',
+    rsi           REAL    DEFAULT 50.0,
+    vol_ratio     REAL    DEFAULT 1.0,
+    is_counter    INTEGER DEFAULT 0,
     result        TEXT    DEFAULT '',
     result_rr     REAL    DEFAULT 0,
     created_at    REAL    DEFAULT 0
 );
 
-CREATE INDEX IF NOT EXISTS idx_trades_user ON trades(user_id);
-CREATE INDEX IF NOT EXISTS idx_users_active ON users(active, sub_status, sub_expires);
-CREATE INDEX IF NOT EXISTS idx_users_tf ON users(timeframe);
+CREATE INDEX IF NOT EXISTS idx_trades_user   ON trades(user_id);
+CREATE INDEX IF NOT EXISTS idx_trades_result ON trades(user_id, result);
+CREATE INDEX IF NOT EXISTS idx_users_active  ON users(active, sub_status, sub_expires);
+CREATE INDEX IF NOT EXISTS idx_users_tf      ON users(timeframe);
 """
 
 
@@ -118,8 +128,9 @@ async def init_db(path: str):
     _db_path = path
     async with aiosqlite.connect(_db_path) as db:
         await db.executescript(SCHEMA)
-        # Миграция: добавляем новые колонки если их нет (для существующих БД)
-        migrations = [
+
+        # ── Миграция users ────────────────────────────
+        user_migrations = [
             "ALTER TABLE users ADD COLUMN scan_mode TEXT DEFAULT 'both'",
             "ALTER TABLE users ADD COLUMN long_tf TEXT DEFAULT '1h'",
             "ALTER TABLE users ADD COLUMN long_interval INTEGER DEFAULT 3600",
@@ -130,11 +141,20 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN long_cfg TEXT DEFAULT '{}'",
             "ALTER TABLE users ADD COLUMN short_cfg TEXT DEFAULT '{}'",
         ]
-        for sql in migrations:
+        # ── Миграция trades       ← НОВОЕ v4.2.1 ─────
+        trade_migrations = [
+            "ALTER TABLE trades ADD COLUMN pattern   TEXT    DEFAULT ''",
+            "ALTER TABLE trades ADD COLUMN rsi       REAL    DEFAULT 50.0",
+            "ALTER TABLE trades ADD COLUMN vol_ratio REAL    DEFAULT 1.0",
+            "ALTER TABLE trades ADD COLUMN is_counter INTEGER DEFAULT 0",
+        ]
+
+        for sql in user_migrations + trade_migrations:
             try:
                 await db.execute(sql)
             except Exception:
                 pass  # колонка уже существует
+
         await db.commit()
     log.info(f"✅ SQLite инициализирована: {path}")
 
@@ -148,7 +168,9 @@ def _row_to_dict(description, row) -> dict:
 async def db_get_user(user_id: int) -> Optional[dict]:
     async with aiosqlite.connect(_db_path) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)) as cur:
+        async with db.execute(
+            "SELECT * FROM users WHERE user_id=?", (user_id,)
+        ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
 
@@ -159,7 +181,9 @@ async def db_upsert_user(data: dict):
     vals = list(data.values())
     placeholders = ", ".join("?" * len(vals))
     col_names    = ", ".join(cols)
-    updates      = ", ".join(f"{c}=excluded.{c}" for c in cols if c != "user_id")
+    updates      = ", ".join(
+        f"{c}=excluded.{c}" for c in cols if c != "user_id"
+    )
     sql = (
         f"INSERT INTO users ({col_names}) VALUES ({placeholders}) "
         f"ON CONFLICT(user_id) DO UPDATE SET {updates}"
@@ -178,7 +202,7 @@ async def db_get_active_users() -> list[dict]:
             """SELECT * FROM users
                WHERE sub_status IN ('trial','active') AND sub_expires > ?
                AND (active=1 OR long_active=1 OR short_active=1)""",
-            (now,)
+            (now,),
         ) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
@@ -187,7 +211,9 @@ async def db_get_active_users() -> list[dict]:
 async def db_get_all_users() -> list[dict]:
     async with aiosqlite.connect(_db_path) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM users ORDER BY created_at DESC") as cur:
+        async with db.execute(
+            "SELECT * FROM users ORDER BY created_at DESC"
+        ) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
 
@@ -195,7 +221,10 @@ async def db_get_all_users() -> list[dict]:
 async def db_stats_summary() -> dict:
     async with aiosqlite.connect(_db_path) as db:
         async def count(where=""):
-            sql = f"SELECT COUNT(*) FROM users{' WHERE ' + where if where else ''}"
+            sql = (
+                f"SELECT COUNT(*) FROM users"
+                f"{' WHERE ' + where if where else ''}"
+            )
             async with db.execute(sql) as cur:
                 return (await cur.fetchone())[0]
         return {
@@ -211,11 +240,13 @@ async def db_stats_summary() -> dict:
 # ── Сделки ──────────────────────────────────────────
 
 async def db_add_trade(data: dict):
-    cols = list(data.keys())
-    vals = list(data.values())
+    cols         = list(data.keys())
+    vals         = list(data.values())
     placeholders = ", ".join("?" * len(vals))
     col_names    = ", ".join(cols)
-    sql = f"INSERT OR IGNORE INTO trades ({col_names}) VALUES ({placeholders})"
+    sql = (
+        f"INSERT OR IGNORE INTO trades ({col_names}) VALUES ({placeholders})"
+    )
     async with _lock:
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(sql, vals)
@@ -225,37 +256,65 @@ async def db_add_trade(data: dict):
 async def db_get_trade(trade_id: str) -> Optional[dict]:
     async with aiosqlite.connect(_db_path) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM trades WHERE trade_id=?", (trade_id,)) as cur:
+        async with db.execute(
+            "SELECT * FROM trades WHERE trade_id=?", (trade_id,)
+        ) as cur:
             row = await cur.fetchone()
             return dict(row) if row else None
 
 
-async def db_set_trade_result(trade_id: str, result: str, result_rr: float) -> Optional[dict]:
+async def db_set_trade_result(
+    trade_id: str, result: str, result_rr: float
+) -> Optional[dict]:
     async with _lock:
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "UPDATE trades SET result=?, result_rr=? WHERE trade_id=?",
-                (result, result_rr, trade_id)
+                (result, result_rr, trade_id),
             )
             await db.commit()
     return await db_get_trade(trade_id)
 
 
 async def db_get_user_trades(user_id: int) -> list[dict]:
+    """
+    Возвращает все закрытые сделки пользователя (не пустые, не SKIP).
+    Используется для статистики и графика кривой доходности.
+    """
     async with aiosqlite.connect(_db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM trades WHERE user_id=? AND result != '' AND result != 'SKIP' ORDER BY created_at",
-            (user_id,)
+            """SELECT * FROM trades
+               WHERE user_id=?
+                 AND result != ''
+                 AND result != 'SKIP'
+               ORDER BY created_at""",
+            (user_id,),
         ) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
 
 
 async def db_get_user_stats(user_id: int) -> dict:
+    """
+    Считает полную статистику пользователя.
+
+    v4.2.1: добавлено поле 'skipped' — нужно для _trade_stat_text()
+    в handlers.py (кнопка 📊 Статистика в сигнале).
+    """
+    # Все закрытые сделки (без SKIP)
     trades = await db_get_user_trades(user_id)
+
+    # Считаем пропущенные отдельным запросом ← НОВОЕ v4.2.1
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM trades WHERE user_id=? AND result='SKIP'",
+            (user_id,),
+        ) as cur:
+            skipped = (await cur.fetchone())[0] or 0
+
     if not trades:
-        return {}
+        return {"skipped": skipped}
 
     wins   = [t for t in trades if t["result"] in ("TP1", "TP2", "TP3")]
     losses = [t for t in trades if t["result"] == "SL"]
@@ -276,30 +335,40 @@ async def db_get_user_stats(user_id: int) -> dict:
     best = sorted(
         sym.items(),
         key=lambda x: x[1]["wins"] / x[1]["total"] if x[1]["total"] >= 2 else 0,
-        reverse=True
+        reverse=True,
     )[:5]
 
-    # Серии
-    sw = sl = cw = cl = 0
+    # Серии побед / поражений
+    sw = sl_streak = cw = cl = 0
     for t in trades:
         if t["result"] in ("TP1", "TP2", "TP3"):
             cw += 1; cl = 0
         else:
             cl += 1; cw = 0
-        sw = max(sw, cw); sl = max(sl, cl)
+        sw          = max(sw, cw)
+        sl_streak   = max(sl_streak, cl)
 
     longs  = [t for t in trades if t["direction"] == "LONG"]
     shorts = [t for t in trades if t["direction"] == "SHORT"]
-    lw = sum(1 for t in longs  if t["result"] in ("TP1","TP2","TP3"))
-    sw2= sum(1 for t in shorts if t["result"] in ("TP1","TP2","TP3"))
+    lw     = sum(1 for t in longs  if t["result"] in ("TP1", "TP2", "TP3"))
+    sw2    = sum(1 for t in shorts if t["result"] in ("TP1", "TP2", "TP3"))
 
     return {
-        "total": total, "wins": len(wins), "losses": len(losses),
-        "winrate": winrate, "avg_rr": avg_rr, "total_rr": total_rr,
-        "streak_w": sw, "streak_l": sl, "best_symbols": best,
-        "longs_total": len(longs),   "longs_wins": lw,
-        "shorts_total": len(shorts), "shorts_wins": sw2,
-        "tp1_cnt": sum(1 for t in wins if t["result"] == "TP1"),
-        "tp2_cnt": sum(1 for t in wins if t["result"] == "TP2"),
-        "tp3_cnt": sum(1 for t in wins if t["result"] == "TP3"),
+        "total":         total,
+        "wins":          len(wins),
+        "losses":        len(losses),
+        "skipped":       skipped,           # ← НОВОЕ v4.2.1
+        "winrate":       winrate,
+        "avg_rr":        avg_rr,
+        "total_rr":      total_rr,
+        "streak_w":      sw,
+        "streak_l":      sl_streak,
+        "best_symbols":  best,
+        "longs_total":   len(longs),
+        "longs_wins":    lw,
+        "shorts_total":  len(shorts),
+        "shorts_wins":   sw2,
+        "tp1_cnt":       sum(1 for t in wins if t["result"] == "TP1"),
+        "tp2_cnt":       sum(1 for t in wins if t["result"] == "TP2"),
+        "tp3_cnt":       sum(1 for t in wins if t["result"] == "TP3"),
     }
