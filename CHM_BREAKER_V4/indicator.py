@@ -2,6 +2,12 @@
 CHM BREAKER v4.2 — Classic Edition
 Зоны поддержки/сопротивления, SFP, пробои, ретесты.
 Без SMC (нет FVG, OB, BoS/ChoCH, Volume Delta).
+
+v4.2.1 — добавлено:
+  • _zone_quality()        — фильтр шумных уровней
+  • _level_strength()      — старение пробитых уровней
+  • _breakout_confirmed()  — подтверждение удержания после пробоя
+  • _check_rr()            — фильтр R:R до входа
 """
 
 import logging
@@ -113,6 +119,132 @@ class CHMIndicator:
             return [c for c in clusters if c["hits"] >= 2]
 
         return cluster_levels(sup_points), cluster_levels(res_points)
+
+    # ══════════════════════════════════════════════
+    # КАЧЕСТВО И СИЛА УРОВНЯ          ← НОВОЕ v4.2.1
+    # ══════════════════════════════════════════════
+
+    def _zone_quality(
+        self, df: pd.DataFrame, level: float, atr_now: float
+    ) -> float:
+        """
+        Оценка «чистоты» уровня: 0.0 (шум) → 1.0 (чёткий).
+
+        Логика как у человека:
+          - смотрим все свечи, которые касались зоны ±2*buffer
+          - если вокруг уровня много свечей с маленьким телом (доджи,
+            боковик) — уровень шумный, штраф
+          - если свечи вокруг имеют крупные тела (чёткая реакция) — бонус
+          - слишком много касаний (>15) — признак «каши», дополнительный штраф
+        """
+        buffer = atr_now * self.cfg.ZONE_BUFFER * 2
+        near   = df[
+            (df["high"] >= level - buffer) &
+            (df["low"]  <= level + buffer)
+        ]
+        if len(near) == 0:
+            return 1.0
+
+        total    = len(near)
+        avg_body = (
+            (near["close"] - near["open"]).abs() /
+            (near["high"]  - near["low"] + 1e-10)
+        ).mean()
+
+        # Штраф за переизбыток касаний (каша)
+        noise_penalty = min(total / 20.0, 0.5)
+        quality       = avg_body - noise_penalty
+        return max(0.0, min(1.0, quality))
+
+    def _level_strength(
+        self, df: pd.DataFrame, level: float, atr_now: float
+    ) -> int:
+        """
+        Считает «живые» касания уровня.
+
+        Логика как у человека:
+          - каждое касание без уверенного пробоя = +1 к силе уровня
+          - уверенный пробой (свеча закрылась за уровнем на >0.5 ATR)
+            = отнимает 2 касания (уровень ослабляется)
+          - если живых касаний < 1 — уровень мёртвый, не используем
+
+        Возвращает количество живых касаний (может быть 0 или отрицательным).
+        """
+        buffer       = atr_now * self.cfg.ZONE_BUFFER
+        strong_break = atr_now * 0.5
+        touches      = 0
+        breaks       = 0
+
+        for i in range(len(df) - 1):
+            high  = df["high"].iloc[i]
+            low   = df["low"].iloc[i]
+            close = df["close"].iloc[i]
+
+            near_res = abs(high  - level) < buffer
+            near_sup = abs(low   - level) < buffer
+
+            if near_res or near_sup:
+                touches += 1
+                if close > level + strong_break:
+                    breaks += 1
+                elif close < level - strong_break:
+                    breaks += 1
+
+        return max(0, touches - breaks * 2)
+
+    # ══════════════════════════════════════════════
+    # ПОДТВЕРЖДЕНИЕ ПРОБОЯ             ← НОВОЕ v4.2.1
+    # ══════════════════════════════════════════════
+
+    def _breakout_confirmed(
+        self,
+        df:        pd.DataFrame,
+        level:     float,
+        direction: str,
+        atr_now:   float,
+    ) -> bool:
+        """
+        Проверяет что пробой реальный, а не шум:
+          - свеча пробоя [-2] закрылась за уровнем
+          - следующая свеча [-1] тоже удержалась за уровнем
+          (не вернулась сразу назад — нет ложного пробоя)
+
+        direction: "up" — пробой вверх (LONG), "down" — пробой вниз (SHORT).
+        """
+        if len(df) < 4:
+            return False
+
+        c_prev  = df["close"].iloc[-2]   # свеча пробоя
+        c_now   = df["close"].iloc[-1]   # свеча после пробоя
+        buffer  = atr_now * self.cfg.ZONE_BUFFER * 0.5
+
+        if direction == "up":
+            return c_prev > level + buffer and c_now > level
+        else:
+            return c_prev < level - buffer and c_now < level
+
+    # ══════════════════════════════════════════════
+    # ФИЛЬТР R:R                       ← НОВОЕ v4.2.1
+    # ══════════════════════════════════════════════
+
+    @staticmethod
+    def _check_rr(
+        entry:   float,
+        sl:      float,
+        target:  float,
+        min_rr:  float = 2.0,
+    ) -> bool:
+        """
+        Проверяет что потенциальная прибыль к риску ≥ min_rr.
+        Если R:R хуже — сигнал не стоит брать.
+
+        Пример: entry=100, sl=98, tp1=104 → risk=2, reward=4 → RR=2.0 ✅
+        """
+        risk   = abs(entry - sl)
+        reward = abs(target - entry)
+        if risk < 1e-10:
+            return False
+        return (reward / risk) >= min_rr
 
     # ══════════════════════════════════════════════
     # ПАТТЕРНЫ СВЕЧЕЙ
@@ -244,7 +376,7 @@ class CHMIndicator:
             # SFP: ложный пробой поддержки снизу
             if (
                 df["low"].iloc[-1] < lvl - zone_buf
-                and df["close"].iloc[-1] > lvl        # закрылись ВЫШЕ уровня
+                and df["close"].iloc[-1] > lvl
                 and vol_ratio > 1.2
             ):
                 signal, s_level, s_type = "LONG", lvl, "SFP (Ложный пробой)"
@@ -316,7 +448,7 @@ class CHMIndicator:
                 # SFP: ложный пробой сопротивления сверху
                 if (
                     df["high"].iloc[-1] > lvl + zone_buf
-                    and df["close"].iloc[-1] < lvl       # закрылись НИЖЕ уровня
+                    and df["close"].iloc[-1] < lvl
                     and vol_ratio > 1.2
                 ):
                     signal, s_level, s_type = "SHORT", lvl, "SFP (Ложный пробой)"
@@ -381,7 +513,7 @@ class CHMIndicator:
             return None
 
         # ══════════════════════════════════════════
-        # 3. ЖЁСТКИЕ ФИЛЬТРЫ
+        # 3. ЖЁСТКИЕ ФИЛЬТРЫ (оригинал)
         # ══════════════════════════════════════════
 
         if cfg.USE_HTF_FILTER:
@@ -393,7 +525,40 @@ class CHMIndicator:
             if signal == "SHORT" and rsi_now < cfg.RSI_OS: return None
 
         # ══════════════════════════════════════════
-        # 4. РАСЧЁТ ВХОДА / SL / TP
+        # 3б. ФИЛЬТРЫ КАЧЕСТВА УРОВНЯ  ← НОВОЕ v4.2.1
+        # ══════════════════════════════════════════
+
+        # Чистота уровня: шумная зона → пропускаем
+        zone_q = self._zone_quality(df, s_level, atr_now)
+        if zone_q < 0.15:
+            log.debug(
+                f"{symbol}: уровень шумный "
+                f"(quality={zone_q:.2f}), пропуск"
+            )
+            return None
+
+        # Живая сила уровня: слишком много пробоев → уровень мёртвый
+        lvl_strength = self._level_strength(df, s_level, atr_now)
+        if lvl_strength < 1:
+            log.debug(
+                f"{symbol}: уровень ослаблен "
+                f"(strength={lvl_strength}), пропуск"
+            )
+            return None
+
+        # Подтверждение удержания после пробоя
+        # (только для пробойных сигналов, не для ретестов и отскоков)
+        if "Пробой" in s_type and "Ретест" not in s_type:
+            brk_dir = "up" if signal == "LONG" else "down"
+            if not self._breakout_confirmed(df, s_level, brk_dir, atr_now):
+                log.debug(
+                    f"{symbol}: пробой не подтверждён "
+                    f"(цена вернулась), пропуск"
+                )
+                return None
+
+        # ══════════════════════════════════════════
+        # 4. РАСЧЁТ ВХОДА / SL / TP (оригинал)
         # ══════════════════════════════════════════
 
         entry = c_now
@@ -421,7 +586,20 @@ class CHMIndicator:
         risk_pct = abs((sl - entry) / entry * 100)
 
         # ══════════════════════════════════════════
-        # 5. ОЦЕНКА КАЧЕСТВА
+        # 4б. ФИЛЬТР R:R               ← НОВОЕ v4.2.1
+        # ══════════════════════════════════════════
+
+        min_rr = getattr(cfg, "MIN_RR", 2.0)
+        if not self._check_rr(entry, sl, tp1, min_rr):
+            log.debug(
+                f"{symbol}: R:R слабый "
+                f"(risk={abs(entry - sl):.5f} "
+                f"reward={abs(tp1 - entry):.5f}), пропуск"
+            )
+            return None
+
+        # ══════════════════════════════════════════
+        # 5. ОЦЕНКА КАЧЕСТВА (оригинал + новые бонусы)
         # ══════════════════════════════════════════
 
         quality = 1
@@ -443,6 +621,16 @@ class CHMIndicator:
             quality += 1
             reasons.append(f"✅ RSI {rsi_now:.1f}")
 
+        # ── Бонусы за качество уровня ← НОВОЕ v4.2.1
+        if zone_q > 0.6:
+            quality += 1
+            reasons.append(f"✅ Чёткий уровень ({zone_q:.0%})")
+
+        if lvl_strength >= 3:
+            quality += 1
+            reasons.append(f"✅ Уровень тестировался {lvl_strength}× без пробоя")
+
+        # ──────────────────────────────────────────
         self._last_signal[symbol] = bar_idx
 
         return SignalResult(
