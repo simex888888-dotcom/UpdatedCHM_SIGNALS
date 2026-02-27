@@ -1,6 +1,11 @@
 """
 scanner_mid.py — мультисканнинг для 50-500 пользователей
 CHM BREAKER v4.2 Classic (без SMC)
+
+v4.2.1 — изменено:
+  • result_keyboard() — добавлены кнопки 📊 Статистика и 📈 График
+  • signal_text()     — исправлен \n, добавлена плашка контр-тренда
+  • _send()           — передаёт symbol в result_keyboard
 """
 
 import asyncio
@@ -108,19 +113,57 @@ def _cfg_to_ind(cfg: TradeCfg) -> IndConfig:
 
 
 # ══════════════════════════════════════════════════════
-# TELEGRAM — КНОПКИ И ТЕКСТ СИГНАЛА
+# TELEGRAM — КНОПКИ И ТЕКСТ СИГНАЛА   ← изменено v4.2.1
 # ══════════════════════════════════════════════════════
 
-def result_keyboard(trade_id: str) -> InlineKeyboardMarkup:
+def result_keyboard(trade_id: str, symbol: str) -> InlineKeyboardMarkup:
+    """
+    Три ряда кнопок под сигналом:
+      1. TP1 / TP2 / TP3
+      2. SL  / Пропустил
+      3. 📊 Статистика  /  📈 График (ссылка TradingView)
+
+    symbol нужен для формирования URL на TradingView.
+    Формат OKX: BTC-USDT → на TV: OKXUSDT (убираем дефис).
+    """
+    # OKX тикер "BTC-USDT" → TV символ "OKXBTCUSDT"
+    tv_symbol = "OKX" + symbol.replace("-", "")
+    tv_url    = f"https://www.tradingview.com/chart/?symbol={tv_symbol}"
+
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🎯 TP1",       callback_data=f"res_TP1_{trade_id}"),
-            InlineKeyboardButton(text="🎯 TP2",       callback_data=f"res_TP2_{trade_id}"),
-            InlineKeyboardButton(text="🏆 TP3",       callback_data=f"res_TP3_{trade_id}"),
+            InlineKeyboardButton(
+                text="🎯 TP1",
+                callback_data=f"res_TP1_{trade_id}",
+            ),
+            InlineKeyboardButton(
+                text="🎯 TP2",
+                callback_data=f"res_TP2_{trade_id}",
+            ),
+            InlineKeyboardButton(
+                text="🏆 TP3",
+                callback_data=f"res_TP3_{trade_id}",
+            ),
         ],
         [
-            InlineKeyboardButton(text="❌ SL",        callback_data=f"res_SL_{trade_id}"),
-            InlineKeyboardButton(text="⏭ Пропустил", callback_data=f"res_SKIP_{trade_id}"),
+            InlineKeyboardButton(
+                text="❌ SL",
+                callback_data=f"res_SL_{trade_id}",
+            ),
+            InlineKeyboardButton(
+                text="⏭ Пропустил",
+                callback_data=f"res_SKIP_{trade_id}",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                text="📊 Статистика",
+                callback_data=f"stat_{trade_id}",
+            ),
+            InlineKeyboardButton(
+                text="📈 График",
+                url=tv_url,
+            ),
         ],
     ])
 
@@ -134,26 +177,32 @@ def _pct(value: float, entry: float) -> str:
 
 
 def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
-    is_long     = sig.direction == "LONG"
-    emoji_dir   = "📈" if is_long else "📉"
-    header      = "🟢 <b>LONG СИГНАЛ</b>" if is_long else "🔴 <b>SHORT СИГНАЛ</b>"
-    stars       = "⭐" * sig.quality + "☆" * (5 - sig.quality)
-    trend_label = (
-        "⚠️ <b>КОНТР-ТРЕНД</b>"
-        if sig.is_counter_trend
-        else "✅ <b>ПО ТРЕНДУ</b>"
-    )
+    """
+    HTML-сообщение сигнала v4.2.1.
+
+    Исправлено: убраны литеральные \\n (теперь нормальные переносы).
+    Добавлено: плашка КОНТР-ТРЕНД выделена жирным красным текстом.
+    """
+    is_long   = sig.direction == "LONG"
+    emoji_dir = "📈" if is_long else "📉"
+    header    = "🟢 <b>LONG СИГНАЛ</b>" if is_long else "🔴 <b>SHORT СИГНАЛ</b>"
+    stars     = "⭐" * sig.quality + "☆" * (5 - sig.quality)
+
+    # Плашка тренда — контр-тренд выделяется жирным
+    if sig.is_counter_trend:
+        trend_label = "⚠️ <b>КОНТР-ТРЕНД</b>"
+    else:
+        trend_label = "✅ <b>ПО ТРЕНДУ</b>"
 
     explanation = sig.human_explanation or "Сигнал по стратегии."
     trend_htf   = sig.trend_htf or "⏸ Выкл"
 
-    # Причины качества
+    # Блок причин качества
     reasons_block = ""
     if sig.reasons:
         reasons_block = (
-            "\n📋 <b>Факторы:</b>\n"
+            "\n📋 <b>Факторы качества:</b>\n"
             + "\n".join(f"  {r}" for r in sig.reasons)
-            + "\n"
         )
 
     lines = [
@@ -166,32 +215,32 @@ def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
         f"<i>{explanation}</i>",
         "",
         "━━━━━━━━━━━━━━━━━━━━━━",
-        f"💰 Вход:     <code>{_fmt(sig.entry)}</code>",
-        f"🛑 Стоп:     <code>{_fmt(sig.sl)}</code>  "
+        f"💰 Вход:    <code>{_fmt(sig.entry)}</code>",
+        f"🛑 Стоп:    <code>{_fmt(sig.sl)}</code>  "
         f"<i>(-{sig.risk_pct:.2f}%)</i>",
         "",
-        f"🎯 Цель 1:  <code>{_fmt(sig.tp1)}</code>  "
+        f"🎯 Цель 1: <code>{_fmt(sig.tp1)}</code>  "
         f"<i>(+{_pct(sig.tp1, sig.entry)}%  ×{cfg.tp1_rr}R)</i>",
-        f"🎯 Цель 2:  <code>{_fmt(sig.tp2)}</code>  "
+        f"🎯 Цель 2: <code>{_fmt(sig.tp2)}</code>  "
         f"<i>(+{_pct(sig.tp2, sig.entry)}%  ×{cfg.tp2_rr}R)</i>",
-        f"🏆 Цель 3:  <code>{_fmt(sig.tp3)}</code>  "
+        f"🏆 Цель 3: <code>{_fmt(sig.tp3)}</code>  "
         f"<i>(+{_pct(sig.tp3, sig.entry)}%  ×{cfg.tp3_rr}R)</i>",
         "━━━━━━━━━━━━━━━━━━━━━━",
         "",
-        f"📊 Тренд:   Локал {sig.trend_local}  |  HTF {trend_htf}",
+        f"📊 Тренд:  Локал {sig.trend_local}  |  HTF {trend_htf}",
         f"🎛 RSI: <code>{sig.rsi:.1f}</code>  "
         f"|  Объём: <code>×{sig.volume_ratio:.1f}</code>",
         f"🕯 Паттерн: {sig.pattern or '—'}",
     ]
 
     if reasons_block:
-        lines.append(reasons_block.strip())
+        lines.append(reasons_block)
 
     lines += [
         "",
         "⚡ <i>CHM Laboratory — CHM GEL SIGNALS</i>",
         "",
-        "👇 <i>Отметь результат, когда сделка закроется:</i>",
+        "👇 <i>Отметь результат или открой график:</i>",
     ]
 
     return "\n".join(lines)
@@ -329,7 +378,7 @@ class MidScanner:
 
         self._perf["users"] += 1
 
-    # ── Отправка сигнала ──────────────────────────────
+    # ── Отправка сигнала  ← изменено v4.2.1 ──────────
 
     async def _send(self, user: UserSettings, sig: SignalResult, cfg: TradeCfg):
         trade_id = f"{user.user_id}_{int(time.time() * 1000)}"
@@ -362,7 +411,8 @@ class MidScanner:
                 user.user_id,
                 signal_text(sig, cfg),
                 parse_mode="HTML",
-                reply_markup=result_keyboard(trade_id),
+                # ← передаём symbol для кнопки График
+                reply_markup=result_keyboard(trade_id, sig.symbol),
             )
             user.signals_received += 1
             await self.um.save(user)
