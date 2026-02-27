@@ -197,7 +197,7 @@ class OKXFetcher:
         Анализирует глобальный тренд по BTC и ETH на таймфреймах H1, H4 и D1.
         """
         result = {}
-        tfs = {"1H": "H1", "4H": "H4", "1D": "D1"}
+        tfs = {"1H": "H1", "4H": "H4", "1D": "D1", "1W": "W1"}
         
         for symbol in ["BTC-USDT-SWAP", "ETH-USDT-SWAP"]:
             name = "BTC" if "BTC" in symbol else "ETH"

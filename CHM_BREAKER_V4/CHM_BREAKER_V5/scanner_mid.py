@@ -124,7 +124,10 @@ def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
     header = "🟢 <b>LONG СИГНАЛ</b>" if sig.direction == "LONG" else "🔴 <b>SHORT СИГНАЛ</b>"
     emoji  = "📈" if sig.direction == "LONG" else "📉"
     
-    counter_trend_warn = "\n⚠️ <b>ВНИМАНИЕ: Сделка против тренда (Контр-тренд)</b>" if sig.is_counter_trend else ""
+    counter_trend_warn = (
+        "\n🔶 <b>━━━ ⚠️ КОНТР-ТРЕНД ━━━</b> 🔶"
+        "\n<i>Сделка идёт ПРОТИВ основного тренда — повышенный риск!</i>"
+    ) if sig.is_counter_trend else ""
 
     def pct(t): return abs((t - sig.entry) / sig.entry * 100)
 
