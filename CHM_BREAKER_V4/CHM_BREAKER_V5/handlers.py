@@ -33,8 +33,9 @@ from keyboards import (
     kb_sl, kb_long_sl, kb_short_sl,
     kb_targets, kb_long_targets, kb_short_targets,
     kb_volume, kb_long_volume, kb_short_volume,
-    trend_text,
+    trend_text, help_text, kb_help,
 )
+from scanner_mid import signal_compact_keyboard, trade_records_keyboard
 
 log = logging.getLogger("CHM.Handlers")
 
@@ -1555,3 +1556,58 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def toggle_active_legacy(cb: CallbackQuery):
         """Совместимость со старыми сообщениями."""
         await toggle_both(cb)
+
+    # ─── СПРАВКА ──────────────────────────────────────
+
+    @dp.callback_query(F.data == "help_show")
+    async def help_show(cb: CallbackQuery):
+        await cb.answer()
+        await safe_edit(cb, help_text(), kb_help())
+
+    # ─── СИГНАЛ — ПОДМЕНЮ ЗАПИСИ РЕЗУЛЬТАТА ──────────
+
+    @dp.callback_query(F.data.startswith("sig_records_"))
+    async def sig_records(cb: CallbackQuery):
+        await cb.answer()
+        trade_id = cb.data.replace("sig_records_", "")
+        await cb.message.edit_reply_markup(reply_markup=trade_records_keyboard(trade_id))
+
+    @dp.callback_query(F.data.startswith("sig_back_"))
+    async def sig_back(cb: CallbackQuery):
+        await cb.answer()
+        trade_id = cb.data.replace("sig_back_", "")
+        trade = await db.db_get_trade(trade_id)
+        symbol = trade["symbol"] if trade else "UNKNOWN"
+        await cb.message.edit_reply_markup(
+            reply_markup=signal_compact_keyboard(trade_id, symbol)
+        )
+
+    # ─── ТРЕНД-СИГНАЛЫ (toggle) ───────────────────────
+
+    @dp.callback_query(F.data == "toggle_trend_only")
+    async def toggle_trend_only(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.trend_only = not user.trend_only
+        await cb.answer("📊 Тренд-сигналы " + ("✅ вкл" if user.trend_only else "❌ выкл"))
+        await um.save(user)
+        await safe_edit(cb, "🔬 <b>Фильтры (общие)</b>", kb_filters(user))
+
+    @dp.callback_query(F.data == "long_toggle_trend_only")
+    async def long_toggle_trend_only(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = TradeCfg.from_json(user.long_cfg)
+        cfg.trend_only = not cfg.trend_only
+        await cb.answer("📊 Тренд-сигналы ЛОНГ " + ("✅" if cfg.trend_only else "❌"))
+        user.long_cfg = cfg.to_json()
+        await um.save(user)
+        await safe_edit(cb, "🔬 <b>Фильтры ЛОНГ</b>", kb_long_filters(user))
+
+    @dp.callback_query(F.data == "short_toggle_trend_only")
+    async def short_toggle_trend_only(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = TradeCfg.from_json(user.short_cfg)
+        cfg.trend_only = not cfg.trend_only
+        await cb.answer("📊 Тренд-сигналы ШОРТ " + ("✅" if cfg.trend_only else "❌"))
+        user.short_cfg = cfg.to_json()
+        await um.save(user)
+        await safe_edit(cb, "🔬 <b>Фильтры ШОРТ</b>", kb_short_filters(user))

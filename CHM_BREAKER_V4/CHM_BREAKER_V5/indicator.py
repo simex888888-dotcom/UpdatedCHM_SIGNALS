@@ -250,6 +250,14 @@ class CHMIndicator:
         if vol_ratio >= cfg.VOL_MULT: quality += 1; reasons.append(f"✅ Объем x{vol_ratio:.1f}")
         if not is_counter: quality += 1; reasons.append("✅ По тренду")
         if (signal=="LONG" and bull_pat) or (signal=="SHORT" and bear_pat): quality += 1; reasons.append("✅ Паттерн подтвержден")
+        # HTF качество — только если HTF фильтр включён и данные есть
+        if cfg.USE_HTF_FILTER and df_htf is not None and len(df_htf) >= cfg.HTF_EMA_PERIOD:
+            htf_ema_val = self._ema(df_htf["close"], cfg.HTF_EMA_PERIOD).iloc[-1]
+            htf_price   = df_htf["close"].iloc[-1]
+            if (signal == "LONG" and htf_price > htf_ema_val) or \
+               (signal == "SHORT" and htf_price < htf_ema_val):
+                quality += 1
+                reasons.append("✅ HTF тренд")
 
         self._last_signal[symbol] = bar_idx
 
