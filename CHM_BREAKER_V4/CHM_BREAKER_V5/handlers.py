@@ -20,7 +20,7 @@ from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
 import database as db
 from user_manager import UserManager, UserSettings, TradeCfg
 from keyboards import (
-    kb_main, kb_back, kb_settings, kb_notify, kb_subscribe,
+    kb_main, kb_back, kb_back_photo, kb_settings, kb_notify, kb_subscribe,
     kb_mode_long, kb_mode_short, kb_mode_both,
     kb_long_timeframes, kb_short_timeframes, kb_timeframes,
     kb_long_intervals, kb_short_intervals, kb_intervals,
@@ -457,7 +457,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         plt.close()
 
         photo = BufferedInputFile(buf.getvalue(), filename="equity.png")
-        
+
         # Удаляем старое текстовое сообщение и шлем фото со статистикой
         await cb.message.delete()
         await bot.send_photo(
@@ -465,7 +465,79 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             photo=photo,
             caption=text,
             parse_mode="HTML",
-            reply_markup=kb_back()
+            reply_markup=kb_back_photo()
+        )
+
+    @dp.callback_query(F.data == "my_chart")
+    async def my_chart(cb: CallbackQuery):
+        await cb.answer()
+        user   = await um.get_or_create(cb.from_user.id)
+        trades = await db.db_get_user_trades(user.user_id)
+
+        closed = [t for t in (trades or []) if t.get("result") in ("TP1", "TP2", "TP3", "SL")]
+        if len(closed) < 2:
+            await safe_edit(
+                cb,
+                "📈 <b>График доходности</b>\n\nНедостаточно данных.\nНужно минимум 2 закрытых сделки.",
+                kb_back(),
+            )
+            return
+
+        equity = [0.0]
+        for t in closed:
+            equity.append(equity[-1] + t["result_rr"])
+
+        color = '#00d26a' if equity[-1] >= 0 else '#f6465d'
+        plt.figure(figsize=(8, 4))
+        plt.plot(equity, color=color, linewidth=2)
+        plt.fill_between(range(len(equity)), equity, alpha=0.1, color=color)
+        plt.title(
+            "Кривая доходности (R) — @" + (user.username or "Trader"),
+            color='white',
+        )
+        plt.grid(True, linestyle='--', alpha=0.3)
+        plt.gca().set_facecolor('#1e1e2d')
+        plt.gcf().patch.set_facecolor('#1e1e2d')
+        plt.gca().tick_params(colors='white')
+        plt.axhline(0, color='white', linewidth=0.5, alpha=0.5)
+        plt.ylabel("Профит (в R)", color='white')
+        plt.xlabel("Количество сделок", color='white')
+
+        buf = io.BytesIO()
+        plt.savefig(buf, format='png', bbox_inches='tight')
+        buf.seek(0)
+        plt.close()
+
+        sign = "+" if equity[-1] >= 0 else ""
+        caption = (
+            "📈 <b>График доходности — @" + (user.username or "Trader") + "</b>\n\n" +
+            "Итого: <b>" + sign + "{:.2f}".format(equity[-1]) + "R</b> за " +
+            str(len(closed)) + " сделок"
+        )
+        photo = BufferedInputFile(buf.getvalue(), filename="chart.png")
+        await cb.message.delete()
+        await bot.send_photo(
+            chat_id=cb.message.chat.id,
+            photo=photo,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=kb_back_photo(),
+        )
+
+    @dp.callback_query(F.data == "back_photo_main")
+    async def back_photo_main(cb: CallbackQuery):
+        await cb.answer()
+        user  = await um.get_or_create(cb.from_user.id)
+        trend = scanner.get_trend()
+        try:
+            await cb.message.delete()
+        except Exception:
+            pass
+        await bot.send_message(
+            cb.message.chat.id,
+            main_text(user, trend),
+            parse_mode="HTML",
+            reply_markup=kb_main(user),
         )
 
     # ─── РЕЖИМ ЛОНГ ───────────────────────────────────

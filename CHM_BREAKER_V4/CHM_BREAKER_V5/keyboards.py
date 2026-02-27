@@ -29,7 +29,7 @@ def trend_text(trend: dict) -> str:
     btc = trend.get("BTC", {})
     eth = trend.get("ETH", {})
     return (
-        "🌍 <b>Глобальный тренд (H1 | H4 | D1):</b>\n"
+        "🌍 <b>Глобальный тренд (H1 | H4 | D1 | W1):</b>\n"
         "🪙 BTC: " + btc.get("trend_text", "—") + "\n"
         "🪙 ETH: " + eth.get("trend_text", "—") + "\n"
     )
@@ -44,7 +44,10 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
         _btn(long_s  + " 📈 ЛОНГ сканер  — только сигналы в лонг",  "mode_long"),
         _btn(short_s + " 📉 ШОРТ сканер  — только сигналы в шорт",  "mode_short"),
         _btn(both_s  + " ⚡ ОБА — лонги и шорты одновременно",       "mode_both"),
-        _btn("📊 Моя статистика",                                     "my_stats"),
+        [
+            InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
+            InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
+        ],
     ])
 
 
@@ -382,4 +385,11 @@ def kb_subscribe(config) -> InlineKeyboardMarkup:
         _btn("💳 Оформить — " + config.PRICE_30_DAYS + " / 30 дней", "noop"),
         _btn("📩 Написать администратору", "noop"),
         _btn("ℹ️ Узнать подробнее /subscribe", "noop"),
+    ])
+
+
+def kb_back_photo() -> InlineKeyboardMarkup:
+    """Кнопка «Назад» для сообщений с фото (удаляет фото, открывает главное меню)."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_photo_main")]
     ])
