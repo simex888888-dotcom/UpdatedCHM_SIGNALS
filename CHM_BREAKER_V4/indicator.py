@@ -190,7 +190,7 @@ class CHMIndicator:
                 elif close < level - strong_break:
                     breaks += 1
 
-        return max(0, touches - breaks * 2)
+        return max(0, touches - breaks)
 
     # ══════════════════════════════════════════════
     # ПОДТВЕРЖДЕНИЕ ПРОБОЯ             ← НОВОЕ v4.2.1
@@ -530,7 +530,7 @@ class CHMIndicator:
 
         # Чистота уровня: шумная зона → пропускаем
         zone_q = self._zone_quality(df, s_level, atr_now)
-        if zone_q < 0.15:
+        if zone_q < 0.05:
             log.debug(
                 f"{symbol}: уровень шумный "
                 f"(quality={zone_q:.2f}), пропуск"
@@ -589,14 +589,15 @@ class CHMIndicator:
         # 4б. ФИЛЬТР R:R               ← НОВОЕ v4.2.1
         # ══════════════════════════════════════════
 
-        min_rr = getattr(cfg, "MIN_RR", 2.0)
-        if not self._check_rr(entry, sl, tp1, min_rr):
+        min_rr = getattr(cfg, "MIN_RR", 1.3)
+        if not self._check_rr(entry, sl, tp2, min_rr):   # ← tp2 вместо tp1
             log.debug(
                 f"{symbol}: R:R слабый "
                 f"(risk={abs(entry - sl):.5f} "
-                f"reward={abs(tp1 - entry):.5f}), пропуск"
+                f"reward={abs(tp2 - entry):.5f}), пропуск"
             )
             return None
+
 
         # ══════════════════════════════════════════
         # 5. ОЦЕНКА КАЧЕСТВА (оригинал + новые бонусы)
