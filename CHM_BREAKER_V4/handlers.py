@@ -1,10 +1,15 @@
 """
-handlers.py v4 — мультисканнинг ЛОНГ + ШОРТ + ОБА
+handlers.py v4.2.1 — мультисканнинг ЛОНГ + ШОРТ + ОБА
 Правило: cb.answer() ВСЕГДА первым, до любых await с БД.
+
+v4.2.1 — добавлено:
+  • /start показывает глобальный тренд + Release Notes
+  • cb stat_  — статистика по конкретной сделке
+  • cb menu_release — что нового
 """
 import io
 import matplotlib
-matplotlib.use('Agg') # Чтобы не требовал GUI
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from aiogram.types import BufferedInputFile
 import asyncio
@@ -38,19 +43,42 @@ from keyboards import (
 
 log = logging.getLogger("CHM.Handlers")
 
+# ══════════════════════════════════════════════════════
+# RELEASE NOTES                        ← НОВОЕ v4.2.1
+# ══════════════════════════════════════════════════════
+
+RELEASE_NOTES = (
+    "🚀 <b>CHM GEL SIGNALS — v4.2.1 Classic</b>\n\n"
+    "<b>Что нового:</b>\n"
+    "• ✅ Фильтр чистоты уровня — шумные зоны отфильтрованы\n"
+    "• ✅ Старение уровней — пробитые уровни ослабляются\n"
+    "• ✅ Подтверждение пробоя — нет ложных входов на шум\n"
+    "• ✅ Фильтр R:R — сигналы только с риском/прибылью ≥ 1:2\n"
+    "• ✅ График на TradingView прямо из сигнала\n"
+    "• ✅ Статистика по каждой сделке в одну кнопку\n"
+    "• ✅ Глобальный тренд на стартовом экране\n"
+    "• ✅ Плашка КОНТР-ТРЕНД в каждом сигнале\n\n"
+    "<b>Стратегия:</b> Зоны S/R + SFP + пробои + ретесты\n"
+    "<b>Фильтры:</b> RSI · Объём · HTF тренд · R:R ≥ 2.0\n\n"
+    "<i>CHM Laboratory 🧪</i>"
+)
+
 
 async def safe_edit(cb: CallbackQuery, text: str = None, reply_markup=None):
     for _ in range(3):
         try:
             if text:
-                await cb.message.edit_text(text, parse_mode="HTML", reply_markup=reply_markup)
+                await cb.message.edit_text(
+                    text, parse_mode="HTML", reply_markup=reply_markup
+                )
             else:
                 await cb.message.edit_reply_markup(reply_markup=reply_markup)
             return
         except TelegramRetryAfter as e:
             await asyncio.sleep(e.retry_after + 1)
         except TelegramBadRequest as e:
-            if "not modified" in str(e): return
+            if "not modified" in str(e):
+                return
             return
         except Exception:
             return
@@ -72,7 +100,10 @@ def main_text(user: UserSettings, trend: dict) -> str:
     long_s  = "🟢 ЛОНГ" if user.long_active  else "⚫ лонг выкл"
     short_s = "🟢 ШОРТ" if user.short_active else "⚫ шорт выкл"
     both_s  = "🟢 ОБА"  if (user.active and user.scan_mode == "both") else "⚫ оба выкл"
-    sub_em  = {"active":"✅","trial":"🆓","expired":"❌","banned":"🚫"}.get(user.sub_status,"❓")
+    sub_em  = {
+        "active": "✅", "trial": "🆓",
+        "expired": "❌", "banned": "🚫",
+    }.get(user.sub_status, "❓")
     return (
         "⚡ <b>CHM BREAKER BOT</b>" + NL + NL +
         trend_text(trend) + NL +
@@ -86,14 +117,19 @@ def main_text(user: UserSettings, trend: dict) -> str:
 
 
 def settings_text(user: UserSettings) -> str:
-    """Текст для режима ОБА (legacy)."""
     NL = "\n"
-    status  = "🟢 АКТИВЕН" if (user.active and user.scan_mode=="both") else "🔴 ОСТАНОВЛЕН"
-    sub_em  = {"active":"✅","trial":"🆓","expired":"❌","banned":"🚫"}.get(user.sub_status,"❓")
+    status = "🟢 АКТИВЕН" if (user.active and user.scan_mode == "both") else "🔴 ОСТАНОВЛЕН"
+    sub_em = {
+        "active": "✅", "trial": "🆓",
+        "expired": "❌", "banned": "🚫",
+    }.get(user.sub_status, "❓")
     cfg     = user.shared_cfg()
-    filters = ", ".join(f for f,v in [
-        ("RSI",cfg.use_rsi),("Объём",cfg.use_volume),
-        ("Паттерн",cfg.use_pattern),("HTF",cfg.use_htf)] if v) or "все выкл"
+    filters = ", ".join(
+        f for f, v in [
+            ("RSI", cfg.use_rsi), ("Объём", cfg.use_volume),
+            ("Паттерн", cfg.use_pattern), ("HTF", cfg.use_htf),
+        ] if v
+    ) or "все выкл"
     return (
         "⚡ <b>CHM BREAKER BOT — режим ОБА</b>" + NL + NL +
         "Статус:    <b>" + status + "</b>" + NL +
@@ -101,7 +137,7 @@ def settings_text(user: UserSettings) -> str:
         " — " + user.time_left_str() + "</b>" + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
         "📊 Таймфрейм:     <b>" + user.timeframe + "</b>" + NL +
-        "🔄 Интервал:      <b>каждые " + str(user.scan_interval//60) + " мин.</b>" + NL +
+        "🔄 Интервал:      <b>каждые " + str(user.scan_interval // 60) + " мин.</b>" + NL +
         "🎯 Цели:          <b>" + str(cfg.tp1_rr) + "R / " + str(cfg.tp2_rr) + "R / " + str(cfg.tp3_rr) + "R</b>" + NL +
         "🔬 Фильтры:       <b>" + filters + "</b>" + NL +
         "📈 Сигналов: <b>" + str(user.signals_received) + "</b>"
@@ -110,13 +146,16 @@ def settings_text(user: UserSettings) -> str:
 
 def cfg_text(cfg: TradeCfg, title: str) -> str:
     NL = "\n"
-    filters = ", ".join(f for f,v in [
-        ("RSI",cfg.use_rsi),("Объём",cfg.use_volume),
-        ("Паттерн",cfg.use_pattern),("HTF",cfg.use_htf)] if v) or "все выкл"
+    filters = ", ".join(
+        f for f, v in [
+            ("RSI", cfg.use_rsi), ("Объём", cfg.use_volume),
+            ("Паттерн", cfg.use_pattern), ("HTF", cfg.use_htf),
+        ] if v
+    ) or "все выкл"
     return (
         title + NL + NL +
         "📊 Таймфрейм: <b>" + cfg.timeframe + "</b>" + NL +
-        "🔄 Интервал:  <b>" + str(cfg.scan_interval//60) + " мин.</b>" + NL +
+        "🔄 Интервал:  <b>" + str(cfg.scan_interval // 60) + " мин.</b>" + NL +
         "🎯 Цели:      <b>" + str(cfg.tp1_rr) + "R / " + str(cfg.tp2_rr) + "R / " + str(cfg.tp3_rr) + "R</b>" + NL +
         "⭐ Качество:   <b>" + str(cfg.min_quality) + "</b>  Cooldown: <b>" + str(cfg.cooldown_bars) + "</b>" + NL +
         "🔬 Фильтры:   <b>" + filters + "</b>" + NL +
@@ -126,23 +165,26 @@ def cfg_text(cfg: TradeCfg, title: str) -> str:
 
 
 def stats_text(user: UserSettings, stats: dict) -> str:
-    NL = "\n"
+    NL   = "\n"
     name = "@" + user.username if user.username else "Трейдер"
     if not stats:
-        return "📊 <b>Статистика — " + name + "</b>" + NL + NL + "Сделок пока нет."
-    wr   = stats["winrate"]
-    rr   = stats["avg_rr"]
-    tot  = stats["total_rr"]
-    sign = "+" if tot >= 0 else ""
+        return (
+            "📊 <b>Статистика — " + name + "</b>" + NL + NL +
+            "Сделок пока нет."
+        )
+    wr    = stats["winrate"]
+    rr    = stats["avg_rr"]
+    tot   = stats["total_rr"]
+    sign  = "+" if tot >= 0 else ""
     wr_em = "🔥" if wr >= 70 else "✅" if wr >= 50 else "⚠️"
     rr_em = "💰" if rr > 1.0 else "⚖️" if rr > 0 else "📉"
-    lw,lt = stats["longs_wins"],stats["longs_total"]
-    sw,st = stats["shorts_wins"],stats["shorts_total"]
-    lwr = str(round(lw/lt*100))+"%" if lt else "—"
-    swr = str(round(sw/st*100))+"%" if st else "—"
+    lw, lt = stats["longs_wins"],  stats["longs_total"]
+    sw, st = stats["shorts_wins"], stats["shorts_total"]
+    lwr = str(round(lw / lt * 100)) + "%" if lt else "—"
+    swr = str(round(sw / st * 100)) + "%" if st else "—"
     best = ""
     for s, d in stats.get("best_symbols", []):
-        pct  = round(d["wins"]/d["total"]*100)
+        pct  = round(d["wins"] / d["total"] * 100)
         best += "  • " + s + ": " + str(d["wins"]) + "/" + str(d["total"]) + " (" + str(pct) + "%)" + NL
     if not best:
         best = "  Нужно 2+ сделки по монете" + NL
@@ -175,10 +217,91 @@ def _update_long_field(user: UserSettings, field: str, value):
     setattr(cfg, field, value)
     user.long_cfg = cfg.to_json()
 
+
 def _update_short_field(user: UserSettings, field: str, value):
     cfg = TradeCfg.from_json(user.short_cfg)
     setattr(cfg, field, value)
     user.short_cfg = cfg.to_json()
+
+
+# ── Вспомогательные функции для статистики сделки ── ← НОВОЕ v4.2.1
+
+def _fmt(p: float) -> str:
+    return f"{p:.6g}"
+
+
+def _pct_diff(value: float, entry: float) -> str:
+    if not entry:
+        return "—"
+    return f"{(value - entry) / entry * 100:+.2f}%"
+
+
+def _trade_stat_text(trade: dict, stats: dict, username: str) -> str:
+    """
+    Текст для кнопки 📊 Статистика в сигнале.
+    Показывает детали конкретной сделки + общую статистику пользователя.
+    """
+    NL = "\n"
+
+    status_map = {
+        "TP1":  "🎯 Закрыта в TP1",
+        "TP2":  "🎯 Закрыта в TP2",
+        "TP3":  "🏆 Закрыта в TP3",
+        "SL":   "❌ Закрыта в SL",
+        "SKIP": "⏭ Пропущена",
+        None:   "⏳ Открыта",
+    }
+    result      = trade.get("result")
+    status_text = status_map.get(result, "⏳ Открыта")
+
+    entry = trade.get("entry") or 0.0
+    sl    = trade.get("sl")    or 0.0
+    tp1   = trade.get("tp1")   or 0.0
+    tp2   = trade.get("tp2")   or 0.0
+    tp3   = trade.get("tp3")   or 0.0
+
+    direction = trade.get("direction", "LONG")
+    sign      = 1 if direction == "LONG" else -1
+
+    # P&L по каждой цели
+    def pnl(target: float) -> str:
+        if not entry or not target:
+            return "—"
+        return f"{sign * (target - entry) / entry * 100:+.2f}%"
+
+    # Общая статистика
+    total   = stats.get("total",   0)
+    wins    = stats.get("wins",    0)
+    losses  = stats.get("losses",  0)
+    skipped = stats.get("skipped", 0) if "skipped" in stats else (total - wins - losses)
+    avg_rr  = stats.get("avg_rr",  0.0)
+    winrate = f"{wins / total * 100:.1f}%" if total > 0 else "—"
+    tot_rr  = stats.get("total_rr", 0.0)
+    rr_sign = "+" if tot_rr >= 0 else ""
+
+    return (
+        "📊 <b>Сделка: " + trade.get("symbol", "—") + "  " + direction + "</b>" + NL + NL +
+        "Статус:      " + status_text + NL +
+        "Таймфрейм:   <code>" + str(trade.get("timeframe", "—")) + "</code>" + NL +
+        "Тип сигнала: " + str(trade.get("breakout_type", "—")) + NL +
+        "Паттерн:     " + str(trade.get("pattern") or "—") + NL +
+        "Контр-тренд: " + ("⚠️ Да" if trade.get("is_counter") else "✅ Нет") + NL + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL +
+        "💰 Вход:   <code>" + _fmt(entry) + "</code>" + NL +
+        "🛑 Стоп:   <code>" + _fmt(sl) + "</code>   <i>(" + pnl(sl) + ")</i>" + NL +
+        "🎯 TP1:    <code>" + _fmt(tp1) + "</code>   <i>(" + pnl(tp1) + "  ×" + str(trade.get("tp1_rr", "—")) + "R)</i>" + NL +
+        "🎯 TP2:    <code>" + _fmt(tp2) + "</code>   <i>(" + pnl(tp2) + "  ×" + str(trade.get("tp2_rr", "—")) + "R)</i>" + NL +
+        "🏆 TP3:    <code>" + _fmt(tp3) + "</code>   <i>(" + pnl(tp3) + "  ×" + str(trade.get("tp3_rr", "—")) + "R)</i>" + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL + NL +
+        "📈 <b>Твоя статистика (@" + username + "):</b>" + NL + NL +
+        "📋 Сделок:      <b>" + str(total) + "</b>" + NL +
+        "✅ Выигрышей:   <b>" + str(wins) + "</b>" + NL +
+        "❌ Проигрышей: <b>" + str(losses) + "</b>" + NL +
+        "⏭ Пропущено:   <b>" + str(skipped) + "</b>" + NL +
+        "🎯 Winrate:     <b>" + winrate + "</b>" + NL +
+        "📐 Средний R:   <b>" + f"{avg_rr:+.2f}R" + "</b>" + NL +
+        "💼 Итого R:     <b>" + rr_sign + f"{tot_rr:.2f}R" + "</b>"
+    )
 
 
 # ── Регистрация хендлеров ────────────────────────────
@@ -194,20 +317,39 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
         has, reason = user.check_access()
         if not has:
-            await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
+            await msg.answer(
+                access_denied_text(reason),
+                parse_mode="HTML",
+                reply_markup=kb_subscribe(config),
+            )
             return
         trend = scanner.get_trend()
-        await msg.answer(main_text(user, trend), parse_mode="HTML", reply_markup=kb_main(user))
+        # Отправляем главное меню с трендом
+        await msg.answer(
+            main_text(user, trend),
+            parse_mode="HTML",
+            reply_markup=kb_main(user),
+        )
+        # Release notes отдельным сообщением ← НОВОЕ v4.2.1
+        await msg.answer(RELEASE_NOTES, parse_mode="HTML")
 
     @dp.message(Command("menu"))
     async def cmd_menu(msg: Message):
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
         has, reason = user.check_access()
         if not has:
-            await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
+            await msg.answer(
+                access_denied_text(reason),
+                parse_mode="HTML",
+                reply_markup=kb_subscribe(config),
+            )
             return
         trend = scanner.get_trend()
-        await msg.answer(main_text(user, trend), parse_mode="HTML", reply_markup=kb_main(user))
+        await msg.answer(
+            main_text(user, trend),
+            parse_mode="HTML",
+            reply_markup=kb_main(user),
+        )
 
     @dp.message(Command("stop"))
     async def cmd_stop(msg: Message):
@@ -237,6 +379,39 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             parse_mode="HTML",
         )
 
+    # ─── НОВЫЕ CALLBACK: Release Notes + Статистика сделки ← v4.2.1
+
+    @dp.callback_query(F.data == "menu_release")
+    async def cb_release(cb: CallbackQuery):
+        """Кнопка 'Что нового' — показывает release notes."""
+        await cb.answer()
+        await cb.message.answer(RELEASE_NOTES, parse_mode="HTML")
+
+    @dp.callback_query(F.data.startswith("stat_"))
+    async def cb_trade_stat(cb: CallbackQuery):
+        """
+        Кнопка 📊 Статистика в сообщении сигнала.
+        Показывает детали сделки + общую статистику пользователя.
+        """
+        await cb.answer()  # cb.answer() — всегда первым
+
+        trade_id = cb.data.replace("stat_", "", 1)
+        user_id  = cb.from_user.id
+        username = cb.from_user.username or str(user_id)
+
+        # Загружаем сделку и статистику параллельно
+        trade, stats = await asyncio.gather(
+            db.db_get_trade(trade_id),
+            db.db_get_user_stats(user_id),
+        )
+
+        if not trade:
+            await cb.message.answer("⚠️ Сделка не найдена.")
+            return
+
+        text = _trade_stat_text(trade, stats or {}, username)
+        await cb.message.answer(text, parse_mode="HTML")
+
     # ─── АДМИН ────────────────────────────────────────
 
     @dp.message(Command("admin"))
@@ -252,7 +427,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             "🔄 Сканируют: <b>" + str(s["scanning"]) + "</b>" + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
             "Циклов: <b>" + str(prf["cycles"]) + "</b>  Сигналов: <b>" + str(prf["signals"]) + "</b>  API: <b>" + str(prf["api_calls"]) + "</b>" + NL +
-            "Кэш: <b>" + str(cs.get("size",0)) + "</b> ключей | хит <b>" + str(cs.get("ratio",0)) + "%</b>" + NL +
+            "Кэш: <b>" + str(cs.get("size", 0)) + "</b> ключей | хит <b>" + str(cs.get("ratio", 0)) + "%</b>" + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
             "/give [id] [дней]  /revoke [id]  /ban [id]" + NL +
             "/unban [id]  /userinfo [id]  /broadcast [текст]",
@@ -274,14 +449,18 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await msg.answer("❌ Пользователь " + str(tid) + " не найден"); return
         user.grant_access(days)
         await um.save(user)
-        await msg.answer("✅ Доступ выдан @" + str(user.username or tid) + " на " + str(days) + " дней")
+        await msg.answer(
+            "✅ Доступ выдан @" + str(user.username or tid) + " на " + str(days) + " дней"
+        )
         try:
             await bot.send_message(
                 tid,
-                "🎉 <b>Доступ открыт!</b>\n\nПодписка на <b>" + str(days) + " дней</b>.\nОсталось: <b>" + user.time_left_str() + "</b>\n\nНажми /menu",
+                "🎉 <b>Доступ открыт!</b>\n\nПодписка на <b>" + str(days) +
+                " дней</b>.\nОсталось: <b>" + user.time_left_str() + "</b>\n\nНажми /menu",
                 parse_mode="HTML",
             )
-        except Exception: pass
+        except Exception:
+            pass
 
     @dp.message(Command("revoke"))
     async def cmd_revoke(msg: Message):
@@ -331,17 +510,19 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if len(parts) < 2: await msg.answer("Использование: /userinfo [id]"); return
         try: tid = int(parts[1])
         except ValueError: return
-        user  = await um.get(tid)
+        user = await um.get(tid)
         if not user: await msg.answer("❌ Не найден"); return
         stats = await db.db_get_user_stats(tid)
-        NL    = "\n"
+        NL = "\n"
         await msg.answer(
             "👤 <b>@" + str(user.username or "—") + "</b> (<code>" + str(user.user_id) + "</code>)" + NL +
             "Подписка: <b>" + user.sub_status.upper() + "</b> | Осталось: <b>" + user.time_left_str() + "</b>" + NL +
             "ЛОНГ: " + ("🟢" if user.long_active else "⚫") +
             "  ШОРТ: " + ("🟢" if user.short_active else "⚫") +
             "  ОБА: " + ("🟢" if user.active else "⚫") + NL +
-            "Сигналов: <b>" + str(user.signals_received) + "</b>  Сделок: <b>" + str(stats.get("total",0)) + "</b>  R: <b>" + "{:+.2f}".format(stats.get("total_rr",0)) + "R</b>",
+            "Сигналов: <b>" + str(user.signals_received) + "</b>  Сделок: <b>" +
+            str(stats.get("total", 0)) + "</b>  R: <b>" +
+            "{:+.2f}".format(stats.get("total_rr", 0)) + "R</b>",
             parse_mode="HTML",
         )
 
@@ -350,7 +531,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not is_admin(msg.from_user.id): return
         text = msg.text.replace("/broadcast", "", 1).strip()
         if not text: await msg.answer("Использование: /broadcast [текст]"); return
-        users  = await um.all_users()
+        users        = await um.all_users()
         sent = failed = 0
         for u in users:
             if u.sub_status in ("trial", "active"):
@@ -366,13 +547,13 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     @dp.callback_query(F.data.startswith("res_"))
     async def trade_result(cb: CallbackQuery):
-        NL       = "\n"
-        parts    = cb.data.split("_", 2)
-        result   = parts[1]
+        NL     = "\n"
+        parts  = cb.data.split("_", 2)
+        result = parts[1]
         trade_id = parts[2]
-        labels   = {
-            "TP1":"🎯 TP1 зафиксирован!","TP2":"🎯 TP2 зафиксирован!",
-            "TP3":"🏆 TP3 зафиксирован!","SL":"❌ Стоп-лосс","SKIP":"⏭ Пропущено",
+        labels = {
+            "TP1": "🎯 TP1 зафиксирован!", "TP2": "🎯 TP2 зафиксирован!",
+            "TP3": "🏆 TP3 зафиксирован!", "SL": "❌ Стоп-лосс", "SKIP": "⏭ Пропущено",
         }
         await cb.answer(labels.get(result, "✅ Записано"), show_alert=True)
 
@@ -380,27 +561,41 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not trade:
             await cb.message.answer("⚠️ Сделка не найдена."); return
         if trade.get("result") and trade["result"] not in ("", "SKIP"):
-            await cb.message.answer("ℹ️ Результат уже записан: <b>" + trade["result"] + "</b>", parse_mode="HTML"); return
+            await cb.message.answer(
+                "ℹ️ Результат уже записан: <b>" + trade["result"] + "</b>",
+                parse_mode="HTML",
+            ); return
 
-        rr_map = {"TP1":trade["tp1_rr"],"TP2":trade["tp2_rr"],"TP3":trade["tp3_rr"],"SL":-1.0,"SKIP":0.0}
+        rr_map = {
+            "TP1": trade["tp1_rr"], "TP2": trade["tp2_rr"],
+            "TP3": trade["tp3_rr"], "SL": -1.0, "SKIP": 0.0,
+        }
         await db.db_set_trade_result(trade_id, result, rr_map.get(result, 0.0))
 
-        emojis = {"TP1":"🎯 TP1","TP2":"🎯 TP2","TP3":"🏆 TP3","SL":"❌ SL","SKIP":"⏭ Пропущено"}
-        rr_str = {"TP1":"+"+str(trade["tp1_rr"])+"R","TP2":"+"+str(trade["tp2_rr"])+"R","TP3":"+"+str(trade["tp3_rr"])+"R","SL":"-1R","SKIP":""}
+        emojis  = {"TP1": "🎯 TP1", "TP2": "🎯 TP2", "TP3": "🏆 TP3", "SL": "❌ SL", "SKIP": "⏭ Пропущено"}
+        rr_str  = {
+            "TP1": "+" + str(trade["tp1_rr"]) + "R",
+            "TP2": "+" + str(trade["tp2_rr"]) + "R",
+            "TP3": "+" + str(trade["tp3_rr"]) + "R",
+            "SL":  "-1R", "SKIP": "",
+        }
         try:
             await cb.message.edit_text(
-                (cb.message.text or "") + NL + NL + "<b>Результат: " + emojis.get(result,"") + "  " + rr_str.get(result,"") + "</b>",
-                parse_mode="HTML", reply_markup=None,
+                (cb.message.text or "") + NL + NL +
+                "<b>Результат: " + emojis.get(result, "") + "  " + rr_str.get(result, "") + "</b>",
+                parse_mode="HTML",
+                reply_markup=None,
             )
-        except Exception: pass
+        except Exception:
+            pass
 
         if result != "SKIP":
             user  = await um.get_or_create(cb.from_user.id)
             stats = await db.db_get_user_stats(user.user_id)
             if stats:
-                wr   = stats["winrate"]
-                tot  = stats["total_rr"]
-                sign = "+" if tot >= 0 else ""
+                wr    = stats["winrate"]
+                tot   = stats["total_rr"]
+                sign  = "+" if tot >= 0 else ""
                 wr_em = "🔥" if wr >= 70 else "✅" if wr >= 50 else "⚠️"
                 await cb.message.answer(
                     "📊 <b>Счёт обновлён</b>" + NL + NL +
@@ -423,26 +618,30 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.callback_query(F.data == "my_stats")
     async def my_stats(cb: CallbackQuery):
         await cb.answer()
-        user  = await um.get_or_create(cb.from_user.id)
-        stats = await db.db_get_user_stats(user.user_id)
+        user   = await um.get_or_create(cb.from_user.id)
+        stats  = await db.db_get_user_stats(user.user_id)
         trades = await db.db_get_user_trades(user.user_id)
-        
+
         text = stats_text(user, stats)
-        
+
         if not trades or len(trades) < 2:
             await safe_edit(cb, text, kb_back())
             return
 
-        # Генерация графика
+        # Генерация графика кривой доходности
         equity = [0.0]
         for t in trades:
             if t["result"] in ("TP1", "TP2", "TP3", "SL"):
                 equity.append(equity[-1] + t["result_rr"])
 
         plt.figure(figsize=(8, 4))
-        plt.plot(equity, color='#00d26a' if equity[-1] >= 0 else '#f6465d', linewidth=2)
-        plt.fill_between(range(len(equity)), equity, alpha=0.1, color='#00d26a' if equity[-1] >= 0 else '#f6465d')
-        plt.title(f"Кривая доходности (Risk/Reward) - @{user.username or 'Trader'}", color='white')
+        color = '#00d26a' if equity[-1] >= 0 else '#f6465d'
+        plt.plot(equity, color=color, linewidth=2)
+        plt.fill_between(range(len(equity)), equity, alpha=0.1, color=color)
+        plt.title(
+            "Кривая доходности (Risk/Reward) — @" + (user.username or "Trader"),
+            color='white',
+        )
         plt.grid(True, linestyle='--', alpha=0.3)
         plt.gca().set_facecolor('#1e1e2d')
         plt.gcf().patch.set_facecolor('#1e1e2d')
@@ -450,22 +649,20 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         plt.axhline(0, color='white', linewidth=0.5, alpha=0.5)
         plt.ylabel("Профит (в R)", color='white')
         plt.xlabel("Количество сделок", color='white')
-        
+
         buf = io.BytesIO()
         plt.savefig(buf, format='png', bbox_inches='tight')
         buf.seek(0)
         plt.close()
 
         photo = BufferedInputFile(buf.getvalue(), filename="equity.png")
-        
-        # Удаляем старое текстовое сообщение и шлем фото со статистикой
         await cb.message.delete()
         await bot.send_photo(
             chat_id=cb.message.chat.id,
             photo=photo,
             caption=text,
             parse_mode="HTML",
-            reply_markup=kb_back()
+            reply_markup=kb_back(),
         )
 
     # ─── РЕЖИМ ЛОНГ ───────────────────────────────────
@@ -516,7 +713,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def set_long_interval(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.long_interval = int(cb.data.replace("set_long_interval_", ""))
-        await cb.answer("✅ Каждые " + str(user.long_interval//60) + " мин.")
+        await cb.answer("✅ Каждые " + str(user.long_interval // 60) + " мин.")
         await um.save(user)
         cfg = user.get_long_cfg()
         await safe_edit(cb, cfg_text(cfg, "📈 <b>ЛОНГ сканер</b>"), kb_mode_long(user))
@@ -584,10 +781,11 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await safe_edit(cb, cfg_text(cfg, "📈 <b>ЛОНГ сканер</b>"), kb_mode_long(user))
 
     # ЛОНГ — сеттеры (пивоты, EMA, фильтры, SL и т.д.)
+
     @dp.callback_query(F.data.startswith("long_set_pivot_"))
     async def long_set_pivot(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
-        v = int(cb.data.replace("long_set_pivot_", ""))
+        v    = int(cb.data.replace("long_set_pivot_", ""))
         await cb.answer("✅ Пивоты ЛОНГ: " + str(v))
         _update_long_field(user, "pivot_strength", v)
         await um.save(user)
@@ -596,7 +794,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.callback_query(F.data.startswith("long_set_age_"))
     async def long_set_age(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
-        v = int(cb.data.replace("long_set_age_", ""))
+        v    = int(cb.data.replace("long_set_age_", ""))
         await cb.answer("✅ Возраст ЛОНГ: " + str(v))
         _update_long_field(user, "max_level_age", v)
         await um.save(user)
@@ -605,7 +803,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.callback_query(F.data.startswith("long_set_retest_"))
     async def long_set_retest(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
-        v = int(cb.data.replace("long_set_retest_", ""))
+        v    = int(cb.data.replace("long_set_retest_", ""))
         await cb.answer("✅ Ретест ЛОНГ: " + str(v))
         _update_long_field(user, "max_retest_bars", v)
         await um.save(user)
