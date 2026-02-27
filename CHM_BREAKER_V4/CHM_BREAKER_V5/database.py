@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS users (
     short_active     INTEGER DEFAULT 0,
     long_cfg         TEXT    DEFAULT '{}',
     short_cfg        TEXT    DEFAULT '{}',
+    trend_only       INTEGER DEFAULT 0,
 
     signals_received INTEGER DEFAULT 0,
     created_at       REAL    DEFAULT 0,
@@ -129,6 +130,7 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN short_active INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN long_cfg TEXT DEFAULT '{}'",
             "ALTER TABLE users ADD COLUMN short_cfg TEXT DEFAULT '{}'",
+            "ALTER TABLE users ADD COLUMN trend_only INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try:

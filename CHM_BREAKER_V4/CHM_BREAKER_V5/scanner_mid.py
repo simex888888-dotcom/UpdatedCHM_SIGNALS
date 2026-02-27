@@ -105,7 +105,29 @@ def _cfg_to_ind(cfg: TradeCfg) -> IndConfig:
 
 # ── Telegram ─────────────────────────────────────────
 
-def result_keyboard(trade_id: str) -> InlineKeyboardMarkup:
+def _tv_url(symbol: str) -> str:
+    """Конвертирует OKX символ в ссылку TradingView.
+    BTC-USDT-SWAP → https://www.tradingview.com/chart/?symbol=OKX:BTCUSDT.P
+    """
+    clean = symbol.replace("-SWAP", "").replace("-", "")
+    return "https://www.tradingview.com/chart/?symbol=OKX:" + clean + ".P"
+
+
+def signal_compact_keyboard(trade_id: str, symbol: str) -> InlineKeyboardMarkup:
+    """Компактная клавиатура под сигналом: График | Статистика | Результат →"""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📈 График",     url=_tv_url(symbol)),
+            InlineKeyboardButton(text="📊 Статистика", callback_data="my_stats"),
+        ],
+        [
+            InlineKeyboardButton(text="📋 Записать результат ▾", callback_data="sig_records_" + trade_id),
+        ],
+    ])
+
+
+def trade_records_keyboard(trade_id: str) -> InlineKeyboardMarkup:
+    """Подменю записи результата сделки."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="🎯 TP1", callback_data="res_TP1_" + trade_id),
@@ -113,8 +135,11 @@ def result_keyboard(trade_id: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🏆 TP3", callback_data="res_TP3_" + trade_id),
         ],
         [
-            InlineKeyboardButton(text="❌ SL",        callback_data="res_SL_" + trade_id),
-            InlineKeyboardButton(text="⏭ Пропустил", callback_data="res_SKIP_" + trade_id),
+            InlineKeyboardButton(text="❌ Стоп-лосс",  callback_data="res_SL_"   + trade_id),
+            InlineKeyboardButton(text="⏭ Пропустил",  callback_data="res_SKIP_" + trade_id),
+        ],
+        [
+            InlineKeyboardButton(text="◀️ Назад",      callback_data="sig_back_" + trade_id),
         ],
     ])
 
@@ -280,6 +305,10 @@ class MidScanner:
             if job.direction == "LONG"  and sig.direction != "LONG":  continue
             if job.direction == "SHORT" and sig.direction != "SHORT": continue
 
+            # Фильтр тренд-сигналов — пропускаем контр-трендовые если включено
+            if cfg.trend_only and sig.is_counter_trend:
+                continue
+
             if user.notify_signal:
                 await self._send(user, sig, cfg)
             signals += 1
@@ -316,7 +345,7 @@ class MidScanner:
                 user.user_id,
                 signal_text(sig, cfg),
                 parse_mode="HTML",
-                reply_markup=result_keyboard(trade_id),
+                reply_markup=signal_compact_keyboard(trade_id, sig.symbol),
             )
             user.signals_received += 1
             await self.um.save(user)
