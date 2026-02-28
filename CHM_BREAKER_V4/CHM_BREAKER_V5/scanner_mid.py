@@ -157,7 +157,9 @@ def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
     def pct(t): return abs((t - sig.entry) / sig.entry * 100)
 
     NL = "\n"
-    quality_factors = NL.join(sig.reasons) if sig.reasons else ""
+    quality_factors = (
+        "📋 <b>Факторы качества:</b>" + NL + NL.join(sig.reasons)
+    ) if sig.reasons else ""
     return (
         header + NL + NL +
         "💎 <b>" + sig.symbol + "</b>  " + emoji + "  <b>" + sig.breakout_type + "</b>" +

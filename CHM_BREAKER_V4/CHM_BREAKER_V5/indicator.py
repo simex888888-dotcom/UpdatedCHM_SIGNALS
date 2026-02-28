@@ -143,24 +143,25 @@ class CHMIndicator:
 
         signal, s_level, s_type, explanation = None, None, "", ""
         is_counter = False
+        s_hits = 0
 
         # 1. ЛОЖНЫЙ ПРОБОЙ (SFP) И ОТСКОК ОТ ПОДДЕРЖКИ
         for sup in reversed(sup_zones):
             lvl = sup["price"]
             hits = sup["hits"]
-            
+
             # SFP (Захват ликвидности)
             if df["low"].iloc[-1] < lvl - zone_buf and c_now > lvl and vol_ratio > 1.2:
                 signal, s_level = "LONG", lvl
                 s_type, explanation = "SFP (Захват ликвидности)", f"Сильная поддержка (касаний: {hits}). Цена проколола уровень, собрала стопы и вернулась обратно на высоком объеме x{vol_ratio:.1f}."
-                is_counter = bear_local
+                is_counter = bear_local; s_hits = hits
                 break
-                
+
             # Классический отскок
             if abs(c_now - lvl) < zone_buf * 2 and bull_pat and vol_ratio >= cfg.VOL_MULT:
                 signal, s_level = "LONG", lvl
                 s_type, explanation = "Отскок от уровня", f"Цена подошла к зоне поддержки (тест #{hits+1}). Появился паттерн {bull_pat} без давления продавцов."
-                is_counter = bear_local
+                is_counter = bear_local; s_hits = hits
                 break
 
         # 2. ПРОБОЙ СОПРОТИВЛЕНИЯ + РЕТЕСТ
@@ -168,21 +169,20 @@ class CHMIndicator:
             for res in reversed(res_zones):
                 lvl = res["price"]
                 hits = res["hits"]
-                
+
                 # Честный пробой (свеча закрылась выше, импульс, объем)
                 if df["close"].iloc[-2] < lvl and c_now > lvl + zone_buf and vol_ratio > 1.5:
                     signal, s_level = "LONG", lvl
                     s_type, explanation = "Пробой уровня", f"Импульсный пробой сильного сопротивления (касаний: {hits}) на повышенном объеме x{vol_ratio:.1f}. Свеча уверенно закрылась над зоной."
-                    is_counter = bear_local
+                    is_counter = bear_local; s_hits = hits
                     break
 
                 # Ретест пробитого уровня
-                # Если 2-5 свечей назад был пробой вверх, а сейчас цена мягко коснулась уровня сверху
                 recent_closes = df["close"].iloc[-6:-1]
                 if (recent_closes > lvl).any() and abs(df["low"].iloc[-1] - lvl) < zone_buf and bull_pat and vol_ratio < 1.5:
                     signal, s_level = "LONG", lvl
                     s_type, explanation = "Ретест уровня", f"Цена мягко вернулась к пробитому сопротивлению, которое теперь стало поддержкой. Подтверждение паттерном {bull_pat} без агрессивных продаж."
-                    is_counter = bear_local
+                    is_counter = bear_local; s_hits = hits
                     break
 
         # 3. ШОРТ СЦЕНАРИИ (Зеркально)
@@ -190,19 +190,19 @@ class CHMIndicator:
             for res in reversed(res_zones):
                 lvl = res["price"]
                 hits = res["hits"]
-                
+
                 # SFP Short
                 if df["high"].iloc[-1] > lvl + zone_buf and c_now < lvl and vol_ratio > 1.2:
                     signal, s_level = "SHORT", lvl
                     s_type, explanation = "SFP (Ложный пробой)", f"Свинг-хай проколот (забрали ликвидность), но цена быстро вернулась под сопротивление (касаний: {hits}) на объеме x{vol_ratio:.1f}."
-                    is_counter = bull_local
+                    is_counter = bull_local; s_hits = hits
                     break
-                    
+
                 # Отскок Short
                 if abs(c_now - lvl) < zone_buf * 2 and bear_pat and vol_ratio >= cfg.VOL_MULT:
                     signal, s_level = "SHORT", lvl
                     s_type, explanation = "Отскок от сопротивления", f"Остановка у зоны сопротивления (тест #{hits+1}). Защита продавцов подтверждается паттерном {bear_pat}."
-                    is_counter = bull_local
+                    is_counter = bull_local; s_hits = hits
                     break
 
             for sup in reversed(sup_zones):
@@ -212,14 +212,14 @@ class CHMIndicator:
                 if df["close"].iloc[-2] > lvl and c_now < lvl - zone_buf and vol_ratio > 1.5:
                     signal, s_level = "SHORT", lvl
                     s_type, explanation = "Пробой поддержки", f"Честный пробой сильной поддержки вниз на объеме x{vol_ratio:.1f}. Возврата назад нет."
-                    is_counter = bull_local
+                    is_counter = bull_local; s_hits = hits
                     break
                 # Ретест пробитой поддержки
                 recent_closes = df["close"].iloc[-6:-1]
                 if (recent_closes < lvl).any() and abs(df["high"].iloc[-1] - lvl) < zone_buf and bear_pat and vol_ratio < 1.5:
                     signal, s_level = "SHORT", lvl
                     s_type, explanation = "Ретест уровня", f"Мягкий откат к пробитой поддержке снизу вверх. Появился продавец: {bear_pat}."
-                    is_counter = bull_local
+                    is_counter = bull_local; s_hits = hits
                     break
 
         if not signal: return None
@@ -247,9 +247,11 @@ class CHMIndicator:
         # Оценка качества
         quality = 2
         reasons = [f"✅ {s_type}"]
-        if vol_ratio >= cfg.VOL_MULT: quality += 1; reasons.append(f"✅ Объем x{vol_ratio:.1f}")
-        if not is_counter: quality += 1; reasons.append("✅ По тренду")
-        if (signal=="LONG" and bull_pat) or (signal=="SHORT" and bear_pat): quality += 1; reasons.append("✅ Паттерн подтвержден")
+        if s_hits > 0:                 reasons.append(f"✅ Уровень тестировался {s_hits}x")
+        if vol_ratio >= cfg.VOL_MULT:  quality += 1; reasons.append(f"✅ Объём x{vol_ratio:.1f}")
+        if not is_counter:             quality += 1; reasons.append("✅ По локальному тренду")
+        if (signal=="LONG" and bull_pat) or (signal=="SHORT" and bear_pat):
+            quality += 1; reasons.append(f"✅ Паттерн: {bull_pat or bear_pat}")
         # HTF качество — только если HTF фильтр включён и данные есть
         if cfg.USE_HTF_FILTER and df_htf is not None and len(df_htf) >= cfg.HTF_EMA_PERIOD:
             htf_ema_val = self._ema(df_htf["close"], cfg.HTF_EMA_PERIOD).iloc[-1]
@@ -257,7 +259,7 @@ class CHMIndicator:
             if (signal == "LONG" and htf_price > htf_ema_val) or \
                (signal == "SHORT" and htf_price < htf_ema_val):
                 quality += 1
-                reasons.append("✅ HTF тренд")
+                reasons.append("✅ HTF тренд подтверждает")
 
         self._last_signal[symbol] = bar_idx
 
