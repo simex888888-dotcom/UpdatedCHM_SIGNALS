@@ -55,6 +55,7 @@ class TradeCfg:
     min_volume_usdt: float = 1_000_000
     min_quality:     int   = 2
     cooldown_bars:   int   = 5
+    trend_only:      bool  = False
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -117,6 +118,7 @@ class UserSettings:
     min_volume_usdt:  float = 1_000_000
     min_quality:      int   = 2
     cooldown_bars:    int   = 5
+    trend_only:       bool  = False
 
     notify_signal:    bool  = True
     notify_breakout:  bool  = False
@@ -157,6 +159,7 @@ class UserSettings:
             tp1_rr=self.tp1_rr, tp2_rr=self.tp2_rr, tp3_rr=self.tp3_rr,
             min_volume_usdt=self.min_volume_usdt,
             min_quality=self.min_quality, cooldown_bars=self.cooldown_bars,
+            trend_only=self.trend_only,
         )
 
     def get_long_cfg(self) -> TradeCfg:
@@ -218,7 +221,7 @@ class UserSettings:
         bool_fields = {
             "active", "trial_used", "use_rsi", "use_volume",
             "use_pattern", "use_htf", "notify_signal", "notify_breakout",
-            "long_active", "short_active",
+            "long_active", "short_active", "trend_only",
         }
         d = {}
         for f in fields(self):
@@ -232,7 +235,7 @@ def _from_db(row: dict) -> UserSettings:
     bool_fields = {
         "active", "trial_used", "use_rsi", "use_volume",
         "use_pattern", "use_htf", "notify_signal", "notify_breakout",
-        "long_active", "short_active",
+        "long_active", "short_active", "trend_only",
     }
     for f in fields(u):
         if f.name in row and row[f.name] is not None:
