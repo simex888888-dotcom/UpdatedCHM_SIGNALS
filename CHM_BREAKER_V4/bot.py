@@ -40,19 +40,20 @@ async def notify_restart(bot: Bot, um: UserManager):
     log.info("🔄 Пользователей в БД: " + str(len(users)))
     sent = failed = 0
     for user in users:
-        if user.sub_status in ("trial", "active") and user.sub_expires > time.time():
-            try:
-                await bot.send_message(
-                    user.user_id,
-                    "🔄 <b>Бот был обновлён!</b>\n\nНажмите /start чтобы продолжить работу.",
-                    parse_mode="HTML",
-                    reply_markup=markup,
-                )
-                sent += 1
-                await asyncio.sleep(0.05)  # защита от флуд-лимита
-            except Exception as e:
-                log.warning("notify_restart uid=" + str(user.user_id) + ": " + str(e))
-                failed += 1
+        if user.sub_status == "banned":
+            continue
+        try:
+            await bot.send_message(
+                user.user_id,
+                "🔄 <b>Бот был обновлён!</b>\n\nНажмите /start чтобы продолжить работу.",
+                parse_mode="HTML",
+                reply_markup=markup,
+            )
+            sent += 1
+            await asyncio.sleep(0.05)
+        except Exception as e:
+            log.warning("notify_restart uid=" + str(user.user_id) + ": " + str(e))
+            failed += 1
     log.info("🔄 Перезапуск: отправлено " + str(sent) + ", ошибок " + str(failed))
 
 
