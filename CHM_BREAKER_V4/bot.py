@@ -37,7 +37,8 @@ async def notify_restart(bot: Bot, um: UserManager):
         InlineKeyboardButton(text="▶️ Открыть меню", callback_data="back_main"),
     ]])
     users = await um.all_users()
-    sent = 0
+    log.info("🔄 Пользователей в БД: " + str(len(users)))
+    sent = failed = 0
     for user in users:
         if user.sub_status in ("trial", "active") and user.sub_expires > time.time():
             try:
@@ -49,9 +50,10 @@ async def notify_restart(bot: Bot, um: UserManager):
                 )
                 sent += 1
                 await asyncio.sleep(0.05)  # защита от флуд-лимита
-            except Exception:
-                pass
-    log.info("🔄 Уведомлений о перезапуске отправлено: " + str(sent))
+            except Exception as e:
+                log.warning("notify_restart uid=" + str(user.user_id) + ": " + str(e))
+                failed += 1
+    log.info("🔄 Перезапуск: отправлено " + str(sent) + ", ошибок " + str(failed))
 
 
 async def main():
@@ -70,8 +72,11 @@ async def main():
 
     register_handlers(dp, bot, um, scanner, config)
 
-    log.info("🔄 Рассылка уведомлений о перезапуске...")
-    await notify_restart(bot, um)
+    # Рассылка при запуске — после того как aiogram установит соединение с Telegram
+    @dp.startup()
+    async def on_startup():
+        log.info("🔄 Рассылка уведомлений о перезапуске...")
+        await notify_restart(bot, um)
 
     log.info("🚀 CHM BREAKER MID запускается...")
     log.info(f"   SQLite:      {config.DB_PATH}")
