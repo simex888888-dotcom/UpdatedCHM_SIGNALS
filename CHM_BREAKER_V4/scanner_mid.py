@@ -28,6 +28,7 @@ from config import Config
 from user_manager import UserManager, UserSettings, TradeCfg
 from fetcher import OKXFetcher
 from indicator import CHMIndicator, SignalResult
+from keyboards import kb_contact_admin
 
 log = logging.getLogger("CHM.Scanner")
 
@@ -388,29 +389,80 @@ class MidScanner:
     # ── Уведомление об истечении ──────────────────────
 
     async def _notify_expired(self, user: UserSettings):
+        # Останавливаем сканеры в любом случае
+        user.long_active  = False
+        user.short_active = False
+        user.active       = False
+        user.sub_status   = "expired"
+        if user.expired_notified:
+            await self.um.save(user)
+            return
         try:
-            was_trial     = user.sub_status == "trial"
-            user.long_active  = False
-            user.short_active = False
-            user.active       = False
+            user.expired_notified = True
             await self.um.save(user)
             cfg = self.cfg
-            if was_trial:
+            if user.trial_used:
                 text = (
                     "⏰ <b>Пробный период завершён!</b>\n\n"
+                    "Надеемся, что вам понравился бот! 🎉\n\n"
                     "📅 30 дней  — <b>" + cfg.PRICE_30_DAYS + "</b>\n"
                     "📅 90 дней  — <b>" + cfg.PRICE_90_DAYS + "</b>\n\n"
-                    "💳 " + cfg.PAYMENT_INFO
+                    "Напишите администратору для оформления подписки 👇"
                 )
             else:
                 text = (
                     "⏰ <b>Подписка истекла!</b>\n\n"
-                    "📅 30 дней  — <b>" + cfg.PRICE_30_DAYS + "</b>\n"
-                    "💳 " + cfg.PAYMENT_INFO
+                    "📅 30 дней  — <b>" + cfg.PRICE_30_DAYS + "</b>\n\n"
+                    "Напишите администратору для продления 👇"
                 )
-            await self.bot.send_message(user.user_id, text, parse_mode="HTML")
+            await self.bot.send_message(
+                user.user_id, text,
+                parse_mode="HTML", reply_markup=kb_contact_admin(),
+            )
         except Exception:
             pass
+
+    # ── Напоминание за 1 час до конца триала ──────────
+
+    async def _notify_trial_ending_soon(self, user: UserSettings):
+        try:
+            user.trial_reminder_sent = True
+            await self.um.save(user)
+            await self.bot.send_message(
+                user.user_id,
+                "⏳ <b>До конца пробного периода остался 1 час.</b>\n\n"
+                "Не упустите возможность воспользоваться специальным предложением 🎁\n\n"
+                "Пишите @crypto_chm",
+                parse_mode="HTML",
+                reply_markup=kb_contact_admin(),
+            )
+        except Exception:
+            pass
+
+    # ── Фоновая проверка подписок ─────────────────────
+
+    async def _sub_check_loop(self):
+        """Каждые 5 минут проверяет ВСЕх пользователей:
+        - отправляет напоминание за 1 час до конца триала
+        - отправляет уведомление об окончании подписки (для неактивных пользователей)
+        """
+        await asyncio.sleep(60)  # пауза после старта
+        while True:
+            try:
+                now   = time.time()
+                users = await self.um.all_users()
+                for user in users:
+                    if user.sub_status not in ("trial", "active"):
+                        continue
+                    left = user.sub_expires - now
+                    if left <= 0 and not user.expired_notified:
+                        await self._notify_expired(user)
+                    elif 0 < left <= 3600 and user.sub_status == "trial" \
+                            and not user.trial_reminder_sent:
+                        await self._notify_trial_ending_soon(user)
+            except Exception as e:
+                log.error("_sub_check_loop: " + str(e))
+            await asyncio.sleep(300)  # каждые 5 минут
 
     # ── Построить список заданий для пользователя ─────
 
@@ -521,17 +573,23 @@ class MidScanner:
             str(cs.get("ratio", 0)) + "% хит"
         )
 
-    async def run_forever(self):
-        log.info(
-            "🚀 MidScanner v4 | Воркеров: " + str(self.cfg.SCAN_WORKERS) +
-            " | API: " + str(self.cfg.API_CONCURRENCY)
-        )
+    async def _scan_loop(self):
         while True:
             try:
                 await self._cycle()
             except Exception as e:
                 log.error("Ошибка цикла: " + str(e), exc_info=True)
             await asyncio.sleep(self.cfg.SCAN_LOOP_SLEEP)
+
+    async def run_forever(self):
+        log.info(
+            "🚀 MidScanner v4 | Воркеров: " + str(self.cfg.SCAN_WORKERS) +
+            " | API: " + str(self.cfg.API_CONCURRENCY)
+        )
+        await asyncio.gather(
+            self._scan_loop(),
+            self._sub_check_loop(),
+        )
 
     def get_perf(self) -> dict:
         cs = cache.cache_stats()

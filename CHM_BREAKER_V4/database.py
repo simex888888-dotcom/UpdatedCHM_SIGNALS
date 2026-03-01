@@ -82,9 +82,11 @@ CREATE TABLE IF NOT EXISTS users (
     short_cfg        TEXT    DEFAULT '{}',
     trend_only       INTEGER DEFAULT 0,
 
-    signals_received INTEGER DEFAULT 0,
-    created_at       REAL    DEFAULT 0,
-    updated_at       REAL    DEFAULT 0
+    signals_received    INTEGER DEFAULT 0,
+    trial_reminder_sent INTEGER DEFAULT 0,
+    expired_notified    INTEGER DEFAULT 0,
+    created_at          REAL    DEFAULT 0,
+    updated_at          REAL    DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -131,6 +133,8 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN long_cfg TEXT DEFAULT '{}'",
             "ALTER TABLE users ADD COLUMN short_cfg TEXT DEFAULT '{}'",
             "ALTER TABLE users ADD COLUMN trend_only INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN trial_reminder_sent INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN expired_notified INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try:

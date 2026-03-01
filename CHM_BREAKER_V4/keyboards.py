@@ -385,8 +385,15 @@ def kb_back_settings() -> InlineKeyboardMarkup: return InlineKeyboardMarkup(inli
 def kb_subscribe(config) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         _btn("💳 Оформить — " + config.PRICE_30_DAYS + " / 30 дней", "noop"),
-        _btn("📩 Написать администратору", "noop"),
+        [InlineKeyboardButton(text="✍️ Написать администратору", url="https://t.me/crypto_chm")],
         _btn("ℹ️ Узнать подробнее /subscribe", "noop"),
+    ])
+
+
+def kb_contact_admin() -> InlineKeyboardMarkup:
+    """Кнопка «Написать администратору» — для уведомлений об окончании триала."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✍️ Написать администратору", url="https://t.me/crypto_chm")],
     ])
 
 

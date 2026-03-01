@@ -21,6 +21,7 @@ import database as db
 from user_manager import UserManager, UserSettings, TradeCfg
 from keyboards import (
     kb_main, kb_back, kb_back_photo, kb_settings, kb_notify, kb_subscribe,
+    kb_contact_admin,
     kb_mode_long, kb_mode_short, kb_mode_both,
     kb_long_timeframes, kb_short_timeframes, kb_timeframes,
     kb_long_intervals, kb_short_intervals, kb_intervals,
