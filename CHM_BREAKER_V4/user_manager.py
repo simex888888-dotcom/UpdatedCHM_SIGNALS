@@ -138,7 +138,9 @@ class UserSettings:
     long_cfg:         str   = "{}"
     short_cfg:        str   = "{}"
 
-    signals_received: int   = 0
+    signals_received:     int   = 0
+    trial_reminder_sent:  bool  = False   # отправлено ли напоминание за 1ч до конца триала
+    expired_notified:     bool  = False   # отправлено ли уведомление об окончании
 
     # ── Хелперы конфигов ─────────────────────────
 
@@ -222,6 +224,7 @@ class UserSettings:
             "active", "trial_used", "use_rsi", "use_volume",
             "use_pattern", "use_htf", "notify_signal", "notify_breakout",
             "long_active", "short_active", "trend_only",
+            "trial_reminder_sent", "expired_notified",
         }
         d = {}
         for f in fields(self):
@@ -236,6 +239,7 @@ def _from_db(row: dict) -> UserSettings:
         "active", "trial_used", "use_rsi", "use_volume",
         "use_pattern", "use_htf", "notify_signal", "notify_breakout",
         "long_active", "short_active", "trend_only",
+        "trial_reminder_sent", "expired_notified",
     }
     for f in fields(u):
         if f.name in row and row[f.name] is not None:
