@@ -80,12 +80,17 @@ class IndConfig:
     TP1_RR:             float
     TP2_RR:             float
     TP3_RR:             float
-    HTF_EMA_PERIOD:     int  = 50
-    HTF_TIMEFRAME:      str  = "1d"
-    USE_RSI_FILTER:     bool = True
-    USE_VOLUME_FILTER:  bool = True
-    USE_PATTERN_FILTER: bool = False
-    USE_HTF_FILTER:     bool = False
+    HTF_EMA_PERIOD:     int   = 50
+    HTF_TIMEFRAME:      str   = "1d"
+    USE_RSI_FILTER:     bool  = True
+    USE_VOLUME_FILTER:  bool  = True
+    USE_PATTERN_FILTER: bool  = False
+    USE_HTF_FILTER:     bool  = False
+    # ── Протокол уровней (Price Action) ──────────────
+    ZONE_PCT:           float = 0.7   # Ширина зоны уровня в % от цены
+    MAX_DIST_PCT:       float = 1.5   # Макс. дистанция до уровня для входа (%)
+    MIN_RR:             float = 2.0   # Минимальный R:R
+    MAX_LEVEL_TESTS:    int   = 4     # Макс. тестов уровня (при >= — ожидается пробой)
 
 
 def _cfg_to_ind(cfg: TradeCfg) -> IndConfig:
@@ -101,6 +106,8 @@ def _cfg_to_ind(cfg: TradeCfg) -> IndConfig:
         HTF_EMA_PERIOD=cfg.htf_ema_period,
         USE_RSI_FILTER=cfg.use_rsi, USE_VOLUME_FILTER=cfg.use_volume,
         USE_PATTERN_FILTER=cfg.use_pattern, USE_HTF_FILTER=cfg.use_htf,
+        ZONE_PCT=cfg.zone_pct, MAX_DIST_PCT=cfg.max_dist_pct,
+        MIN_RR=cfg.min_rr, MAX_LEVEL_TESTS=cfg.max_level_tests,
     )
 
 

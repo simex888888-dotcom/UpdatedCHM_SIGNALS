@@ -326,11 +326,11 @@ class CHMIndicator:
 
         nearest_price, _ = min(all_levels, key=lambda x: abs(x[0] - c_now))
         dist_pct = abs(c_now - nearest_price) / c_now * 100
-        if dist_pct > 1.5:
+        if dist_pct > cfg.MAX_DIST_PCT:
             return None
 
-        # Ширина зоны: ±0.7% от уровня (зона, не линия)
-        ZONE_PCT = 0.7
+        # Ширина зоны: ±zone_pct% от уровня (настраивается пользователем)
+        ZONE_PCT = cfg.ZONE_PCT
 
         # ══════════════════════════════════════════════════════════════
         # ПОИСК СИГНАЛА — ЛОНГ
@@ -518,7 +518,7 @@ class CHMIndicator:
         # 🚫 4+ тестов без отката >2% — ждём пробоя, не отскока
         # ══════════════════════════════════════════════════════════════
         test_count = self._count_recent_tests(df, s_level, ZONE_PCT, lookback=30)
-        if test_count >= 4:
+        if test_count >= cfg.MAX_LEVEL_TESTS:
             log.debug(
                 f"{symbol}: Уровень {s_level:.4f} тестировался {test_count}x — "
                 f"пропуск (ожидается пробой)"
@@ -570,11 +570,11 @@ class CHMIndicator:
         tp3 = (entry + risk * cfg.TP3_RR if signal == "LONG"
                else entry - risk * cfg.TP3_RR)
 
-        # Проверка R:R ≥ 2:1
+        # Проверка R:R ≥ min_rr (настраивается, по умолчанию 2.0)
         rr_actual = ((tp1 - entry) / risk if signal == "LONG"
                      else (entry - tp1) / risk)
-        if rr_actual < 2.0:
-            log.debug(f"{symbol}: R:R = {rr_actual:.2f} < 2.0 — сигнал пропущен")
+        if rr_actual < cfg.MIN_RR:
+            log.debug(f"{symbol}: R:R = {rr_actual:.2f} < {cfg.MIN_RR} — сигнал пропущен")
             return None
 
         risk_pct = abs((sl - entry) / entry * 100)
@@ -654,8 +654,8 @@ class CHMIndicator:
         is_fakeout  = "Fakeout" in s_type or "SFP" in s_type
         checklist_3 = has_pattern or is_fakeout or vol_ratio > 1.5
 
-        # 4. R:R ≥ 2:1?
-        checklist_4 = rr_actual >= 2.0
+        # 4. R:R ≥ min_rr?
+        checklist_4 = rr_actual >= cfg.MIN_RR
 
         # 5. Первый или второй тест уровня?
         checklist_5 = test_count <= 2

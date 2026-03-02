@@ -694,6 +694,42 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты ЛОНГ</b>", kb_long_pivots(user))
 
+    @dp.callback_query(F.data.startswith("long_set_zone_pct_"))
+    async def long_set_zone_pct(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        v = float(cb.data.replace("long_set_zone_pct_", ""))
+        await cb.answer("✅ Зона ЛОНГ: " + str(v) + "%")
+        _update_long_field(user, "zone_pct", v)
+        await um.save(user)
+        await safe_edit(cb, "📐 <b>Пивоты ЛОНГ</b>", kb_long_pivots(user))
+
+    @dp.callback_query(F.data.startswith("long_set_dist_pct_"))
+    async def long_set_dist_pct(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        v = float(cb.data.replace("long_set_dist_pct_", ""))
+        await cb.answer("✅ Дистанция ЛОНГ: " + str(v) + "%")
+        _update_long_field(user, "max_dist_pct", v)
+        await um.save(user)
+        await safe_edit(cb, "📐 <b>Пивоты ЛОНГ</b>", kb_long_pivots(user))
+
+    @dp.callback_query(F.data.startswith("long_set_max_tests_"))
+    async def long_set_max_tests(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        v = int(cb.data.replace("long_set_max_tests_", ""))
+        await cb.answer("✅ Макс. тестов ЛОНГ: " + str(v))
+        _update_long_field(user, "max_level_tests", v)
+        await um.save(user)
+        await safe_edit(cb, "📐 <b>Пивоты ЛОНГ</b>", kb_long_pivots(user))
+
+    @dp.callback_query(F.data.startswith("long_set_min_rr_"))
+    async def long_set_min_rr(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        v = float(cb.data.replace("long_set_min_rr_", ""))
+        await cb.answer("✅ Мин. R:R ЛОНГ: " + str(v))
+        _update_long_field(user, "min_rr", v)
+        await um.save(user)
+        await safe_edit(cb, "🎯 <b>Цели ЛОНГ</b>", kb_long_targets(user))
+
     @dp.callback_query(F.data.startswith("long_set_ema_fast_"))
     async def long_set_ema_fast(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
@@ -981,6 +1017,38 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         _update_short_field(user, "zone_buffer", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
 
+    @dp.callback_query(F.data.startswith("short_set_zone_pct_"))
+    async def short_set_zone_pct(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        v = float(cb.data.replace("short_set_zone_pct_", ""))
+        await cb.answer("✅ Зона ШОРТ: " + str(v) + "%")
+        _update_short_field(user, "zone_pct", v); await um.save(user)
+        await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
+
+    @dp.callback_query(F.data.startswith("short_set_dist_pct_"))
+    async def short_set_dist_pct(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        v = float(cb.data.replace("short_set_dist_pct_", ""))
+        await cb.answer("✅ Дистанция ШОРТ: " + str(v) + "%")
+        _update_short_field(user, "max_dist_pct", v); await um.save(user)
+        await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
+
+    @dp.callback_query(F.data.startswith("short_set_max_tests_"))
+    async def short_set_max_tests(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        v = int(cb.data.replace("short_set_max_tests_", ""))
+        await cb.answer("✅ Макс. тестов ШОРТ: " + str(v))
+        _update_short_field(user, "max_level_tests", v); await um.save(user)
+        await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
+
+    @dp.callback_query(F.data.startswith("short_set_min_rr_"))
+    async def short_set_min_rr(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        v = float(cb.data.replace("short_set_min_rr_", ""))
+        await cb.answer("✅ Мин. R:R ШОРТ: " + str(v))
+        _update_short_field(user, "min_rr", v); await um.save(user)
+        await safe_edit(cb, "🎯 <b>Цели ШОРТ</b>", kb_short_targets(user))
+
     @dp.callback_query(F.data.startswith("short_set_ema_fast_"))
     async def short_set_ema_fast(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
@@ -1213,6 +1281,38 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await cb.answer("✅ x" + str(user.zone_buffer))
         await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты (общие)</b>", kb_pivots(user))
+
+    @dp.callback_query(F.data.startswith("set_zone_pct_"))
+    async def set_zone_pct(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.zone_pct = float(cb.data.replace("set_zone_pct_", ""))
+        await cb.answer("✅ Зона: " + str(user.zone_pct) + "%")
+        await um.save(user)
+        await safe_edit(cb, "📐 <b>Пивоты (общие)</b>", kb_pivots(user))
+
+    @dp.callback_query(F.data.startswith("set_dist_pct_"))
+    async def set_dist_pct(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.max_dist_pct = float(cb.data.replace("set_dist_pct_", ""))
+        await cb.answer("✅ Дистанция: " + str(user.max_dist_pct) + "%")
+        await um.save(user)
+        await safe_edit(cb, "📐 <b>Пивоты (общие)</b>", kb_pivots(user))
+
+    @dp.callback_query(F.data.startswith("set_max_tests_"))
+    async def set_max_tests(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.max_level_tests = int(cb.data.replace("set_max_tests_", ""))
+        await cb.answer("✅ Макс. тестов: " + str(user.max_level_tests))
+        await um.save(user)
+        await safe_edit(cb, "📐 <b>Пивоты (общие)</b>", kb_pivots(user))
+
+    @dp.callback_query(F.data.startswith("set_min_rr_"))
+    async def set_min_rr(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.min_rr = float(cb.data.replace("set_min_rr_", ""))
+        await cb.answer("✅ Мин. R:R: " + str(user.min_rr))
+        await um.save(user)
+        await safe_edit(cb, "🎯 <b>Цели (общие)</b>", kb_targets(user))
 
     @dp.callback_query(F.data == "menu_ema")
     async def menu_ema(cb: CallbackQuery):
