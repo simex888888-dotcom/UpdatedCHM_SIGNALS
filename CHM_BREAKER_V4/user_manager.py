@@ -49,13 +49,18 @@ class TradeCfg:
     atr_period:      int   = 14
     atr_mult:        float = 1.0
     max_risk_pct:    float = 1.5
-    tp1_rr:          float = 0.8
-    tp2_rr:          float = 1.5
-    tp3_rr:          float = 2.5
+    tp1_rr:          float = 2.0
+    tp2_rr:          float = 3.0
+    tp3_rr:          float = 4.5
     min_volume_usdt: float = 1_000_000
-    min_quality:     int   = 2
+    min_quality:     int   = 3
     cooldown_bars:   int   = 5
     trend_only:      bool  = False
+    # ── Протокол уровней (Price Action) ──────────────
+    zone_pct:        float = 0.7   # Ширина зоны уровня в % от цены
+    max_dist_pct:    float = 1.5   # Макс. дистанция до уровня для входа (%)
+    min_rr:          float = 2.0   # Минимальный R:R
+    max_level_tests: int   = 4     # Макс. тестов уровня (при 4+ — ожидается пробой)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -112,13 +117,18 @@ class UserSettings:
     atr_period:       int   = 14
     atr_mult:         float = 1.0
     max_risk_pct:     float = 1.5
-    tp1_rr:           float = 0.8
-    tp2_rr:           float = 1.5
-    tp3_rr:           float = 2.5
+    tp1_rr:           float = 2.0
+    tp2_rr:           float = 3.0
+    tp3_rr:           float = 4.5
     min_volume_usdt:  float = 1_000_000
-    min_quality:      int   = 2
+    min_quality:      int   = 3
     cooldown_bars:    int   = 5
     trend_only:       bool  = False
+    # ── Протокол уровней (Price Action) ──────────────
+    zone_pct:         float = 0.7
+    max_dist_pct:     float = 1.5
+    min_rr:           float = 2.0
+    max_level_tests:  int   = 4
 
     notify_signal:    bool  = True
     notify_breakout:  bool  = False
@@ -162,6 +172,8 @@ class UserSettings:
             min_volume_usdt=self.min_volume_usdt,
             min_quality=self.min_quality, cooldown_bars=self.cooldown_bars,
             trend_only=self.trend_only,
+            zone_pct=self.zone_pct, max_dist_pct=self.max_dist_pct,
+            min_rr=self.min_rr, max_level_tests=self.max_level_tests,
         )
 
     def get_long_cfg(self) -> TradeCfg:

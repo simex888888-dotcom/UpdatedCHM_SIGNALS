@@ -59,12 +59,17 @@ CREATE TABLE IF NOT EXISTS users (
     atr_mult         REAL    DEFAULT 1.0,
     max_risk_pct     REAL    DEFAULT 1.5,
 
-    tp1_rr           REAL    DEFAULT 0.8,
-    tp2_rr           REAL    DEFAULT 1.5,
-    tp3_rr           REAL    DEFAULT 2.5,
+    tp1_rr           REAL    DEFAULT 2.0,
+    tp2_rr           REAL    DEFAULT 3.0,
+    tp3_rr           REAL    DEFAULT 4.5,
+
+    zone_pct         REAL    DEFAULT 0.7,
+    max_dist_pct     REAL    DEFAULT 1.5,
+    min_rr           REAL    DEFAULT 2.0,
+    max_level_tests  INTEGER DEFAULT 4,
 
     min_volume_usdt  REAL    DEFAULT 1000000,
-    min_quality      INTEGER DEFAULT 2,
+    min_quality      INTEGER DEFAULT 3,
     cooldown_bars    INTEGER DEFAULT 5,
 
     notify_signal    INTEGER DEFAULT 1,
@@ -135,6 +140,10 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN trend_only INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN trial_reminder_sent INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN expired_notified INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN zone_pct REAL DEFAULT 0.7",
+            "ALTER TABLE users ADD COLUMN max_dist_pct REAL DEFAULT 1.5",
+            "ALTER TABLE users ADD COLUMN min_rr REAL DEFAULT 2.0",
+            "ALTER TABLE users ADD COLUMN max_level_tests INTEGER DEFAULT 4",
         ]
         for sql in migrations:
             try:

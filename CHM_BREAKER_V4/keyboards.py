@@ -196,9 +196,18 @@ def _pivots_kb(cfg: TradeCfg, prefix: str, back_cb: str) -> InlineKeyboardMarkup
     rows.append(_noop("── Макс. ожидание ретеста ────────────────────────"))
     for v, d in [(10,"10"), (20,"20"), (30,"30 ⭐"), (50,"50")]:
         rows.append(_btn(_mark(cfg.max_retest_bars, v) + str(v) + " свечей — " + d, p + "set_retest_" + str(v)))
-    rows.append(_noop("── Буфер зоны (ATR) ──────────────────────────────"))
+    rows.append(_noop("── Буфер зоны (ATR кластеризация) ───────────────"))
     for v, d in [(0.1,"x0.1"), (0.2,"x0.2"), (0.3,"x0.3 ⭐"), (0.5,"x0.5")]:
         rows.append(_btn(_mark(cfg.zone_buffer, v) + str(v) + " — " + d, p + "set_buffer_" + str(v)))
+    rows.append(_noop("── Ширина зоны уровня (% от цены) ───────────────"))
+    for v, d in [(0.3,"0.3% — точно"), (0.5,"0.5% — умеренно"), (0.7,"0.7% — стандарт ⭐"), (1.0,"1.0% — широко"), (1.5,"1.5% — для альтов")]:
+        rows.append(_btn(_mark(cfg.zone_pct, v) + str(v) + "% — " + d, p + "set_zone_pct_" + str(v)))
+    rows.append(_noop("── Макс. дистанция до уровня (%) ────────────────"))
+    for v, d in [(0.5,"0.5% — только у уровня"), (1.0,"1.0% — строго"), (1.5,"1.5% — рекомендуется ⭐"), (2.0,"2.0% — мягко"), (3.0,"3.0% — широко")]:
+        rows.append(_btn(_mark(cfg.max_dist_pct, v) + str(v) + "% — " + d, p + "set_dist_pct_" + str(v)))
+    rows.append(_noop("── Макс. тестов уровня (потом пробой) ───────────"))
+    for v, d in [(2,"2 — очень строго"), (3,"3 — строго"), (4,"4 — рекомендуется ⭐"), (5,"5 — мягко"), (99,"без лимита")]:
+        rows.append(_btn(_mark(cfg.max_level_tests, v) + str(v) + " — " + d, p + "set_max_tests_" + str(v)))
     rows.append(_back(back_cb))
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -315,10 +324,18 @@ def kb_short_sl(user: UserSettings)  -> InlineKeyboardMarkup: return _sl_kb(user
 
 # ── ЦЕЛИ ─────────────────────────────────────────────
 
+def _min_rr_rows(cfg: TradeCfg, prefix: str) -> list:
+    rows = [_noop("── Минимальный R:R для входа ─────────────────────")]
+    for v, d in [(1.5,"1.5R — мягко"), (2.0,"2.0R — рекомендуется ⭐"), (2.5,"2.5R — строго"), (3.0,"3.0R — только лучшие")]:
+        rows.append(_btn(_mark(cfg.min_rr, v) + str(v) + "R — " + d, prefix + "set_min_rr_" + str(v)))
+    return rows
+
 def kb_targets(user: UserSettings) -> InlineKeyboardMarkup:
     cfg = user.shared_cfg()
     return InlineKeyboardMarkup(inline_keyboard=[
-        _noop("── Цели Take Profit (общие) ───────────────────────"),
+        _noop("── Минимальный R:R для входа ─────────────────────"),
+        *_min_rr_rows(cfg, ""),
+        _noop("── Цели Take Profit (fallback если нет уровня) ───"),
         _btn("🎯 Цель 1: " + str(cfg.tp1_rr) + "R — изменить", "edit_tp1"),
         _btn("🎯 Цель 2: " + str(cfg.tp2_rr) + "R — изменить", "edit_tp2"),
         _btn("🏆 Цель 3: " + str(cfg.tp3_rr) + "R — изменить", "edit_tp3"),
@@ -328,7 +345,9 @@ def kb_targets(user: UserSettings) -> InlineKeyboardMarkup:
 def kb_long_targets(user: UserSettings) -> InlineKeyboardMarkup:
     cfg = user.get_long_cfg()
     return InlineKeyboardMarkup(inline_keyboard=[
-        _noop("── Цели Take Profit ЛОНГ ──────────────────────────"),
+        _noop("── Минимальный R:R ЛОНГ ─────────────────────────"),
+        *_min_rr_rows(cfg, "long_"),
+        _noop("── Цели Take Profit ЛОНГ (fallback) ─────────────"),
         _btn("🎯 Цель 1: " + str(cfg.tp1_rr) + "R — изменить", "edit_long_tp1"),
         _btn("🎯 Цель 2: " + str(cfg.tp2_rr) + "R — изменить", "edit_long_tp2"),
         _btn("🏆 Цель 3: " + str(cfg.tp3_rr) + "R — изменить", "edit_long_tp3"),
@@ -338,7 +357,9 @@ def kb_long_targets(user: UserSettings) -> InlineKeyboardMarkup:
 def kb_short_targets(user: UserSettings) -> InlineKeyboardMarkup:
     cfg = user.get_short_cfg()
     return InlineKeyboardMarkup(inline_keyboard=[
-        _noop("── Цели Take Profit ШОРТ ──────────────────────────"),
+        _noop("── Минимальный R:R ШОРТ ─────────────────────────"),
+        *_min_rr_rows(cfg, "short_"),
+        _noop("── Цели Take Profit ШОРТ (fallback) ─────────────"),
         _btn("🎯 Цель 1: " + str(cfg.tp1_rr) + "R — изменить", "edit_short_tp1"),
         _btn("🎯 Цель 2: " + str(cfg.tp2_rr) + "R — изменить", "edit_short_tp2"),
         _btn("🏆 Цель 3: " + str(cfg.tp3_rr) + "R — изменить", "edit_short_tp3"),
