@@ -23,19 +23,21 @@ class Config:
     #  🔑 TELEGRAM
     # ════════════════════════════════════════════════
 
-    TELEGRAM_TOKEN = ("8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k")
+    TELEGRAM_TOKEN = os.getenv("BOT_TOKEN_CHM")
 
 
     # Твой Telegram ID — станешь администратором
     # Узнать: написать @userinfobot
-    ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "445677777").split(",")]
-
+    ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "445677777,705020259,7107654772").split(",")]
 
     # ════════════════════════════════════════════════
-    #  🗄  SQLITE
+    #  🗄  SQLITE — путь к БД (persistent volume)
     # ════════════════════════════════════════════════
 
-    DB_PATH = "chm_bot.db"   # файл базы данных
+    # Для сохранения данных после редеплоя:
+    # Docker: монтировать /data как volume
+    # Или задать DB_PATH через env переменную
+    DB_PATH = os.getenv("DB_PATH", "chm_bot.db")
 
 
     # ════════════════════════════════════════════════
@@ -74,15 +76,26 @@ class Config:
 
 
     # ════════════════════════════════════════════════
-    #  💳 ПОДПИСКА
+    #  💳 ПОДПИСКА — ЦЕНЫ И ОПЛАТА
     # ════════════════════════════════════════════════
 
-    TRIAL_HOURS    = 6
-    PRICE_30_DAYS  = "50$"
-    PRICE_90_DAYS  = "120$"
-    PRICE_365_DAYS = "300$"
-    PAYMENT_INFO   = "@crypto_chm"
+    # Адрес для оплаты (BEP20 / BSC)
+    PAYMENT_ADDRESS = "0xb5116aa7d7a20d7c45a8a5ff10bc1d86437df985"
+    PAYMENT_NETWORK = "BEP20 (BSC)"
 
+    # Только БОТ
+    BOT_PRICE_30    = "70$"
+    BOT_PRICE_90    = "150$"
+    BOT_PRICE_365   = "330$"
+
+    # БОТ + ИНДИКАТОР на TradingView
+    FULL_PRICE_30   = "90$"
+    FULL_PRICE_90   = "230$"
+    FULL_PRICE_365  = "630$"
+
+    # Контакт администратора
+    ADMIN_CONTACT   = "@crypto_chm"
+    PAYMENT_INFO    = "@crypto_chm"
 
     # ════════════════════════════════════════════════
     #  📊 МОНЕТЫ

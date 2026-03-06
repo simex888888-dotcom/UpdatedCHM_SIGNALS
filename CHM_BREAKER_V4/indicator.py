@@ -38,6 +38,8 @@ class SignalResult:
     human_explanation: str  = ""
     level_class:      int   = 3   # 1=Абсолютный, 2=Сильный, 3=Рабочий
     test_count:       int   = 0   # Кол-во тестов уровня за последние 30 свечей
+    btc_corr:         float = 0.0  # Корреляция с BTC (30 свечей)
+    eth_corr:         float = 0.0  # Корреляция с ETH (30 свечей)
 
 
 class CHMIndicator:
@@ -569,6 +571,20 @@ class CHMIndicator:
                else entry - risk * cfg.TP2_RR)
         tp3 = (entry + risk * cfg.TP3_RR if signal == "LONG"
                else entry - risk * cfg.TP3_RR)
+
+        # ── Нормализация порядка TP: TP1 ≤ TP2 ≤ TP3 (LONG) / TP1 ≥ TP2 ≥ TP3 (SHORT)
+        # Нужно на случай если TP1 из уровня оказался дальше стандартного TP2/TP3
+        step = risk * 0.3  # минимальный шаг между целями
+        if signal == "LONG":
+            if tp2 < tp1 + step:
+                tp2 = tp1 + step
+            if tp3 < tp2 + step:
+                tp3 = tp2 + step
+        else:
+            if tp2 > tp1 - step:
+                tp2 = tp1 - step
+            if tp3 > tp2 - step:
+                tp3 = tp2 - step
 
         # Проверка R:R ≥ min_rr (настраивается, по умолчанию 2.0)
         rr_actual = ((tp1 - entry) / risk if signal == "LONG"

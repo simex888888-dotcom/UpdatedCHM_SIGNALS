@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from aiogram.types import BufferedInputFile
 import asyncio
 import logging
+import time
 from dataclasses import fields
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -65,6 +66,10 @@ class EditState(StatesGroup):
     long_tp1 = State(); long_tp2 = State(); long_tp3 = State()
     # ШОРТ TP
     short_tp1 = State(); short_tp2 = State(); short_tp3 = State()
+
+
+class AnalyzeState(StatesGroup):
+    waiting_symbol = State()
 
 
 # ── Тексты ───────────────────────────────────────────
@@ -166,8 +171,48 @@ def stats_text(user: UserSettings, stats: dict) -> str:
 def access_denied_text(reason: str) -> str:
     NL = "\n"
     if reason == "banned":
-        return "🚫 <b>Доступ заблокирован.</b>" + NL + NL + "Обратись к администратору."
-    return "⏰ <b>Доступ истёк</b>" + NL + NL + "Оформи подписку чтобы продолжить."
+        return "🚫 <b>Доступ заблокирован.</b>" + NL + NL + "Обратись к администратору @crypto_chm."
+    return (
+        "🤖 <b>CHM BOT — автоматический сканер твоей прибыли. Бот, который не даст проспать профит.</b>" + NL + NL +
+        "Выберите тариф подписки 👇" + NL + NL +
+        "Оплата: <b>BEP20 (BSC)</b>" + NL +
+        "💎 Для лабы — специальные цены, пишите @crypto_chm"
+    )
+
+
+def pricing_text(config) -> str:
+    NL = "\n"
+    return (
+        "🤖 <b>CHM BOT — автоматический сканер твоей прибыли. Бот, который не даст проспать профит.</b>" + NL + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL +
+        "🤖 <b>Только БОТ:</b>" + NL +
+        "  📅 1 месяц  — <b>" + config.BOT_PRICE_30 + "</b>" + NL +
+        "  📅 3 месяца — <b>" + config.BOT_PRICE_90 + "</b>" + NL +
+        "  📅 1 ГОД    — <b>" + config.BOT_PRICE_365 + "</b>" + NL + NL +
+        "🤖📊 <b>БОТ + ИНДИКАТОР на TradingView:</b>" + NL +
+        "  📅 1 месяц  — <b>" + config.FULL_PRICE_30 + "</b>" + NL +
+        "  📅 3 месяца — <b>" + config.FULL_PRICE_90 + "</b>" + NL +
+        "  📅 1 ГОД    — <b>" + config.FULL_PRICE_365 + "</b>" + NL + NL +
+        "💎 <b>Для лабы — дешевле.</b> Пишите @crypto_chm" + NL +
+        "🎁 <b>Супер предложение</b> (бот + лаба) — @crypto_chm" + NL + NL +
+        "Выберите тариф 👇"
+    )
+
+
+def payment_instruction_text(plan_name: str, amount: str, config) -> str:
+    NL = "\n"
+    return (
+        "💳 <b>Оплата подписки</b>" + NL + NL +
+        "📦 Тариф: <b>" + plan_name + " — " + amount + "</b>" + NL + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL +
+        "🔗 Сеть: <b>" + config.PAYMENT_NETWORK + "</b>" + NL + NL +
+        "📋 Адрес для оплаты:" + NL +
+        "<code>" + config.PAYMENT_ADDRESS + "</code>" + NL + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL +
+        "✅ После оплаты отправь скриншот и свой Telegram ID:" + NL +
+        "🆔 Твой ID: ниже" + NL + NL +
+        "✍️ Написать администратору: @crypto_chm"
+    )
 
 
 # ── Хелперы для обновления cfg направления ──────────
@@ -196,7 +241,11 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
         has, reason = user.check_access()
         if not has:
-            await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
+            await msg.answer(
+                pricing_text(config),
+                parse_mode="HTML",
+                reply_markup=kb_subscribe(config),
+            )
             return
         trend = scanner.get_trend()
         await msg.answer(main_text(user, trend), parse_mode="HTML", reply_markup=kb_main(user))
@@ -206,14 +255,14 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
         has, reason = user.check_access()
         if not has:
-            await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
+            await msg.answer(pricing_text(config), parse_mode="HTML", reply_markup=kb_subscribe(config))
             return
         trend = scanner.get_trend()
         await msg.answer(main_text(user, trend), parse_mode="HTML", reply_markup=kb_main(user))
 
     @dp.message(Command("stop"))
     async def cmd_stop(msg: Message):
-        user = await um.get_or_create(msg.from_user.id)
+        user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
         user.active = False
         user.long_active = False
         user.short_active = False
@@ -230,14 +279,49 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def cmd_subscribe(msg: Message):
         NL = "\n"
         await msg.answer(
-            "💳 <b>Подписка CHM BREAKER BOT</b>" + NL + NL +
-            "📅 30 дней  — <b>" + config.PRICE_30_DAYS + "</b>" + NL +
-            "📅 90 дней  — <b>" + config.PRICE_90_DAYS + "</b>" + NL +
-            "📅 365 дней — <b>" + config.PRICE_365_DAYS + "</b>" + NL + NL +
-            "После оплаты: <b>" + config.PAYMENT_INFO + "</b>" + NL +
-            "Твой Telegram ID: <code>" + str(msg.from_user.id) + "</code>",
+            pricing_text(config) + NL + NL +
+            "🆔 Твой Telegram ID: <code>" + str(msg.from_user.id) + "</code>",
             parse_mode="HTML",
+            reply_markup=kb_subscribe(config),
         )
+
+    # ─── ПОДПИСКА — ВЫБОР ТАРИФА (callback) ─────────────
+
+    PLANS = {
+        "plan_bot_30":   ("🤖 Только БОТ — 1 месяц",   "70$"),
+        "plan_bot_90":   ("🤖 Только БОТ — 3 месяца",  "150$"),
+        "plan_bot_365":  ("🤖 Только БОТ — 1 ГОД",    "330$"),
+        "plan_full_30":  ("🤖📊 БОТ + ИНДИКАТОР — 1 месяц",  "90$"),
+        "plan_full_90":  ("🤖📊 БОТ + ИНДИКАТОР — 3 месяца", "230$"),
+        "plan_full_365": ("🤖📊 БОТ + ИНДИКАТОР — 1 ГОД",   "630$"),
+    }
+
+    @dp.callback_query(F.data.startswith("plan_"))
+    async def plan_selected(cb: CallbackQuery):
+        await cb.answer()
+        plan_key = cb.data
+        if plan_key not in PLANS:
+            return
+        plan_name, amount = PLANS[plan_key]
+        NL = "\n"
+        text = (
+            "💳 <b>Оплата подписки</b>" + NL + NL +
+            "📦 Тариф: <b>" + plan_name + " — " + amount + "</b>" + NL + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "🔗 Сеть: <b>" + config.PAYMENT_NETWORK + "</b>" + NL + NL +
+            "📋 Адрес для перевода:" + NL +
+            "<code>" + config.PAYMENT_ADDRESS + "</code>" + NL + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "✅ После оплаты отправь скриншот + свой Telegram ID администратору:" + NL + NL +
+            "🆔 Твой ID: <code>" + str(cb.from_user.id) + "</code>"
+        )
+        from keyboards import kb_payment
+        await safe_edit(cb, text, kb_payment(plan_name, amount, config.PAYMENT_ADDRESS))
+
+    @dp.callback_query(F.data == "show_plans")
+    async def show_plans(cb: CallbackQuery):
+        await cb.answer()
+        await safe_edit(cb, pricing_text(config), kb_subscribe(config))
 
     # ─── АДМИН ────────────────────────────────────────
 
@@ -363,6 +447,102 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 except Exception:
                     failed += 1
         await msg.answer("📢 Рассылка: ✅ " + str(sent) + "  ❌ " + str(failed))
+
+    # ─── АНАЛИЗ МОНЕТЫ ПО ЗАПРОСУ ────────────────────
+
+    async def _do_analyze(msg_or_cb, user: UserSettings, symbol: str):
+        """Общая функция анализа монеты и отправки результата."""
+        is_cb = isinstance(msg_or_cb, CallbackQuery)
+        send  = (msg_or_cb.message.answer if is_cb else msg_or_cb.answer)
+
+        if not symbol:
+            await send("⚠️ Укажите тикер монеты. Пример: /analyze BTC")
+            return
+
+        cfg  = user.shared_cfg()
+        wait_msg = await send(
+            "⏳ <b>Анализирую " + symbol.upper() + "...</b>\n\nПодождите несколько секунд.",
+            parse_mode="HTML",
+        )
+        result = await scanner.analyze_on_demand(symbol, cfg)
+        try:
+            await wait_msg.delete()
+        except Exception:
+            pass
+
+        if result is None:
+            await send(
+                "🔍 <b>Анализ " + symbol.upper() + "</b>\n\n"
+                "Сигнала нет — цена вдали от ключевых уровней или сигнал не прошёл фильтры.\n\n"
+                "<i>Попробуйте другой таймфрейм или проверьте позже.</i>",
+                parse_mode="HTML",
+            )
+            return
+
+        sig, text = result
+        trade_id  = str(user.user_id) + "_ondemand_" + str(int(time.time() * 1000))
+        risk      = abs(sig.entry - sig.sl)
+        sign      = 1 if sig.direction == "LONG" else -1
+        await db.db_add_trade({
+            "trade_id":      trade_id,
+            "user_id":       user.user_id,
+            "symbol":        sig.symbol,
+            "direction":     sig.direction,
+            "entry":         sig.entry,
+            "sl":            sig.sl,
+            "tp1":           sig.entry + sign * risk * cfg.tp1_rr,
+            "tp2":           sig.entry + sign * risk * cfg.tp2_rr,
+            "tp3":           sig.entry + sign * risk * cfg.tp3_rr,
+            "tp1_rr":        cfg.tp1_rr,
+            "tp2_rr":        cfg.tp2_rr,
+            "tp3_rr":        cfg.tp3_rr,
+            "quality":       sig.quality,
+            "timeframe":     cfg.timeframe,
+            "breakout_type": sig.breakout_type,
+            "created_at":    time.time(),
+        })
+        await send(text, parse_mode="HTML", reply_markup=signal_compact_keyboard(trade_id, sig.symbol))
+
+    @dp.message(Command("analyze"))
+    async def cmd_analyze(msg: Message, state: FSMContext):
+        user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
+        has, reason = user.check_access()
+        if not has:
+            await msg.answer(pricing_text(config), parse_mode="HTML", reply_markup=kb_subscribe(config))
+            return
+        parts  = msg.text.split(maxsplit=1)
+        symbol = parts[1].strip() if len(parts) > 1 else ""
+        if symbol:
+            await _do_analyze(msg, user, symbol)
+        else:
+            await state.set_state(AnalyzeState.waiting_symbol)
+            await msg.answer(
+                "🔍 <b>Анализ монеты</b>\n\nВведите тикер монеты (например: BTC, ETH, SOL, PEPE):",
+                parse_mode="HTML",
+            )
+
+    @dp.message(AnalyzeState.waiting_symbol)
+    async def analyze_symbol_input(msg: Message, state: FSMContext):
+        await state.clear()
+        user   = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
+        symbol = (msg.text or "").strip()
+        await _do_analyze(msg, user, symbol)
+
+    @dp.callback_query(F.data == "analyze_coin")
+    async def analyze_coin_cb(cb: CallbackQuery, state: FSMContext):
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id, cb.from_user.username or "")
+        has, reason = user.check_access()
+        if not has:
+            await safe_edit(cb, pricing_text(config), kb_subscribe(config))
+            return
+        await state.set_state(AnalyzeState.waiting_symbol)
+        await safe_edit(
+            cb,
+            "🔍 <b>Анализ монеты по запросу</b>\n\n"
+            "Введите тикер монеты (например: <code>BTC</code>, <code>SOL</code>, <code>PEPE</code>)\n\n"
+            "<i>Анализ выполняется по вашим текущим настройкам (режим ОБА).</i>",
+        )
 
     # ─── РЕЗУЛЬТАТЫ СДЕЛОК ────────────────────────────
 
@@ -557,7 +737,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         has, reason = user.check_access()
         if not has:
             await cb.answer("Подписка истекла!", show_alert=True)
-            await safe_edit(cb, access_denied_text(reason), kb_subscribe(config))
+            await safe_edit(cb, pricing_text(config), kb_subscribe(config))
             return
         user.long_active = not user.long_active
         await cb.answer("🟢 ЛОНГ включён!" if user.long_active else "🔴 ЛОНГ выключен.")
@@ -884,7 +1064,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         has, reason = user.check_access()
         if not has:
             await cb.answer("Подписка истекла!", show_alert=True)
-            await safe_edit(cb, access_denied_text(reason), kb_subscribe(config))
+            await safe_edit(cb, pricing_text(config), kb_subscribe(config))
             return
         user.short_active = not user.short_active
         await cb.answer("🟢 ШОРТ включён!" if user.short_active else "🔴 ШОРТ выключен.")
@@ -1199,7 +1379,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         has, reason = user.check_access()
         if not has:
             await cb.answer("Подписка истекла!", show_alert=True)
-            await safe_edit(cb, access_denied_text(reason), kb_subscribe(config))
+            await safe_edit(cb, pricing_text(config), kb_subscribe(config))
             return
         if user.scan_mode != "both":
             user.scan_mode = "both"
