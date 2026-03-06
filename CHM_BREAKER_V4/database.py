@@ -85,13 +85,15 @@ CREATE TABLE IF NOT EXISTS users (
     short_active     INTEGER DEFAULT 0,
     long_cfg         TEXT    DEFAULT '{}',
     short_cfg        TEXT    DEFAULT '{}',
+    smc_cfg          TEXT    DEFAULT '{}',
     trend_only       INTEGER DEFAULT 0,
 
     signals_received    INTEGER DEFAULT 0,
     trial_reminder_sent INTEGER DEFAULT 0,
     expired_notified    INTEGER DEFAULT 0,
     created_at          REAL    DEFAULT 0,
-    updated_at          REAL    DEFAULT 0
+    updated_at          REAL    DEFAULT 0,
+    strategy            TEXT    DEFAULT 'LEVELS'
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -151,6 +153,8 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN max_dist_pct REAL DEFAULT 1.5",
             "ALTER TABLE users ADD COLUMN min_rr REAL DEFAULT 2.0",
             "ALTER TABLE users ADD COLUMN max_level_tests INTEGER DEFAULT 4",
+            "ALTER TABLE users ADD COLUMN strategy TEXT DEFAULT 'LEVELS'",
+            "ALTER TABLE users ADD COLUMN smc_cfg TEXT DEFAULT '{}'",
         ]
         for sql in migrations:
             try:

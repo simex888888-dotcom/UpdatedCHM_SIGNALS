@@ -551,6 +551,8 @@ class MidScanner:
             if not has:
                 await self._notify_expired(u)
                 continue
+            if u.strategy == "SMC":
+                continue  # SMC-пользователи обрабатываются smc/scanner.py
             jobs = self._build_jobs(u, now, self._last_scan)
             all_jobs.extend(jobs)
 

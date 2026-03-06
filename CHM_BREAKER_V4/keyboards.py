@@ -3,7 +3,7 @@ keyboards.py — клавиатуры бота v5 (без триала, полн
 """
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from user_manager import UserSettings, TradeCfg
+from user_manager import UserSettings, TradeCfg, SMCUserCfg
 
 
 def _btn(text: str, cb: str) -> list:
@@ -40,10 +40,13 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
     long_s  = "🟢" if user.long_active  else "⚫"
     short_s = "🟢" if user.short_active else "⚫"
     both_s  = "🟢" if (user.active and user.scan_mode == "both") else "⚫"
+    strategy = getattr(user, "strategy", "LEVELS")
+    strat_label = "📊 Уровни" if strategy == "LEVELS" else "🧠 SMC" if strategy == "SMC" else "⚙️ Стратегия"
     return InlineKeyboardMarkup(inline_keyboard=[
         _btn(long_s  + " 📈 ЛОНГ сканер  — только сигналы в лонг",  "mode_long"),
         _btn(short_s + " 📉 ШОРТ сканер  — только сигналы в шорт",  "mode_short"),
         _btn(both_s  + " ⚡ ОБА — лонги и шорты одновременно",       "mode_both"),
+        _btn("🎯 Стратегия: " + strat_label + " — сменить",          "show_strategy"),
         [
             InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
             InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
@@ -434,6 +437,109 @@ def kb_back_photo() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_photo_main")]
     ])
+
+
+# ── SMC НАСТРОЙКИ ─────────────────────────────────────
+
+def kb_smc_main(user: UserSettings) -> InlineKeyboardMarkup:
+    """Главное меню SMC — показывает текущие значения и ссылки на подменю."""
+    cfg = user.get_smc_cfg()
+    dir_label = {"LONG": "📈 Только ЛОНГ", "SHORT": "📉 Только ШОРТ", "BOTH": "⚡ ОБА"}.get(cfg.direction, "⚡ ОБА")
+    tf_label  = {"15m": "15 мин", "1H": "1 час ⭐", "4H": "4 часа"}.get(cfg.tf_key, cfg.tf_key)
+    interval_min = cfg.scan_interval // 60
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _noop("── 🧠 Smart Money Concepts ─────────────────────"),
+        _btn("📊 Таймфрейм: "        + tf_label,              "smc_menu_tf"),
+        _btn("🔄 Интервал: "          + str(interval_min) + " мин.", "smc_menu_interval"),
+        _btn("🎯 Направление: "       + dir_label,             "smc_menu_direction"),
+        _noop("── Фильтры сигнала ──────────────────────────────"),
+        _btn("⭐ Мин. подтверждений: " + str(cfg.min_confirmations) + "/5",  "smc_menu_confirmations"),
+        _btn("📐 Мин. R:R: 1:"        + str(cfg.min_rr),       "smc_menu_rr"),
+        _btn("🛡 Буфер SL: "          + str(cfg.sl_buffer_pct) + "%", "smc_menu_sl"),
+        _btn("💰 Мин. объём: "        + _fmt_vol(cfg.min_volume_usdt), "smc_menu_volume"),
+        _noop("── Включить / Выключить ─────────────────────────"),
+        _btn(_check(cfg.fvg_enabled)      + " FVG / IFVG",           "smc_toggle_fvg"),
+        _btn(_check(cfg.choch_enabled)    + " CHoCH (смена тренда)",  "smc_toggle_choch"),
+        _btn(_check(cfg.ob_use_breaker)   + " Breaker Blocks",        "smc_toggle_breaker"),
+        _btn(_check(cfg.sweep_close_req)  + " Sweep: закрытие за уровнем", "smc_toggle_sweep"),
+        _noop("── OB ─────────────────────────────────────────────"),
+        _btn("🕯 Макс. возраст OB: " + str(cfg.ob_max_age) + " свечей", "smc_menu_ob_age"),
+        _back("show_strategy"),
+    ])
+
+
+def _fmt_vol(v: float) -> str:
+    if v >= 1_000_000: return str(int(v // 1_000_000)) + "M$"
+    if v >= 1_000:     return str(int(v // 1_000)) + "K$"
+    return str(int(v)) + "$"
+
+
+def kb_smc_tf(cfg: SMCUserCfg) -> InlineKeyboardMarkup:
+    opts = [("15m", "15 мин — скальпинг"), ("1H", "1 час — свинг ⭐"), ("4H", "4 часа — позиционная")]
+    rows = [_noop("── Основной таймфрейм SMC (MTF) ─────────────────")]
+    for v, d in opts:
+        rows.append(_btn(_mark(cfg.tf_key, v) + v + " — " + d, "smc_set_tf_" + v))
+    rows.append(_back("smc_settings"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_smc_interval(cfg: SMCUserCfg) -> InlineKeyboardMarkup:
+    opts = [(300,"5 мин"),(600,"10 мин"),(900,"15 мин ⭐"),(1800,"30 мин"),(3600,"1 час")]
+    rows = [_noop("── Интервал сканирования ─────────────────────────")]
+    for sec, d in opts:
+        rows.append(_btn(_mark(cfg.scan_interval, sec) + d, "smc_set_interval_" + str(sec)))
+    rows.append(_back("smc_settings"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_smc_direction(cfg: SMCUserCfg) -> InlineKeyboardMarkup:
+    opts = [("BOTH","⚡ ОБА направления ⭐"),("LONG","📈 Только ЛОНГ"),("SHORT","📉 Только ШОРТ")]
+    rows = [_noop("── Направление сигналов ──────────────────────────")]
+    for v, d in opts:
+        rows.append(_btn(_mark(cfg.direction, v) + d, "smc_set_dir_" + v))
+    rows.append(_back("smc_settings"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_smc_confirmations(cfg: SMCUserCfg) -> InlineKeyboardMarkup:
+    rows = [_noop("── Мин. подтверждений из 5 ──────────────────────")]
+    for v, d in [(2,"2 — мягко"),(3,"3 — рекомендуется ⭐"),(4,"4 — строго"),(5,"5 — только идеальные")]:
+        rows.append(_btn(_mark(cfg.min_confirmations, v) + str(v) + " — " + d, "smc_set_conf_" + str(v)))
+    rows.append(_back("smc_settings"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_smc_rr(cfg: SMCUserCfg) -> InlineKeyboardMarkup:
+    rows = [_noop("── Минимальный R:R ───────────────────────────────")]
+    for v, d in [(1.5,"1.5R"),(2.0,"2.0R ⭐"),(2.5,"2.5R"),(3.0,"3.0R — строго")]:
+        rows.append(_btn(_mark(cfg.min_rr, v) + str(v) + "R — " + d, "smc_set_rr_" + str(v)))
+    rows.append(_back("smc_settings"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_smc_sl(cfg: SMCUserCfg) -> InlineKeyboardMarkup:
+    rows = [_noop("── Буфер SL от экстремума OB ────────────────────")]
+    for v, d in [(0.1,"0.1% — очень плотный"),(0.15,"0.15% ⭐"),(0.25,"0.25% — мягкий"),(0.5,"0.5% — широкий")]:
+        rows.append(_btn(_mark(cfg.sl_buffer_pct, v) + str(v) + "% — " + d, "smc_set_sl_" + str(v)))
+    rows.append(_back("smc_settings"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_smc_volume(cfg: SMCUserCfg) -> InlineKeyboardMarkup:
+    opts = [(1_000_000,"1M$"),(5_000_000,"5M$ ⭐"),(10_000_000,"10M$"),(50_000_000,"50M$")]
+    rows = [_noop("── Мин. суточный объём монеты ───────────────────")]
+    for v, d in opts:
+        rows.append(_btn(_mark(cfg.min_volume_usdt, float(v)) + d, "smc_set_vol_" + str(int(v))))
+    rows.append(_back("smc_settings"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_smc_ob_age(cfg: SMCUserCfg) -> InlineKeyboardMarkup:
+    rows = [_noop("── Макс. возраст Order Block (в свечах) ─────────")]
+    for v, d in [(20,"20 — только свежие"),(30,"30 — актуальные"),(50,"50 ⭐"),(100,"100 — исторические")]:
+        rows.append(_btn(_mark(cfg.ob_max_age, v) + str(v) + " свечей — " + d, "smc_set_ob_age_" + str(v)))
+    rows.append(_back("smc_settings"))
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 # ── СПРАВКА ───────────────────────────────────────────

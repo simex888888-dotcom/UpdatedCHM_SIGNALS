@@ -21,7 +21,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
 
 import database as db
-from user_manager import UserManager, UserSettings, TradeCfg
+from user_manager import UserManager, UserSettings, TradeCfg, SMCUserCfg
 from keyboards import (
     kb_main, kb_back, kb_back_photo, kb_settings, kb_notify, kb_subscribe,
     kb_contact_admin,
@@ -38,6 +38,8 @@ from keyboards import (
     kb_targets, kb_long_targets, kb_short_targets,
     kb_volume, kb_long_volume, kb_short_volume,
     trend_text, help_text, kb_help,
+    kb_smc_main, kb_smc_tf, kb_smc_interval, kb_smc_direction,
+    kb_smc_confirmations, kb_smc_rr, kb_smc_sl, kb_smc_volume, kb_smc_ob_age,
 )
 from scanner_mid import signal_compact_keyboard, trade_records_keyboard
 
@@ -335,36 +337,6 @@ def _apply_shared_cfg(user: UserSettings, cfg: TradeCfg):
 
 
 # ── Хранилище стратегий пользователей ────────────────
-import json, os as _os
-
-_STRATEGY_FILE = "strategy_prefs.json"
-
-def _load_strategies() -> dict:
-    try:
-        if _os.path.exists(_STRATEGY_FILE):
-            return json.loads(open(_STRATEGY_FILE).read())
-    except Exception:
-        pass
-    return {}
-
-def _save_strategies(d: dict):
-    try:
-        with open(_STRATEGY_FILE, "w") as f:
-            json.dump(d, f)
-    except Exception:
-        pass
-
-_user_strategy: dict = _load_strategies()
-
-def _get_user_strategy(uid: int) -> str:
-    """Возвращает "LEVELS" | "SMC" | "" (не выбрана)."""
-    return _user_strategy.get(str(uid), "")
-
-def _set_user_strategy(uid: int, strategy: str):
-    _user_strategy[str(uid)] = strategy
-    _save_strategies(_user_strategy)
-
-
 # ── Клавиатуры выбора стратегии ───────────────────────
 
 def _kb_strategy_select() -> InlineKeyboardMarkup:
@@ -375,19 +347,21 @@ def _kb_strategy_select() -> InlineKeyboardMarkup:
         ],
     ])
 
-def _kb_strategy_change() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def _kb_strategy_change(current: str = "") -> InlineKeyboardMarkup:
+    rows = [
         [
             InlineKeyboardButton(text="📊 Уровни", callback_data="strategy_levels"),
             InlineKeyboardButton(text="🧠 SMC",    callback_data="strategy_smc"),
         ],
-        [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
-    ])
+    ]
+    if current == "SMC":
+        rows.append([InlineKeyboardButton(text="⚙️ Настройки SMC →", callback_data="smc_settings")])
+    rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
-def _strategy_text(uid: int) -> str:
-    s = _get_user_strategy(uid)
-    chosen = ("📊 Уровни (Price Action)" if s == "LEVELS"
-              else "🧠 Smart Money (SMC)" if s == "SMC"
+def _strategy_text(strategy: str) -> str:
+    chosen = ("📊 Уровни (Price Action)" if strategy == "LEVELS"
+              else "🧠 Smart Money (SMC)" if strategy == "SMC"
               else "не выбрана")
     return (
         "🎯 <b>ВЫБОР СТРАТЕГИИ</b>\n\n"
@@ -438,13 +412,12 @@ def _analyze_smc_text(symbol: str, sig) -> str:
 # ── Мультитаймфреймный /analyze (человекоподобный) ───
 
 async def _do_analyze_multitf(symbol: str, fetcher, indicator,
-                               uid: int, bot) -> str:
+                               strategy: str, bot) -> str:
     """
     Загружает 1H, 4H, 1D свечи. Анализирует уровни на каждом ТФ.
     Возвращает человекоподобный текст с рекомендацией.
     """
     NL = "\n"
-    strategy = _get_user_strategy(uid)
 
     # Загрузка свечей BTC/ETH для корреляции
     try:
@@ -644,7 +617,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def _on_startup_inner():
         from smc.scanner import run_smc_scanner
         asyncio.create_task(
-            run_smc_scanner(bot, um, _fetcher_for_smc, _get_user_strategy)
+            run_smc_scanner(bot, um, _fetcher_for_smc)
         )
 
     dp.startup.register(_on_startup_inner)
@@ -663,8 +636,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             )
             return
         # Если стратегия не выбрана — предлагаем выбрать
-        if not _get_user_strategy(user.user_id):
-            await msg.answer(_strategy_text(user.user_id), parse_mode="HTML",
+        if not user.strategy:
+            await msg.answer(_strategy_text(user.strategy), parse_mode="HTML",
                              reply_markup=_kb_strategy_select())
             return
         trend = scanner.get_trend()
@@ -712,8 +685,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not has:
             await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
             return
-        await msg.answer(_strategy_text(user.user_id), parse_mode="HTML",
-                         reply_markup=_kb_strategy_change())
+        await msg.answer(_strategy_text(user.strategy), parse_mode="HTML",
+                         reply_markup=_kb_strategy_change(user.strategy))
 
     # ─── ПОДПИСКА — ВЫБОР ТАРИФА (callback) ─────────────
 
@@ -805,7 +778,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             indicator_obj = CHMIndicator(ind_config_obj)
 
             result_text = await _do_analyze_multitf(
-                symbol, _fetcher_for_smc, indicator_obj, uid, bot
+                symbol, _fetcher_for_smc, indicator_obj, user.strategy, bot
             )
 
             try:
@@ -834,18 +807,18 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.callback_query(F.data.startswith("strategy_"))
     async def cb_strategy(cb: CallbackQuery):
         choice = cb.data.replace("strategy_", "")   # "levels" | "smc"
-        uid    = cb.from_user.id
         strategy_map = {"levels": "LEVELS", "smc": "SMC"}
         strategy = strategy_map.get(choice)
         if not strategy:
             await cb.answer("Неизвестная стратегия", show_alert=True); return
 
-        _set_user_strategy(uid, strategy)
+        user = await um.get_or_create(cb.from_user.id)
+        user.strategy = strategy
+        await um.save(user)
         label = "📊 Уровни (Price Action)" if strategy == "LEVELS" else "🧠 Smart Money (SMC)"
-        await cb.answer(f"✅ Стратегия выбрана: {label}", show_alert=False)
+        await cb.answer("✅ Стратегия: " + label, show_alert=False)
 
-        user  = await um.get_or_create(uid)
-        trend = scanner.get_trend()
+        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
         await safe_edit(cb, main_text(user, trend), kb_main(user))
 
     # ─── АНАЛИЗ МОНЕТЫ ПО ЗАПРОСУ ────────────────────
@@ -1007,8 +980,188 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     @dp.callback_query(F.data == "show_strategy")
     async def show_strategy(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
         await cb.answer()
-        await safe_edit(cb, _strategy_text(cb.from_user.id), _kb_strategy_change())
+        await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_change(user.strategy))
+
+    # ─── SMC НАСТРОЙКИ ────────────────────────────────
+
+    @dp.callback_query(F.data == "smc_settings")
+    async def smc_settings(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    # Подменю
+    @dp.callback_query(F.data == "smc_menu_tf")
+    async def smc_menu_tf(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "📊 <b>Таймфрейм SMC</b>", kb_smc_tf(user.get_smc_cfg()))
+
+    @dp.callback_query(F.data == "smc_menu_interval")
+    async def smc_menu_interval(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "🔄 <b>Интервал сканирования SMC</b>", kb_smc_interval(user.get_smc_cfg()))
+
+    @dp.callback_query(F.data == "smc_menu_direction")
+    async def smc_menu_direction(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "🎯 <b>Направление сигналов SMC</b>", kb_smc_direction(user.get_smc_cfg()))
+
+    @dp.callback_query(F.data == "smc_menu_confirmations")
+    async def smc_menu_confirmations(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "⭐ <b>Мин. подтверждений SMC</b>", kb_smc_confirmations(user.get_smc_cfg()))
+
+    @dp.callback_query(F.data == "smc_menu_rr")
+    async def smc_menu_rr(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "📐 <b>Минимальный R:R</b>", kb_smc_rr(user.get_smc_cfg()))
+
+    @dp.callback_query(F.data == "smc_menu_sl")
+    async def smc_menu_sl(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "🛡 <b>Буфер стоп-лосса</b>", kb_smc_sl(user.get_smc_cfg()))
+
+    @dp.callback_query(F.data == "smc_menu_volume")
+    async def smc_menu_volume(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "💰 <b>Мин. объём монеты</b>", kb_smc_volume(user.get_smc_cfg()))
+
+    @dp.callback_query(F.data == "smc_menu_ob_age")
+    async def smc_menu_ob_age(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "🕯 <b>Макс. возраст Order Block</b>", kb_smc_ob_age(user.get_smc_cfg()))
+
+    # Сохранение значений
+    @dp.callback_query(F.data.startswith("smc_set_tf_"))
+    async def smc_set_tf(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.tf_key = cb.data.replace("smc_set_tf_", "")
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("✅ Таймфрейм: " + cfg.tf_key)
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    @dp.callback_query(F.data.startswith("smc_set_interval_"))
+    async def smc_set_interval(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.scan_interval = int(cb.data.replace("smc_set_interval_", ""))
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("✅ Интервал: " + str(cfg.scan_interval // 60) + " мин.")
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    @dp.callback_query(F.data.startswith("smc_set_dir_"))
+    async def smc_set_dir(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.direction = cb.data.replace("smc_set_dir_", "")
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("✅ Направление: " + cfg.direction)
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    @dp.callback_query(F.data.startswith("smc_set_conf_"))
+    async def smc_set_conf(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.min_confirmations = int(cb.data.replace("smc_set_conf_", ""))
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("✅ Мин. подтверждений: " + str(cfg.min_confirmations))
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    @dp.callback_query(F.data.startswith("smc_set_rr_"))
+    async def smc_set_rr(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.min_rr = float(cb.data.replace("smc_set_rr_", ""))
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("✅ Мин. R:R: 1:" + str(cfg.min_rr))
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    @dp.callback_query(F.data.startswith("smc_set_sl_"))
+    async def smc_set_sl(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.sl_buffer_pct = float(cb.data.replace("smc_set_sl_", ""))
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("✅ Буфер SL: " + str(cfg.sl_buffer_pct) + "%")
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    @dp.callback_query(F.data.startswith("smc_set_vol_"))
+    async def smc_set_vol(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.min_volume_usdt = float(cb.data.replace("smc_set_vol_", ""))
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("✅ Мин. объём обновлён")
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    @dp.callback_query(F.data.startswith("smc_set_ob_age_"))
+    async def smc_set_ob_age(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.ob_max_age = int(cb.data.replace("smc_set_ob_age_", ""))
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("✅ Возраст OB: " + str(cfg.ob_max_age) + " свечей")
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    # Тогглы (вкл/выкл)
+    @dp.callback_query(F.data == "smc_toggle_fvg")
+    async def smc_toggle_fvg(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.fvg_enabled = not cfg.fvg_enabled
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("FVG: " + ("✅ вкл" if cfg.fvg_enabled else "❌ выкл"))
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    @dp.callback_query(F.data == "smc_toggle_choch")
+    async def smc_toggle_choch(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.choch_enabled = not cfg.choch_enabled
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("CHoCH: " + ("✅ вкл" if cfg.choch_enabled else "❌ выкл"))
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    @dp.callback_query(F.data == "smc_toggle_breaker")
+    async def smc_toggle_breaker(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.ob_use_breaker = not cfg.ob_use_breaker
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("Breaker Blocks: " + ("✅ вкл" if cfg.ob_use_breaker else "❌ выкл"))
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
+
+    @dp.callback_query(F.data == "smc_toggle_sweep")
+    async def smc_toggle_sweep(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        cfg  = user.get_smc_cfg()
+        cfg.sweep_close_req = not cfg.sweep_close_req
+        user.set_smc_cfg(cfg)
+        await um.save(user)
+        await cb.answer("Sweep закрытие: " + ("✅ вкл" if cfg.sweep_close_req else "❌ выкл"))
+        await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
 
     @dp.callback_query(F.data == "my_stats")
     async def my_stats(cb: CallbackQuery):
@@ -1103,9 +1256,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
         # Проверяем стратегию перед включением
-        if not user.long_active and not _get_user_strategy(user.user_id):
+        if not user.long_active and not user.strategy:
             await cb.answer()
-            await safe_edit(cb, _strategy_text(user.user_id), _kb_strategy_select()); return
+            await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.long_active = not user.long_active
         await cb.answer("🟢 ЛОНГ включён!" if user.long_active else "🔴 ЛОНГ выключен.")
         await um.save(user)
@@ -1429,9 +1582,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
         # Проверяем стратегию перед включением
-        if not user.short_active and not _get_user_strategy(user.user_id):
+        if not user.short_active and not user.strategy:
             await cb.answer()
-            await safe_edit(cb, _strategy_text(user.user_id), _kb_strategy_select()); return
+            await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.short_active = not user.short_active
         if user.short_active:
             user.scan_mode = "short"
@@ -1787,9 +1940,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
         is_active = user.active and user.scan_mode == "both"
-        if not is_active and not _get_user_strategy(user.user_id):
+        if not is_active and not user.strategy:
             await cb.answer()
-            await safe_edit(cb, _strategy_text(user.user_id), _kb_strategy_select()); return
+            await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.active = not is_active
         user.scan_mode = "both" if user.active else user.scan_mode
         user.long_active = user.active
@@ -2517,7 +2670,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             "  ШОРТ: " + ("🟢" if user.short_active else "⚫") +
             "  ОБА: " + ("🟢" if user.active else "⚫") + NL +
             "Сигналов: <b>" + str(user.signals_received) + "</b>  Сделок: <b>" + str(stats.get("total",0)) + "</b>  R: <b>" + "{:+.2f}".format(stats.get("total_rr",0)) + "R</b>" + NL +
-            "Стратегия: <b>" + (_get_user_strategy(tid) or "не выбрана") + "</b>",
+            "Стратегия: <b>" + (user.strategy or "не выбрана") + "</b>",
             parse_mode="HTML",
         )
 
