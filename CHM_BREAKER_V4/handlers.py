@@ -2366,14 +2366,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
         await safe_edit(cb, main_text(user, trend), kb_main(user))
 
-    @dp.callback_query(F.data == "show_strategy")
-    async def show_strategy(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        await cb.answer()
-        strat = _get_user_strategy(user.user_id)
-        strat_name = {"levels": "📊 Уровни (Price Action)", "smc": "🧠 Smart Money (SMC)"}.get(strat, "не выбрана")
-        await safe_edit(cb, "⚙️ <b>Текущая стратегия:</b> " + strat_name, _kb_strategy_change())
-
     @dp.callback_query(F.data == "my_stats")
     async def my_stats(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
@@ -2424,139 +2416,127 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     @dp.message(Command("admin"))
     async def cmd_admin(msg: Message):
-        if msg.from_user.id not in config.ADMIN_IDS:
-            await msg.answer("❌ Нет доступа"); return
-        stats = await db.db_stats_summary()
-        total  = stats.get("total", 0)
-        active = stats.get("scanning", 0)
-        subs   = stats.get("active", 0) + stats.get("trial", 0)
+        if not is_admin(msg.from_user.id): return
+        s   = await um.stats_summary()
+        prf = scanner.get_perf() if hasattr(scanner, "get_perf") else {}
+        cs  = prf.get("cache", {})
+        NL  = "\n"
         await msg.answer(
-            "🔧 <b>Панель администратора</b>\n\n"
-            "👥 Пользователей: <b>" + str(total) + "</b>\n"
-            "🟢 Сканируют: <b>" + str(active) + "</b>\n"
-            "💳 С подпиской: <b>" + str(subs) + "</b>\n\n"
-            "Команды:\n"
-            "/give [user_id] [days] — выдать подписку\n"
-            "/revoke [user_id] — отозвать подписку\n"
-            "/ban [user_id] — забанить\n"
-            "/unban [user_id] — разбанить\n"
-            "/userinfo [user_id] — инфо о пользователе\n"
-            "/broadcast [текст] — рассылка",
-            parse_mode="HTML"
+            "👑 <b>Панель администратора</b>" + NL + NL +
+            "👥 Всего: <b>" + str(s["total"]) + "</b>  🆓 Триал: <b>" + str(s["trial"]) + "</b>  ✅ Активных: <b>" + str(s["active"]) + "</b>" + NL +
+            "🔄 Сканируют: <b>" + str(s["scanning"]) + "</b>" + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "Циклов: <b>" + str(prf.get("cycles",0)) + "</b>  Сигналов: <b>" + str(prf.get("signals",0)) + "</b>  API: <b>" + str(prf.get("api_calls",0)) + "</b>" + NL +
+            "Кэш: <b>" + str(cs.get("size",0)) + "</b> ключей | хит <b>" + str(cs.get("ratio",0)) + "%</b>" + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "/give [id] [дней]  /revoke [id]  /ban [id]" + NL +
+            "/unban [id]  /userinfo [id]  /broadcast [текст]",
+            parse_mode="HTML",
         )
 
     @dp.message(Command("give"))
     async def cmd_give(msg: Message):
-        if msg.from_user.id not in config.ADMIN_IDS:
-            await msg.answer("❌ Нет доступа"); return
+        if not is_admin(msg.from_user.id): return
         parts = msg.text.split()
         if len(parts) < 3:
-            await msg.answer("Использование: /give [user_id] [days]"); return
+            await msg.answer("Использование: /give [user_id] [дней]"); return
         try:
-            uid = int(parts[1]); days = int(parts[2])
+            tid = int(parts[1]); days = int(parts[2])
         except ValueError:
-            await msg.answer("❌ user_id и days должны быть числами"); return
-        target = await um.get_or_create(uid)
-        target.grant_access(days)
-        await um.save(target)
-        await msg.answer("✅ Пользователю " + str(uid) + " выдана подписка на " + str(days) + " дней.")
+            await msg.answer("❌ Неверный формат"); return
+        user = await um.get(tid)
+        if not user:
+            await msg.answer("❌ Пользователь " + str(tid) + " не найден"); return
+        user.grant_access(days)
+        await um.save(user)
+        await msg.answer("✅ Доступ выдан @" + str(user.username or tid) + " на " + str(days) + " дней")
         try:
-            await bot.send_message(uid, "🎉 Вам выдана подписка на " + str(days) + " дней!")
-        except Exception:
-            pass
+            await bot.send_message(
+                tid,
+                "🎉 <b>Доступ открыт!</b>\n\nПодписка на <b>" + str(days) + " дней</b>.\nОсталось: <b>" + user.time_left_str() + "</b>\n\nНажми /menu",
+                parse_mode="HTML",
+            )
+        except Exception: pass
 
     @dp.message(Command("revoke"))
     async def cmd_revoke(msg: Message):
-        if msg.from_user.id not in config.ADMIN_IDS:
-            await msg.answer("❌ Нет доступа"); return
+        if not is_admin(msg.from_user.id): return
         parts = msg.text.split()
-        if len(parts) < 2:
-            await msg.answer("Использование: /revoke [user_id]"); return
-        try:
-            uid = int(parts[1])
-        except ValueError:
-            await msg.answer("❌ user_id должен быть числом"); return
-        target = await um.get_or_create(uid)
-        target.sub_status  = "expired"
-        target.sub_expires = 0.0
-        await um.save(target)
-        await msg.answer("✅ Подписка пользователя " + str(uid) + " отозвана.")
+        if len(parts) < 2: await msg.answer("Использование: /revoke [id]"); return
+        try: tid = int(parts[1])
+        except ValueError: return
+        user = await um.get(tid)
+        if not user: await msg.answer("❌ Не найден"); return
+        user.sub_status = "expired"; user.sub_expires = 0
+        user.active = False; user.long_active = False; user.short_active = False
+        await um.save(user)
+        await msg.answer("✅ Доступ отозван у @" + str(user.username or tid))
 
     @dp.message(Command("ban"))
     async def cmd_ban(msg: Message):
-        if msg.from_user.id not in config.ADMIN_IDS:
-            await msg.answer("❌ Нет доступа"); return
+        if not is_admin(msg.from_user.id): return
         parts = msg.text.split()
-        if len(parts) < 2:
-            await msg.answer("Использование: /ban [user_id]"); return
-        try:
-            uid = int(parts[1])
-        except ValueError:
-            await msg.answer("❌ user_id должен быть числом"); return
-        target = await um.get_or_create(uid)
-        target.sub_status = "banned"
-        target.active = False
-        await um.save(target)
-        await msg.answer("🚫 Пользователь " + str(uid) + " заблокирован.")
+        if len(parts) < 2: await msg.answer("Использование: /ban [id]"); return
+        try: tid = int(parts[1])
+        except ValueError: return
+        user = await um.get(tid)
+        if not user: await msg.answer("❌ Не найден"); return
+        user.sub_status = "banned"; user.active = False
+        user.long_active = False; user.short_active = False
+        await um.save(user)
+        await msg.answer("🚫 @" + str(user.username or tid) + " заблокирован")
 
     @dp.message(Command("unban"))
     async def cmd_unban(msg: Message):
-        if msg.from_user.id not in config.ADMIN_IDS:
-            await msg.answer("❌ Нет доступа"); return
+        if not is_admin(msg.from_user.id): return
         parts = msg.text.split()
-        if len(parts) < 2:
-            await msg.answer("Использование: /unban [user_id]"); return
-        try:
-            uid = int(parts[1])
-        except ValueError:
-            await msg.answer("❌ user_id должен быть числом"); return
-        target = await um.get_or_create(uid)
-        if target.sub_status == "banned":
-            target.sub_status = "expired"
-        await um.save(target)
-        await msg.answer("✅ Пользователь " + str(uid) + " разблокирован.")
+        if len(parts) < 2: await msg.answer("Использование: /unban [id]"); return
+        try: tid = int(parts[1])
+        except ValueError: return
+        user = await um.get(tid)
+        if not user: await msg.answer("❌ Не найден"); return
+        user.sub_status = "expired"
+        await um.save(user)
+        await msg.answer("✅ @" + str(user.username or tid) + " разблокирован")
 
     @dp.message(Command("userinfo"))
     async def cmd_userinfo(msg: Message):
-        if msg.from_user.id not in config.ADMIN_IDS:
-            await msg.answer("❌ Нет доступа"); return
+        if not is_admin(msg.from_user.id): return
         parts = msg.text.split()
-        if len(parts) < 2:
-            await msg.answer("Использование: /userinfo [user_id]"); return
-        try:
-            uid = int(parts[1])
-        except ValueError:
-            await msg.answer("❌ user_id должен быть числом"); return
-        target = await um.get_or_create(uid)
-        NL = "\n"
-        info = (
-            "👤 <b>Пользователь #" + str(uid) + "</b>" + NL +
-            "Username: @" + (target.username or "—") + NL +
-            "Статус: " + target.sub_status + NL +
-            "Подписка до: " + (target.time_left_str() if target.sub_expires > 0 else "—") + NL +
-            "Активен: " + ("✅" if target.active else "❌") + NL +
-            "Сигналов получено: " + str(target.signals_received) + NL +
-            "Стратегия: " + (_get_user_strategy(uid) or "не выбрана")
+        if len(parts) < 2: await msg.answer("Использование: /userinfo [id]"); return
+        try: tid = int(parts[1])
+        except ValueError: return
+        user = await um.get(tid)
+        if not user: await msg.answer("❌ Не найден"); return
+        stats = await db.db_get_user_stats(tid)
+        NL    = "\n"
+        await msg.answer(
+            "👤 <b>@" + str(user.username or "—") + "</b> (<code>" + str(user.user_id) + "</code>)" + NL +
+            "Подписка: <b>" + user.sub_status.upper() + "</b> | Осталось: <b>" + user.time_left_str() + "</b>" + NL +
+            "ЛОНГ: " + ("🟢" if user.long_active else "⚫") +
+            "  ШОРТ: " + ("🟢" if user.short_active else "⚫") +
+            "  ОБА: " + ("🟢" if user.active else "⚫") + NL +
+            "Сигналов: <b>" + str(user.signals_received) + "</b>  Сделок: <b>" + str(stats.get("total",0)) + "</b>  R: <b>" + "{:+.2f}".format(stats.get("total_rr",0)) + "R</b>" + NL +
+            "Стратегия: <b>" + (_get_user_strategy(tid) or "не выбрана") + "</b>",
+            parse_mode="HTML",
         )
-        await msg.answer(info, parse_mode="HTML")
 
     @dp.message(Command("broadcast"))
     async def cmd_broadcast(msg: Message):
-        if msg.from_user.id not in config.ADMIN_IDS:
-            await msg.answer("❌ Нет доступа"); return
-        text = msg.text.partition(" ")[2].strip()
-        if not text:
-            await msg.answer("Использование: /broadcast [текст]"); return
-        all_users = await db.db_get_all_users()
-        sent = 0; failed = 0
-        for u in all_users:
-            try:
-                await bot.send_message(u["user_id"], text, parse_mode="HTML")
-                sent += 1
-                await asyncio.sleep(0.05)
-            except Exception:
-                failed += 1
-        await msg.answer("📢 Рассылка завершена.\nОтправлено: " + str(sent) + "\nОшибок: " + str(failed))
+        if not is_admin(msg.from_user.id): return
+        text = msg.text.replace("/broadcast", "", 1).strip()
+        if not text: await msg.answer("Использование: /broadcast [текст]"); return
+        users  = await um.all_users()
+        sent = failed = 0
+        for u in users:
+            if u.sub_status in ("trial", "active"):
+                try:
+                    await bot.send_message(u.user_id, "📢 " + text)
+                    sent += 1
+                    await asyncio.sleep(0.04)
+                except Exception:
+                    failed += 1
+        await msg.answer("📢 Рассылка: ✅ " + str(sent) + "  ❌ " + str(failed))
 
     # ─── ПРОЧЕЕ ───────────────────────────────────────
 
