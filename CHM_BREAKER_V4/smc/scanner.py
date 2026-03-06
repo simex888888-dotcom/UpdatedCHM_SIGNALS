@@ -99,7 +99,15 @@ async def run_smc_scanner(
 async def _scan_cycle(bot, um, fetcher, analyzer,
                       tf_htf, tf_mtf, tf_ltf) -> None:
     users = await um.get_active_users()
-    smc_users = [u for u in users if u.strategy == "SMC"]
+    # SMC users: strategy==SMC AND at least one scanner is on
+    smc_users = [
+        u for u in users
+        if u.strategy == "SMC" and (
+            u.active or
+            getattr(u, "smc_long_active",  False) or
+            getattr(u, "smc_short_active", False)
+        )
+    ]
     if not smc_users:
         return
 
@@ -165,9 +173,22 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
             if sig is None:
                 continue
 
-            # Фильтр по направлению
-            if ucfg.direction != "BOTH" and sig.direction != ucfg.direction:
-                continue
+            # Определяем какие направления активны для этого пользователя
+            both_on  = user.active and user.scan_mode == "smc_both"
+            long_on  = getattr(user, "smc_long_active",  False)
+            short_on = getattr(user, "smc_short_active", False)
+            if both_on:
+                pass   # принимаем любое направление
+            elif long_on and not short_on:
+                if sig.direction != "LONG":
+                    continue
+            elif short_on and not long_on:
+                if sig.direction != "SHORT":
+                    continue
+            elif long_on and short_on:
+                pass   # оба включены — принимаем всё
+            else:
+                continue  # ни один режим не включён
 
             # Антидубликат per-user
             sig_hash = f"{user.user_id}_{symbol}_{sig.direction}_{sig.score}"
@@ -185,6 +206,7 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
                 log.info(f"SMC ✅ {symbol} {sig.direction} {sig.grade} → @{user.username or user.user_id}")
             except TelegramForbiddenError:
                 user.long_active = user.short_active = user.active = False
+                user.smc_long_active = user.smc_short_active = False
                 await um.save(user)
             except Exception as e:
                 log.error(f"SMC send {user.user_id}: {e}")

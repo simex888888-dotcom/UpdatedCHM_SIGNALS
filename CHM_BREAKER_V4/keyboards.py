@@ -39,12 +39,14 @@ def trend_text(trend: dict) -> str:
 def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
     strategy = getattr(user, "strategy", "LEVELS")
     if strategy == "SMC":
-        smc_s = "🟢 SMC Сканер ВКЛЮЧЁН — нажми чтобы остановить" if user.active \
-               else "🔴 SMC Сканер ВЫКЛЮЧЕН — нажми чтобы запустить"
+        long_s  = "🟢" if getattr(user, "smc_long_active",  False) else "⚫"
+        short_s = "🟢" if getattr(user, "smc_short_active", False) else "⚫"
+        both_s  = "🟢" if (user.active and user.scan_mode == "smc_both") else "⚫"
         return InlineKeyboardMarkup(inline_keyboard=[
-            _btn(smc_s,                                                       "toggle_smc"),
-            _btn("⚙️ Настройки SMC →",                                        "smc_settings"),
-            _btn("🎯 Стратегия: 🧠 SMC — сменить",                            "show_strategy"),
+            _btn(long_s  + " 📈 SMC ЛОНГ — только лонговые сигналы",          "mode_smc_long"),
+            _btn(short_s + " 📉 SMC ШОРТ — только шортовые сигналы",          "mode_smc_short"),
+            _btn(both_s  + " ⚡ SMC ОБА — все SMC сигналы",                    "mode_smc_both"),
+            _btn("🎯 Стратегия: 🧠 SMC — сменить",                             "show_strategy"),
             [
                 InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
                 InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
@@ -478,7 +480,7 @@ def kb_smc_main(user: UserSettings) -> InlineKeyboardMarkup:
         _btn(_check(cfg.sweep_close_req)  + " Sweep: закрытие за уровнем", "smc_toggle_sweep"),
         _noop("── OB ─────────────────────────────────────────────"),
         _btn("🕯 Макс. возраст OB: " + str(cfg.ob_max_age) + " свечей", "smc_menu_ob_age"),
-        _back("show_strategy"),
+        _back("back_main"),
     ])
 
 
@@ -554,6 +556,53 @@ def kb_smc_ob_age(cfg: SMCUserCfg) -> InlineKeyboardMarkup:
         rows.append(_btn(_mark(cfg.ob_max_age, v) + str(v) + " свечей — " + d, "smc_set_ob_age_" + str(v)))
     rows.append(_back("smc_settings"))
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+# ── SMC РЕЖИМ ЛОНГ / ШОРТ / ОБА ──────────────────────
+
+def kb_smc_mode_long(user: UserSettings) -> InlineKeyboardMarkup:
+    cfg    = user.get_smc_cfg()
+    active = getattr(user, "smc_long_active", False)
+    status = "🟢 SMC ЛОНГ ВКЛЮЧЁН — нажми чтобы остановить" if active \
+           else "🔴 SMC ЛОНГ ВЫКЛЮЧЕН — нажми чтобы запустить"
+    tf_label = {"15m":"15 мин","1H":"1 час ⭐","4H":"4 часа"}.get(cfg.tf_key, cfg.tf_key)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _btn(status,                                                       "toggle_smc_long"),
+        _btn("📊 Таймфрейм: " + tf_label,                                 "smc_menu_tf"),
+        _btn("🔄 Интервал: " + str(cfg.scan_interval // 60) + " мин.",    "smc_menu_interval"),
+        _btn("⚙️ Все настройки SMC →",                                    "smc_settings"),
+        _back(),
+    ])
+
+
+def kb_smc_mode_short(user: UserSettings) -> InlineKeyboardMarkup:
+    cfg    = user.get_smc_cfg()
+    active = getattr(user, "smc_short_active", False)
+    status = "🟢 SMC ШОРТ ВКЛЮЧЁН — нажми чтобы остановить" if active \
+           else "🔴 SMC ШОРТ ВЫКЛЮЧЕН — нажми чтобы запустить"
+    tf_label = {"15m":"15 мин","1H":"1 час ⭐","4H":"4 часа"}.get(cfg.tf_key, cfg.tf_key)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _btn(status,                                                       "toggle_smc_short"),
+        _btn("📊 Таймфрейм: " + tf_label,                                 "smc_menu_tf"),
+        _btn("🔄 Интервал: " + str(cfg.scan_interval // 60) + " мин.",    "smc_menu_interval"),
+        _btn("⚙️ Все настройки SMC →",                                    "smc_settings"),
+        _back(),
+    ])
+
+
+def kb_smc_mode_both(user: UserSettings) -> InlineKeyboardMarkup:
+    cfg    = user.get_smc_cfg()
+    active = user.active and user.scan_mode == "smc_both"
+    status = "🟢 SMC ОБА ВКЛЮЧЁН — нажми чтобы остановить" if active \
+           else "🔴 SMC ОБА ВЫКЛЮЧЕН — нажми чтобы запустить"
+    tf_label = {"15m":"15 мин","1H":"1 час ⭐","4H":"4 часа"}.get(cfg.tf_key, cfg.tf_key)
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _btn(status,                                                       "toggle_smc_both"),
+        _btn("📊 Таймфрейм: " + tf_label,                                 "smc_menu_tf"),
+        _btn("🔄 Интервал: " + str(cfg.scan_interval // 60) + " мин.",    "smc_menu_interval"),
+        _btn("⚙️ Все настройки SMC →",                                    "smc_settings"),
+        _back(),
+    ])
 
 
 # ── СПРАВКА ───────────────────────────────────────────
