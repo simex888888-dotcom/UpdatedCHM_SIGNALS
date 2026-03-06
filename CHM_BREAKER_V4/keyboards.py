@@ -37,16 +37,30 @@ def trend_text(trend: dict) -> str:
 # ── ГЛАВНОЕ МЕНЮ ─────────────────────────────────────
 
 def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
+    strategy = getattr(user, "strategy", "LEVELS")
+    if strategy == "SMC":
+        smc_s = "🟢 SMC Сканер ВКЛЮЧЁН — нажми чтобы остановить" if user.active \
+               else "🔴 SMC Сканер ВЫКЛЮЧЕН — нажми чтобы запустить"
+        return InlineKeyboardMarkup(inline_keyboard=[
+            _btn(smc_s,                                                       "toggle_smc"),
+            _btn("⚙️ Настройки SMC →",                                        "smc_settings"),
+            _btn("🎯 Стратегия: 🧠 SMC — сменить",                            "show_strategy"),
+            [
+                InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
+                InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
+            ],
+            _btn("🔍 Анализ монеты — разовый сигнал по запросу",               "analyze_coin"),
+            _btn("❓ Справка — что делает каждая кнопка",                       "help_show"),
+        ])
+    # ── LEVELS (default) ──
     long_s  = "🟢" if user.long_active  else "⚫"
     short_s = "🟢" if user.short_active else "⚫"
     both_s  = "🟢" if (user.active and user.scan_mode == "both") else "⚫"
-    strategy = getattr(user, "strategy", "LEVELS")
-    strat_label = "📊 Уровни" if strategy == "LEVELS" else "🧠 SMC" if strategy == "SMC" else "⚙️ Стратегия"
     return InlineKeyboardMarkup(inline_keyboard=[
         _btn(long_s  + " 📈 ЛОНГ сканер  — только сигналы в лонг",  "mode_long"),
         _btn(short_s + " 📉 ШОРТ сканер  — только сигналы в шорт",  "mode_short"),
         _btn(both_s  + " ⚡ ОБА — лонги и шорты одновременно",       "mode_both"),
-        _btn("🎯 Стратегия: " + strat_label + " — сменить",          "show_strategy"),
+        _btn("🎯 Стратегия: 📊 Уровни — сменить",                    "show_strategy"),
         [
             InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
             InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
