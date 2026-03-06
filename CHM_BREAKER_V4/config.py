@@ -35,9 +35,12 @@ class Config:
     # ════════════════════════════════════════════════
 
     # Для сохранения данных после редеплоя:
-    # Docker: монтировать /data как volume
-    # Или задать DB_PATH через env переменную
-    DB_PATH = os.getenv("DB_PATH", "chm_bot.db")
+    # Docker: монтировать /data как volume, задать DB_PATH=/data/chm_bot.db
+    # По умолчанию — рядом со скриптом (не зависит от рабочей директории)
+    DB_PATH = os.getenv(
+        "DB_PATH",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "chm_bot.db"),
+    )
 
 
     # ════════════════════════════════════════════════

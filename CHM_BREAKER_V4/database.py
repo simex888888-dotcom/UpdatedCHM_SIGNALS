@@ -83,6 +83,8 @@ CREATE TABLE IF NOT EXISTS users (
 
     long_active      INTEGER DEFAULT 0,
     short_active     INTEGER DEFAULT 0,
+    smc_long_active  INTEGER DEFAULT 0,
+    smc_short_active INTEGER DEFAULT 0,
     long_cfg         TEXT    DEFAULT '{}',
     short_cfg        TEXT    DEFAULT '{}',
     smc_cfg          TEXT    DEFAULT '{}',
@@ -155,6 +157,8 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN max_level_tests INTEGER DEFAULT 4",
             "ALTER TABLE users ADD COLUMN strategy TEXT DEFAULT 'LEVELS'",
             "ALTER TABLE users ADD COLUMN smc_cfg TEXT DEFAULT '{}'",
+            "ALTER TABLE users ADD COLUMN smc_long_active INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN smc_short_active INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try:
@@ -225,7 +229,8 @@ async def db_get_active_users() -> list[dict]:
         async with db.execute(
             """SELECT * FROM users
                WHERE sub_status IN ('trial','active') AND sub_expires > ?
-               AND (active=1 OR long_active=1 OR short_active=1)""",
+               AND (active=1 OR long_active=1 OR short_active=1
+                    OR smc_long_active=1 OR smc_short_active=1)""",
             (now,)
         ) as cur:
             rows = await cur.fetchall()

@@ -40,6 +40,7 @@ from keyboards import (
     trend_text, help_text, kb_help,
     kb_smc_main, kb_smc_tf, kb_smc_interval, kb_smc_direction,
     kb_smc_confirmations, kb_smc_rr, kb_smc_sl, kb_smc_volume, kb_smc_ob_age,
+    kb_smc_mode_long, kb_smc_mode_short, kb_smc_mode_both,
 )
 from scanner_mid import signal_compact_keyboard, trade_records_keyboard
 
@@ -120,17 +121,19 @@ def main_text(user: UserSettings, trend: dict) -> str:
     sub_line = "Подписка: " + sub_em + " " + user.sub_status.upper() + " — " + user.time_left_str()
     strategy = getattr(user, "strategy", "LEVELS")
     if strategy == "SMC":
-        smc_s = "🟢 SMC ВКЛЮЧЁН" if user.active else "⚫ SMC выкл"
-        cfg   = user.get_smc_cfg()
+        long_s  = "🟢 ЛОНГ" if getattr(user, "smc_long_active",  False) else "⚫ лонг"
+        short_s = "🟢 ШОРТ" if getattr(user, "smc_short_active", False) else "⚫ шорт"
+        both_s  = "🟢 ОБА"  if (user.active and user.scan_mode == "smc_both") else "⚫ оба"
+        cfg     = user.get_smc_cfg()
         return (
             "⚡ <b>CHM BREAKER BOT — 🧠 Smart Money</b>" + NL + NL +
             trend_text(trend) + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
-            smc_s + NL +
+            long_s + "  |  " + short_s + "  |  " + both_s + NL +
             "Таймфрейм: <b>" + cfg.tf_key + "</b>  Интервал: <b>" + str(cfg.scan_interval // 60) + " мин.</b>" + NL +
             sub_line + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
-            "Управляй SMC сканером 👇"
+            "Выбери режим SMC сканера 👇"
         )
     # ── LEVELS ──
     long_s  = "🟢 ЛОНГ" if user.long_active  else "⚫ лонг выкл"
@@ -478,35 +481,8 @@ async def _do_analyze_multitf(symbol: str, fetcher, indicator,
         if sig:
             return _analyze_smc_text(symbol, sig)
 
-        # Если сигнала нет — показываем частичный анализ
-        trend = analysis.get("structure", {}).get("trend", "RANGING")
-        pd_z  = analysis.get("pd_zone", {}).get("zone", "NEUTRAL")
-        pos   = analysis.get("pd_zone", {}).get("position_pct", 50.0)
-        ob_b  = analysis.get("ob", {}).get("bull_ob", {})
-        ob_s  = analysis.get("ob", {}).get("bear_ob", {})
-        sweep_up   = analysis.get("liquidity", {}).get("sweep_up", {})
-        sweep_down = analysis.get("liquidity", {}).get("sweep_down", {})
-        trend_map  = {"BULLISH": "📈 Восходящий (HH/HL)",
-                      "BEARISH": "📉 Нисходящий (LH/LL)",
-                      "RANGING": "↔️ Боковик"}
-        zone_map   = {"PREMIUM": "📈 Премиум (>50%)", "DISCOUNT": "📉 Дискаунт (<50%)",
-                      "EQUILIBRIUM": "↔️ Равновесие"}
-
-        parts = [f"🔍 <b>SMC Анализ: {symbol}</b>" + NL + NL]
-        parts.append(f"📊 <b>Рыночная структура (1D):</b> {trend_map.get(trend, trend)}" + NL)
-        parts.append(f"📍 <b>Позиция цены:</b> {zone_map.get(pd_z, pd_z)} ({pos:.0f}% диапазона)" + NL)
-        if ob_b.get("found"):
-            parts.append(f"🟢 <b>Ближайший бычий OB:</b> {ob_b['ob_low']:.4g}–{ob_b['ob_high']:.4g}" + NL)
-        if ob_s.get("found"):
-            parts.append(f"🔴 <b>Ближайший медвежий OB:</b> {ob_s['ob_low']:.4g}–{ob_s['ob_high']:.4g}" + NL)
-        if sweep_up.get("swept"):
-            parts.append(f"✅ <b>Снята ликвидность снизу</b> ({sweep_up['level']:.4g})" + NL)
-        if sweep_down.get("swept"):
-            parts.append(f"✅ <b>Снята ликвидность сверху</b> ({sweep_down['level']:.4g})" + NL)
-
-        parts.append(NL + "⚠️ <b>Сигнала недостаточно подтверждений.</b>" + NL)
-        parts.append(_smc_recommendation(analysis, dfs.get("1H")))
-        return "".join(parts)
+        # Нет готового сигнала — показываем полный разбор зон по SMC
+        return _format_smc_deep_analysis(symbol, analysis, dfs)
 
     else:
         # LEVELS анализ (Price Action)
@@ -586,6 +562,115 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
             "Рекомендуется ждать подтверждения паттерна."
         )
     return "".join(lines)
+
+
+def _format_smc_deep_analysis(symbol: str, analysis: dict, dfs: dict) -> str:
+    """Детальный SMC разбор: структура + все зоны набора + ликвидность + FVG."""
+    NL = "\n"
+    struct  = analysis.get("structure", {})
+    pd_z    = analysis.get("pd_zone", {})
+    ob      = analysis.get("ob", {})
+    liq     = analysis.get("liquidity", {})
+    fvg     = analysis.get("fvg", {})
+
+    trend   = struct.get("trend", "RANGING")
+    choch   = struct.get("choch", False)
+    bos     = struct.get("bos", False)
+    zone    = pd_z.get("zone", "NEUTRAL")
+    pos     = pd_z.get("position_pct", 50.0)
+    hi      = pd_z.get("range_high", 0)
+    lo      = pd_z.get("range_low", 0)
+    eq50    = pd_z.get("eq50", 0)
+
+    ob_b    = ob.get("bull_ob", {})
+    ob_s    = ob.get("bear_ob", {})
+    sweep_u = liq.get("sweep_up",   {})
+    sweep_d = liq.get("sweep_down", {})
+    swing_h = liq.get("swing_high", 0)
+    swing_l = liq.get("swing_low",  0)
+    fvg_b   = fvg.get("bull_fvg", {}) if fvg else {}
+    fvg_s   = fvg.get("bear_fvg", {}) if fvg else {}
+
+    trend_map = {"BULLISH": "📈 Восходящий (HH/HL)",
+                 "BEARISH": "📉 Нисходящий (LH/LL)",
+                 "RANGING": "↔️ Боковик (флет)"}
+    zone_map  = {"PREMIUM":      "🔴 Премиум — зона продаж (>50%)",
+                 "DISCOUNT":     "🟢 Дискаунт — зона покупок (<50%)",
+                 "EQUILIBRIUM":  "⚖️ Равновесие (50%)"}
+
+    p = [f"🔍 <b>SMC Анализ: {symbol}</b>" + NL + NL]
+
+    # ── Структура рынка ──────────────────────────────
+    p.append("━━━━ 📊 СТРУКТУРА РЫНКА ━━━━" + NL)
+    p.append(f"Тренд: <b>{trend_map.get(trend, trend)}</b>" + NL)
+    if choch:
+        p.append("⚠️ <b>CHoCH</b> — смена структуры (разворот!)" + NL)
+    if bos:
+        p.append("✅ <b>BOS</b> — подтверждение тренда (пробой структуры)" + NL)
+    if hi and lo:
+        p.append(f"Диапазон: <code>{lo:.4g}</code> — <code>{hi:.4g}</code>" + NL)
+    if eq50:
+        p.append(f"Равновесие 50%: <code>{eq50:.4g}</code>" + NL)
+
+    # ── Позиция цены Premium/Discount ────────────────
+    p.append(NL + "━━━━ 📍 ПОЗИЦИЯ ЦЕНЫ ━━━━" + NL)
+    p.append(f"{zone_map.get(zone, zone)} ({pos:.0f}% диапазона)" + NL)
+    if zone == "DISCOUNT":
+        p.append("💡 Оптимальная зона для <b>LONG</b> — покупки с дискаунта" + NL)
+    elif zone == "PREMIUM":
+        p.append("💡 Оптимальная зона для <b>SHORT</b> — продажи с премиума" + NL)
+
+    # ── Order Blocks (зоны набора позиции) ───────────
+    p.append(NL + "━━━━ 🧱 ORDER BLOCKS ━━━━" + NL)
+    if ob_b.get("found"):
+        age_b = ob_b.get("age_candles", "?")
+        p.append(f"🟢 <b>Бычий OB (зона покупок):</b>" + NL)
+        p.append(f"   Зона: <code>{ob_b['ob_low']:.4g} – {ob_b['ob_high']:.4g}</code>" + NL)
+        p.append(f"   Возраст: {age_b} свечей" + NL)
+        p.append(f"   👉 Ждать возврат цены в зону → LONG" + NL)
+    else:
+        p.append("🟢 Бычий OB: не найден" + NL)
+
+    if ob_s.get("found"):
+        age_s = ob_s.get("age_candles", "?")
+        p.append(f"🔴 <b>Медвежий OB (зона продаж):</b>" + NL)
+        p.append(f"   Зона: <code>{ob_s['ob_low']:.4g} – {ob_s['ob_high']:.4g}</code>" + NL)
+        p.append(f"   Возраст: {age_s} свечей" + NL)
+        p.append(f"   👉 Ждать тест зоны сверху → SHORT" + NL)
+    else:
+        p.append("🔴 Медвежий OB: не найден" + NL)
+
+    # ── Fair Value Gaps ───────────────────────────────
+    fvg_shown = False
+    if fvg_b.get("found"):
+        p.append(NL + "━━━━ ⬜ FVG / IMBALANCE ━━━━" + NL)
+        fvg_shown = True
+        p.append(f"🟢 <b>Бычий FVG:</b> <code>{fvg_b['low']:.4g} – {fvg_b['high']:.4g}</code>" + NL)
+        p.append(f"   👉 Незакрытый дисбаланс — возможна митигация (LONG)" + NL)
+    if fvg_s.get("found"):
+        if not fvg_shown:
+            p.append(NL + "━━━━ ⬜ FVG / IMBALANCE ━━━━" + NL)
+        p.append(f"🔴 <b>Медвежий FVG:</b> <code>{fvg_s['low']:.4g} – {fvg_s['high']:.4g}</code>" + NL)
+        p.append(f"   👉 Незакрытый дисбаланс — возможна митигация (SHORT)" + NL)
+
+    # ── Ликвидность ───────────────────────────────────
+    p.append(NL + "━━━━ 💧 ЛИКВИДНОСТЬ ━━━━" + NL)
+    if swing_h:
+        swept_h = "✅ снята" if sweep_d.get("swept") else "⏳ не снята"
+        p.append(f"Swing High (ликвидность): <code>{swing_h:.4g}</code>  {swept_h}" + NL)
+    if swing_l:
+        swept_l = "✅ снята" if sweep_u.get("swept") else "⏳ не снята"
+        p.append(f"Swing Low  (ликвидность): <code>{swing_l:.4g}</code>  {swept_l}" + NL)
+    if sweep_u.get("swept"):
+        p.append(f"✅ <b>Sweep снизу</b> ({sweep_u['level']:.4g}) — ликвидность снята, возможен разворот вверх" + NL)
+    if sweep_d.get("swept"):
+        p.append(f"✅ <b>Sweep сверху</b> ({sweep_d['level']:.4g}) — ликвидность снята, возможен разворот вниз" + NL)
+
+    # ── Рекомендация ─────────────────────────────────
+    p.append(NL + "━━━━ 💡 РЕКОМЕНДАЦИЯ ━━━━" + NL)
+    p.append(_smc_recommendation(analysis, dfs.get("1H")) + NL)
+    p.append(NL + "⚠️ <i>Активного сигнала нет. Дождись возврата цены в зону набора.</i>")
+    return "".join(p)
 
 
 def _smc_recommendation(analysis: dict, df_1h=None) -> str:
@@ -839,7 +924,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     # ─── АНАЛИЗ МОНЕТЫ ПО ЗАПРОСУ ────────────────────
 
     async def _do_analyze(msg_or_cb, user: UserSettings, symbol: str):
-        """Общая функция анализа монеты и отправки результата."""
+        """Анализ любой монеты — всегда возвращает детальный разбор зон."""
         is_cb = isinstance(msg_or_cb, CallbackQuery)
         send  = (msg_or_cb.message.answer if is_cb else msg_or_cb.answer)
 
@@ -847,49 +932,43 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await send("⚠️ Укажите тикер монеты. Пример: /analyze BTC")
             return
 
-        cfg  = user.shared_cfg()
+        symbol = _normalize_symbol(symbol)
+
+        # Rate-limit
+        uid = user.user_id
+        now = time.time()
+        if now - _analyze_cooldown.get(uid, 0) < _ANALYZE_COOLDOWN_SEC:
+            await send(f"⏳ Подожди {_ANALYZE_COOLDOWN_SEC} секунд между запросами.", parse_mode="HTML")
+            return
+        _analyze_cooldown[uid] = now
+
         wait_msg = await send(
-            "⏳ <b>Анализирую " + symbol.upper() + "...</b>\n\nПодождите несколько секунд.",
+            "⏳ <b>Глубокий анализ " + symbol + "...</b>\n\nЗагружаю свечи 1H/4H/1D...",
             parse_mode="HTML",
         )
-        result = await scanner.analyze_on_demand(symbol, cfg)
+        try:
+            from indicator import CHMIndicator
+            from scanner_mid import IndConfig
+            ind_config_obj = IndConfig(
+                TIMEFRAME="1H", PIVOT_STRENGTH=7, ATR_PERIOD=14, ATR_MULT=1.0,
+                MAX_RISK_PCT=1.5, EMA_FAST=50, EMA_SLOW=200,
+                RSI_PERIOD=14, RSI_OB=65, RSI_OS=35,
+                VOL_MULT=1.0, VOL_LEN=20, MAX_LEVEL_AGE=100,
+                MAX_RETEST_BARS=30, COOLDOWN_BARS=0, ZONE_BUFFER=0.3,
+                TP1_RR=2.0, TP2_RR=3.0, TP3_RR=4.5,
+            )
+            indicator_obj = CHMIndicator(ind_config_obj)
+            result_text = await _do_analyze_multitf(
+                symbol, _fetcher_for_smc, indicator_obj, user.strategy, bot
+            )
+        except Exception as e:
+            log.error(f"_do_analyze error {symbol}: {e}")
+            result_text = f"❌ Ошибка анализа <b>{symbol}</b>: {e}"
         try:
             await wait_msg.delete()
         except Exception:
             pass
-
-        if result is None:
-            await send(
-                "🔍 <b>Анализ " + symbol.upper() + "</b>\n\n"
-                "Сигнала нет — цена вдали от ключевых уровней или сигнал не прошёл фильтры.\n\n"
-                "<i>Попробуйте другой таймфрейм или проверьте позже.</i>",
-                parse_mode="HTML",
-            )
-            return
-
-        sig, text = result
-        trade_id  = str(user.user_id) + "_ondemand_" + str(int(time.time() * 1000))
-        risk      = abs(sig.entry - sig.sl)
-        sign      = 1 if sig.direction == "LONG" else -1
-        await db.db_add_trade({
-            "trade_id":      trade_id,
-            "user_id":       user.user_id,
-            "symbol":        sig.symbol,
-            "direction":     sig.direction,
-            "entry":         sig.entry,
-            "sl":            sig.sl,
-            "tp1":           sig.entry + sign * risk * cfg.tp1_rr,
-            "tp2":           sig.entry + sign * risk * cfg.tp2_rr,
-            "tp3":           sig.entry + sign * risk * cfg.tp3_rr,
-            "tp1_rr":        cfg.tp1_rr,
-            "tp2_rr":        cfg.tp2_rr,
-            "tp3_rr":        cfg.tp3_rr,
-            "quality":       sig.quality,
-            "timeframe":     cfg.timeframe,
-            "breakout_type": sig.breakout_type,
-            "created_at":    time.time(),
-        })
-        await send(text, parse_mode="HTML", reply_markup=signal_compact_keyboard(trade_id, sig.symbol))
+        await send(result_text, parse_mode="HTML")
 
     @dp.message(Command("analyze"))
     async def cmd_analyze(msg: Message, state: FSMContext):
@@ -999,22 +1078,66 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await cb.answer()
         await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_change(user.strategy))
 
-    # ─── SMC ГЛАВНЫЙ ПЕРЕКЛЮЧАТЕЛЬ ────────────────────
+    # ─── SMC РЕЖИМЫ (ЛОНГ / ШОРТ / ОБА) ──────────────
 
-    @dp.callback_query(F.data == "toggle_smc")
-    async def toggle_smc(cb: CallbackQuery):
+    @dp.callback_query(F.data == "mode_smc_long")
+    async def mode_smc_long(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "📈 <b>SMC ЛОНГ сканер</b>", kb_smc_mode_long(user))
+
+    @dp.callback_query(F.data == "mode_smc_short")
+    async def mode_smc_short(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "📉 <b>SMC ШОРТ сканер</b>", kb_smc_mode_short(user))
+
+    @dp.callback_query(F.data == "mode_smc_both")
+    async def mode_smc_both(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "⚡ <b>SMC ОБА</b>", kb_smc_mode_both(user))
+
+    @dp.callback_query(F.data == "toggle_smc_long")
+    async def toggle_smc_long(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         has, reason = user.check_access()
         if not has:
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
-        user.active    = not user.active
-        user.scan_mode = "smc"
+        user.smc_long_active = not user.smc_long_active
         await um.save(user)
-        status = "🟢 SMC включён!" if user.active else "🔴 SMC выключен."
-        await cb.answer(status)
-        trend = scanner.get_trend()
-        await safe_edit(cb, main_text(user, trend), kb_main(user))
+        await cb.answer("🟢 SMC ЛОНГ включён!" if user.smc_long_active else "🔴 SMC ЛОНГ выключен.")
+        await safe_edit(cb, "📈 <b>SMC ЛОНГ сканер</b>", kb_smc_mode_long(user))
+
+    @dp.callback_query(F.data == "toggle_smc_short")
+    async def toggle_smc_short(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        has, reason = user.check_access()
+        if not has:
+            await cb.answer("Подписка истекла!", show_alert=True)
+            await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
+        user.smc_short_active = not user.smc_short_active
+        await um.save(user)
+        await cb.answer("🟢 SMC ШОРТ включён!" if user.smc_short_active else "🔴 SMC ШОРТ выключен.")
+        await safe_edit(cb, "📉 <b>SMC ШОРТ сканер</b>", kb_smc_mode_short(user))
+
+    @dp.callback_query(F.data == "toggle_smc_both")
+    async def toggle_smc_both(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        has, reason = user.check_access()
+        if not has:
+            await cb.answer("Подписка истекла!", show_alert=True)
+            await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
+        is_active = user.active and user.scan_mode == "smc_both"
+        if is_active:
+            user.active = False
+        else:
+            user.active    = True
+            user.scan_mode = "smc_both"
+        await um.save(user)
+        await cb.answer("🟢 SMC ОБА включён!" if user.active else "🔴 SMC ОБА выключен.")
+        await safe_edit(cb, "⚡ <b>SMC ОБА</b>", kb_smc_mode_both(user))
 
     # ─── SMC НАСТРОЙКИ ────────────────────────────────
 

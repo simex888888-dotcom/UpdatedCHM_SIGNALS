@@ -170,9 +170,13 @@ class UserSettings:
     short_tf:         str   = "1h"
     short_interval:   int   = 3600
 
-    # ── Мультисканнинг ────────────────────────────
+    # ── Мультисканнинг LEVELS ─────────────────────
     long_active:      bool  = False   # лонг сканер включён
     short_active:     bool  = False   # шорт сканер включён
+
+    # ── Мультисканнинг SMC ────────────────────────
+    smc_long_active:  bool  = False   # SMC лонг сканер
+    smc_short_active: bool  = False   # SMC шорт сканер
 
     # JSON-строки с независимыми настройками
     long_cfg:         str   = "{}"
@@ -275,8 +279,8 @@ class UserSettings:
         bool_fields = {
             "active", "trial_used", "use_rsi", "use_volume",
             "use_pattern", "use_htf", "notify_signal", "notify_breakout",
-            "long_active", "short_active", "trend_only",
-            "trial_reminder_sent", "expired_notified",
+            "long_active", "short_active", "smc_long_active", "smc_short_active",
+            "trend_only", "trial_reminder_sent", "expired_notified",
         }
         d = {}
         for f in fields(self):
@@ -290,8 +294,8 @@ def _from_db(row: dict) -> UserSettings:
     bool_fields = {
         "active", "trial_used", "use_rsi", "use_volume",
         "use_pattern", "use_htf", "notify_signal", "notify_breakout",
-        "long_active", "short_active", "trend_only",
-        "trial_reminder_sent", "expired_notified",
+        "long_active", "short_active", "smc_long_active", "smc_short_active",
+        "trend_only", "trial_reminder_sent", "expired_notified",
     }
     for f in fields(u):
         if f.name in row and row[f.name] is not None:
