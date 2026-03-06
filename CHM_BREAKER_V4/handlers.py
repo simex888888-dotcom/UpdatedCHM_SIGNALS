@@ -2457,12 +2457,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         except ValueError:
             await msg.answer("❌ user_id и days должны быть числами"); return
         target = await um.get_or_create(uid)
-        import datetime
-        if target.sub_until and target.sub_until > datetime.datetime.utcnow():
-            target.sub_until += datetime.timedelta(days=days)
-        else:
-            target.sub_until = datetime.datetime.utcnow() + datetime.timedelta(days=days)
-        target.sub_status = "active"
+        target.grant_access(days)
         await um.save(target)
         await msg.answer("✅ Пользователю " + str(uid) + " выдана подписка на " + str(days) + " дней.")
         try:
@@ -2482,8 +2477,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         except ValueError:
             await msg.answer("❌ user_id должен быть числом"); return
         target = await um.get_or_create(uid)
-        target.sub_status = "expired"
-        import datetime; target.sub_until = datetime.datetime.utcnow()
+        target.sub_status  = "expired"
+        target.sub_expires = 0.0
         await um.save(target)
         await msg.answer("✅ Подписка пользователя " + str(uid) + " отозвана.")
 
@@ -2538,7 +2533,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             "👤 <b>Пользователь #" + str(uid) + "</b>" + NL +
             "Username: @" + (target.username or "—") + NL +
             "Статус: " + target.sub_status + NL +
-            "Подписка до: " + (str(target.sub_until)[:10] if target.sub_until else "—") + NL +
+            "Подписка до: " + (target.time_left_str() if target.sub_expires > 0 else "—") + NL +
             "Активен: " + ("✅" if target.active else "❌") + NL +
             "Сигналов получено: " + str(target.signals_received) + NL +
             "Стратегия: " + (_get_user_strategy(uid) or "не выбрана")
