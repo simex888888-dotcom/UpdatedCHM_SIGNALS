@@ -116,17 +116,32 @@ class AnalyzeState(StatesGroup):
 
 def main_text(user: UserSettings, trend: dict) -> str:
     NL = "\n"
+    sub_em  = {"active":"✅","trial":"🆓","expired":"❌","banned":"🚫"}.get(user.sub_status,"❓")
+    sub_line = "Подписка: " + sub_em + " " + user.sub_status.upper() + " — " + user.time_left_str()
+    strategy = getattr(user, "strategy", "LEVELS")
+    if strategy == "SMC":
+        smc_s = "🟢 SMC ВКЛЮЧЁН" if user.active else "⚫ SMC выкл"
+        cfg   = user.get_smc_cfg()
+        return (
+            "⚡ <b>CHM BREAKER BOT — 🧠 Smart Money</b>" + NL + NL +
+            trend_text(trend) + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            smc_s + NL +
+            "Таймфрейм: <b>" + cfg.tf_key + "</b>  Интервал: <b>" + str(cfg.scan_interval // 60) + " мин.</b>" + NL +
+            sub_line + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "Управляй SMC сканером 👇"
+        )
+    # ── LEVELS ──
     long_s  = "🟢 ЛОНГ" if user.long_active  else "⚫ лонг выкл"
     short_s = "🟢 ШОРТ" if user.short_active else "⚫ шорт выкл"
     both_s  = "🟢 ОБА"  if (user.active and user.scan_mode == "both") else "⚫ оба выкл"
-    sub_em  = {"active":"✅","trial":"🆓","expired":"❌","banned":"🚫"}.get(user.sub_status,"❓")
     return (
         "⚡ <b>CHM BREAKER BOT</b>" + NL + NL +
         trend_text(trend) + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
         long_s + "  |  " + short_s + "  |  " + both_s + NL +
-        "Подписка: " + sub_em + " " + user.sub_status.upper() +
-        " — " + user.time_left_str() + NL +
+        sub_line + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
         "Выбери режим сканера 👇"
     )
@@ -983,6 +998,23 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         await cb.answer()
         await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_change(user.strategy))
+
+    # ─── SMC ГЛАВНЫЙ ПЕРЕКЛЮЧАТЕЛЬ ────────────────────
+
+    @dp.callback_query(F.data == "toggle_smc")
+    async def toggle_smc(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        has, reason = user.check_access()
+        if not has:
+            await cb.answer("Подписка истекла!", show_alert=True)
+            await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
+        user.active    = not user.active
+        user.scan_mode = "smc"
+        await um.save(user)
+        status = "🟢 SMC включён!" if user.active else "🔴 SMC выключен."
+        await cb.answer(status)
+        trend = scanner.get_trend()
+        await safe_edit(cb, main_text(user, trend), kb_main(user))
 
     # ─── SMC НАСТРОЙКИ ────────────────────────────────
 
