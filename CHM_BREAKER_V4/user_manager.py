@@ -82,6 +82,38 @@ class TradeCfg:
         return TradeCfg(**merged)
 
 
+# ── SMC-настройки пользователя ────────────────────────
+
+@dataclass
+class SMCUserCfg:
+    """Персональный конфиг SMC-сканера."""
+    tf_key:           str   = "1H"        # "15m" | "1H" | "4H" — основной таймфрейм
+    scan_interval:    int   = 900         # интервал сканирования (сек)
+    direction:        str   = "BOTH"      # "LONG" | "SHORT" | "BOTH"
+    min_confirmations: int  = 3           # мин. подтверждений из 5 для сигнала
+    min_rr:           float = 2.0         # мин. R:R
+    sl_buffer_pct:    float = 0.15        # буфер SL от экстремума OB (%)
+    min_volume_usdt:  float = 5_000_000   # мин. объём монеты ($)
+    # ── Фильтры структуры ──────────────────────────
+    fvg_enabled:      bool  = True        # учитывать FVG в подтверждениях
+    choch_enabled:    bool  = True        # учитывать CHoCH
+    ob_use_breaker:   bool  = True        # Breaker Blocks
+    ob_max_age:       int   = 50          # макс. возраст OB в свечах
+    sweep_close_req:  bool  = True        # liquidity sweep — требуется закрытие за уровнем
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self))
+
+    @classmethod
+    def from_json(cls, s: str) -> "SMCUserCfg":
+        try:
+            d = json.loads(s or "{}")
+            valid = {f.name for f in fields(cls)}
+            return cls(**{k: v for k, v in d.items() if k in valid})
+        except Exception:
+            return cls()
+
+
 @dataclass
 class UserSettings:
     user_id:          int
@@ -145,6 +177,7 @@ class UserSettings:
     # JSON-строки с независимыми настройками
     long_cfg:         str   = "{}"
     short_cfg:        str   = "{}"
+    smc_cfg:          str   = "{}"
 
     signals_received:     int   = 0
     trial_reminder_sent:  bool  = False
@@ -201,6 +234,12 @@ class UserSettings:
 
     def set_short_cfg(self, cfg: TradeCfg):
         self.short_cfg = cfg.to_json()
+
+    def get_smc_cfg(self) -> "SMCUserCfg":
+        return SMCUserCfg.from_json(self.smc_cfg)
+
+    def set_smc_cfg(self, cfg: "SMCUserCfg"):
+        self.smc_cfg = cfg.to_json()
 
     def any_active(self) -> bool:
         return self.long_active or self.short_active or (self.active and self.scan_mode == "both")

@@ -103,21 +103,23 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
     if not smc_users:
         return
 
-    log.info(f"SMC scan: {len(smc_users)} SMC users")
-    cfg_obj = SMCConfig()
+    log.info(f"SMC scan: {len(smc_users)} SMC users, tf={tf_mtf}")
+    base_cfg = SMCConfig()
 
-    # Загружаем список монет (переиспользуем fetcher)
+    # Наименьший минимальный объём среди всех SMC-пользователей (чтобы покрыть всех)
+    min_vol = min((u.get_smc_cfg().min_volume_usdt for u in smc_users), default=5_000_000)
+
+    # Загружаем список монет
     try:
         import cache
         coins = await cache.get_coins()
         if not coins:
-            coins = await fetcher.get_all_usdt_pairs(min_volume_usdt=5_000_000)
+            coins = await fetcher.get_all_usdt_pairs(min_volume_usdt=min_vol)
     except Exception as e:
         log.warning(f"SMC: не удалось загрузить монеты: {e}")
         return
 
-    # Ограничиваем сканирование топ-30 по объёму
-    coins = coins[:30]
+    coins = coins[:50]
 
     for symbol in coins:
         try:
@@ -134,25 +136,46 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
 
         try:
             analysis = analyzer.analyze(symbol, df_htf_data, df_mtf_data, df_ltf_data)
-            sig = build_smc_signal(symbol, analysis, cfg_obj,
-                                   tf_htf=tf_htf, tf_mtf=tf_mtf, tf_ltf=tf_ltf)
         except Exception as e:
-            log.debug(f"SMC {symbol}: {e}")
+            log.debug(f"SMC {symbol} analyze: {e}")
             continue
 
-        if sig is None:
-            continue
-
-        # Антидубликат
-        sig_hash = f"{symbol}_{sig.direction}_{sig.score}"
-        last_sent = _sent_signals.get(sig_hash, 0)
-        if time.time() - last_sent < _DEDUP_HOURS * 3600:
-            continue
-        _sent_signals[sig_hash] = time.time()
-
-        text = _signal_text_smc(sig)
-
+        # Отправляем каждому пользователю согласно его персональным фильтрам
         for user in smc_users:
+            ucfg = user.get_smc_cfg()
+
+            # Применяем пользовательский конфиг поверх базового
+            cfg_obj = SMCConfig()
+            cfg_obj.MIN_CONFIRMATIONS   = ucfg.min_confirmations
+            cfg_obj.MIN_RR              = ucfg.min_rr
+            cfg_obj.SL_BUFFER_PCT       = ucfg.sl_buffer_pct
+            cfg_obj.FVG_ENABLED         = ucfg.fvg_enabled
+            cfg_obj.CHOCH_ENABLED       = ucfg.choch_enabled
+            cfg_obj.OB_USE_BREAKER      = ucfg.ob_use_breaker
+            cfg_obj.OB_MAX_AGE_CANDLES  = ucfg.ob_max_age
+            cfg_obj.SWEEP_CLOSE_REQUIRED = ucfg.sweep_close_req
+
+            try:
+                sig = build_smc_signal(symbol, analysis, cfg_obj,
+                                       tf_htf=tf_htf, tf_mtf=tf_mtf, tf_ltf=tf_ltf)
+            except Exception as e:
+                log.debug(f"SMC {symbol} build {user.user_id}: {e}")
+                continue
+
+            if sig is None:
+                continue
+
+            # Фильтр по направлению
+            if ucfg.direction != "BOTH" and sig.direction != ucfg.direction:
+                continue
+
+            # Антидубликат per-user
+            sig_hash = f"{user.user_id}_{symbol}_{sig.direction}_{sig.score}"
+            if time.time() - _sent_signals.get(sig_hash, 0) < _DEDUP_HOURS * 3600:
+                continue
+            _sent_signals[sig_hash] = time.time()
+
+            text = _signal_text_smc(sig)
             try:
                 await bot.send_message(
                     user.user_id, text,
