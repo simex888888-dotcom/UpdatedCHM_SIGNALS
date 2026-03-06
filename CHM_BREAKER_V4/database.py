@@ -347,3 +347,47 @@ async def db_get_user_stats(user_id: int) -> dict:
         "tp2_cnt": sum(1 for t in wins if t["result"] == "TP2"),
         "tp3_cnt": sum(1 for t in wins if t["result"] == "TP3"),
     }
+
+
+# ── Алиасы для handlers.py ──────────────────────────────────────────────────
+
+async def get_user_stats(user_id: int) -> dict:
+    return await db_get_user_stats(user_id)
+
+
+async def get_signal(signal_id) -> Optional[dict]:
+    """Получить сигнал/сделку по trade_id."""
+    return await db_get_trade(str(signal_id))
+
+
+async def get_signal_records(signal_id) -> list[dict]:
+    """Получить записи результатов для сигнала (возвращает саму сделку если есть)."""
+    trade = await db_get_trade(str(signal_id))
+    return [trade] if trade else []
+
+
+async def add_trade_record(user_id: int, signal_id, result: str, rr: float):
+    """Записать результат сделки."""
+    await db_set_trade_result(str(signal_id), result.upper(), rr)
+
+
+async def get_user_records(user_id: int, limit: int = 50) -> list[dict]:
+    """Получить последние сделки пользователя."""
+    trades = await db_get_user_trades(user_id)
+    return trades[-limit:] if len(trades) > limit else trades
+
+
+async def update_signal_tp(signal_id, *, tp1=None, tp2=None, tp3=None):
+    """Обновить TP1/TP2/TP3 для сигнала/сделки."""
+    updates = {}
+    if tp1 is not None: updates["tp1"] = tp1
+    if tp2 is not None: updates["tp2"] = tp2
+    if tp3 is not None: updates["tp3"] = tp3
+    if not updates:
+        return
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    vals = list(updates.values()) + [str(signal_id)]
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(f"UPDATE trades SET {set_clause} WHERE trade_id=?", vals)
+            await db.commit()

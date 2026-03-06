@@ -2378,14 +2378,14 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def my_stats(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         await cb.answer()
-        stats = await db.get_user_stats(user.user_id)
+        stats = await db.db_get_user_stats(user.user_id)
         await safe_edit(cb, stats_text(user, stats), kb_back())
 
     @dp.callback_query(F.data == "my_chart")
     async def my_chart(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         await cb.answer()
-        stats = await db.get_user_stats(user.user_id)
+        stats = await db.db_get_user_stats(user.user_id)
         if not stats or stats.get("total", 0) < 2:
             await cb.message.answer("📊 Нужно минимум 2 сделки для графика."); return
         # Build equity curve
@@ -2426,13 +2426,14 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def cmd_admin(msg: Message):
         if msg.from_user.id not in config.ADMIN_IDS:
             await msg.answer("❌ Нет доступа"); return
-        total = await db.count_users()
-        active = await db.count_active_users()
-        subs = await db.count_subscribed_users()
+        stats = await db.db_stats_summary()
+        total  = stats.get("total", 0)
+        active = stats.get("scanning", 0)
+        subs   = stats.get("active", 0) + stats.get("trial", 0)
         await msg.answer(
             "🔧 <b>Панель администратора</b>\n\n"
             "👥 Пользователей: <b>" + str(total) + "</b>\n"
-            "🟢 Активных: <b>" + str(active) + "</b>\n"
+            "🟢 Сканируют: <b>" + str(active) + "</b>\n"
             "💳 С подпиской: <b>" + str(subs) + "</b>\n\n"
             "Команды:\n"
             "/give [user_id] [days] — выдать подписку\n"
@@ -2551,7 +2552,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         text = msg.text.partition(" ")[2].strip()
         if not text:
             await msg.answer("Использование: /broadcast [текст]"); return
-        all_users = await db.get_all_users()
+        all_users = await db.db_get_all_users()
         sent = 0; failed = 0
         for u in all_users:
             try:
