@@ -19,8 +19,6 @@ import database as db
 
 log = logging.getLogger("CHM.Users")
 
-TRIAL_SECONDS = 6 * 3600
-
 
 # ── Полный набор торговых настроек ───────────────────
 # Используется и как shared, и как long_cfg / short_cfg
@@ -60,7 +58,7 @@ class TradeCfg:
     zone_pct:        float = 0.7   # Ширина зоны уровня в % от цены
     max_dist_pct:    float = 1.5   # Макс. дистанция до уровня для входа (%)
     min_rr:          float = 2.0   # Минимальный R:R
-    max_level_tests: int   = 4     # Макс. тестов уровня (при 4+ — ожидается пробой)
+    max_level_tests: int   = 4     # Макс. тестов уровня до пропуска сигнала (ожидается пробой)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -90,10 +88,10 @@ class UserSettings:
     username:         str   = ""
     active:           bool  = False       # legacy — оставляем для совместимости
 
-    sub_status:       str   = "trial"
+    sub_status:       str   = "expired"   # Без триала — сразу expired
     sub_expires:      float = 0.0
     trial_started:    float = 0.0
-    trial_used:       bool  = False
+    trial_used:       bool  = True        # Триал не предоставляется
 
     # Общие настройки (используются в режиме "both" и как база для long/short)
     timeframe:        str   = "1h"
@@ -149,8 +147,8 @@ class UserSettings:
     short_cfg:        str   = "{}"
 
     signals_received:     int   = 0
-    trial_reminder_sent:  bool  = False   # отправлено ли напоминание за 1ч до конца триала
-    expired_notified:     bool  = False   # отправлено ли уведомление об окончании
+    trial_reminder_sent:  bool  = False
+    expired_notified:     bool  = False
 
     # ── Хелперы конфигов ─────────────────────────
 
@@ -270,14 +268,13 @@ class UserManager:
         row = await db.db_get_user(user_id)
         if row:
             return _from_db(row)
-        now  = time.time()
+        # Новый пользователь — без триала, сразу expired (нужна подписка)
         user = UserSettings(
             user_id=user_id, username=username,
-            sub_status="trial", trial_started=now,
-            sub_expires=now + TRIAL_SECONDS, trial_used=True,
+            sub_status="expired", sub_expires=0, trial_used=True,
         )
+        log.info("Новый пользователь: @" + username + " (" + str(user_id) + ")")
         await db.db_upsert_user(user.to_db())
-        log.info("Новый юзер: @" + username + " (" + str(user_id) + ")")
         return user
 
     async def save(self, user: UserSettings):

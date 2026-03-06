@@ -18,6 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Optional, Literal
 
+import numpy as np
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -29,6 +30,39 @@ from user_manager import UserManager, UserSettings, TradeCfg
 from fetcher import OKXFetcher
 from indicator import CHMIndicator, SignalResult
 from keyboards import kb_contact_admin
+
+
+def _compute_correlation(df1, df2, periods: int = 30) -> float:
+    """Корреляция Пирсона по % доходности за последние N периодов."""
+    try:
+        r1 = df1["close"].pct_change().dropna().tail(periods)
+        r2 = df2["close"].pct_change().dropna().tail(periods)
+        n = min(len(r1), len(r2))
+        if n < 10:
+            return 0.0
+        v1 = r1.tail(n).values
+        v2 = r2.tail(n).values
+        corr = float(np.corrcoef(v1, v2)[0, 1])
+        return round(corr, 2) if not np.isnan(corr) else 0.0
+    except Exception:
+        return 0.0
+
+
+def _corr_label(btc_corr: float, eth_corr: float) -> str:
+    """Текстовый ярлык зависимости монеты от BTC/ETH."""
+    HIGH = 0.65
+    follows_btc = btc_corr >= HIGH
+    follows_eth = eth_corr >= HIGH
+    if follows_btc and follows_eth:
+        return f"📡 Следует за BTC ({btc_corr:+.2f}) и ETH ({eth_corr:+.2f})"
+    elif follows_btc:
+        return f"📡 Следует за BTC ({btc_corr:+.2f})"
+    elif follows_eth:
+        return f"📡 Следует за ETH ({eth_corr:+.2f})"
+    elif btc_corr < 0.3 and eth_corr < 0.3:
+        return f"🔮 Движется самостоятельно (BTC {btc_corr:+.2f} / ETH {eth_corr:+.2f})"
+    else:
+        return f"📊 Слабая связь с рынком (BTC {btc_corr:+.2f} / ETH {eth_corr:+.2f})"
 
 log = logging.getLogger("CHM.Scanner")
 
@@ -182,7 +216,8 @@ def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
         "🎯 Цель 2: <code>" + "{:.6g}".format(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
         "🏆 Цель 3: <code>" + "{:.6g}".format(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL + NL +
-        "📊 " + sig.trend_local + "  |  RSI: <code>" + "{:.1f}".format(sig.rsi) + "</code>  |  Vol: <code>x" + "{:.1f}".format(sig.volume_ratio) + "</code>" + NL + NL +
+        "📊 " + sig.trend_local + "  |  RSI: <code>" + "{:.1f}".format(sig.rsi) + "</code>  |  Vol: <code>x" + "{:.1f}".format(sig.volume_ratio) + "</code>" + NL +
+        _corr_label(sig.btc_corr, sig.eth_corr) + NL + NL +
         "⚡ <i>CHM Laboratory — CHM BREAKER</i>" + NL + NL +
         "👇 <i>Отметь результат когда сделка закроется:</i>"
     )
@@ -237,8 +272,8 @@ class MidScanner:
                 btc = self._global_trend.get("BTC", {})
                 eth = self._global_trend.get("ETH", {})
                 log.info(
-                    "🌍 Тренд: BTC=" + btc.get("trend", "?") +
-                    " ETH=" + eth.get("trend", "?")
+                    "🌍 Тренд: BTC=" + btc.get("trend_text", "?") +
+                    " ETH=" + eth.get("trend_text", "?")
                 )
             except Exception as e:
                 log.warning("Тренд: " + str(e))
@@ -304,6 +339,14 @@ class MidScanner:
         cfg     = job.cfg
         signals = 0
 
+        # Загружаем BTC и ETH для корреляции один раз на всё задание
+        btc_df = candles.get("BTC-USDT-SWAP")
+        if btc_df is None:
+            btc_df = await self._fetch("BTC-USDT-SWAP", job.tf)
+        eth_df = candles.get("ETH-USDT-SWAP")
+        if eth_df is None:
+            eth_df = await self._fetch("ETH-USDT-SWAP", job.tf)
+
         for sym, df in candles.items():
             df_htf = await self._fetch(sym, "1D") if cfg.use_htf else None
             try:
@@ -320,6 +363,13 @@ class MidScanner:
             # Фильтр тренд-сигналов — пропускаем контр-трендовые если включено
             if cfg.trend_only and sig.is_counter_trend:
                 continue
+
+            # Корреляция с BTC/ETH (не для самих BTC/ETH)
+            if sym not in ("BTC-USDT-SWAP", "ETH-USDT-SWAP"):
+                if btc_df is not None:
+                    sig.btc_corr = _compute_correlation(df, btc_df)
+                if eth_df is not None:
+                    sig.eth_corr = _compute_correlation(df, eth_df)
 
             if user.notify_signal:
                 await self._send(user, sig, cfg)
@@ -396,7 +446,7 @@ class MidScanner:
     # ── Уведомление об истечении ──────────────────────
 
     async def _notify_expired(self, user: UserSettings):
-        # Останавливаем сканеры в любом случае
+        """Уведомление об окончании подписки — останавливаем сканеры."""
         user.long_active  = False
         user.short_active = False
         user.active       = False
@@ -408,20 +458,19 @@ class MidScanner:
             user.expired_notified = True
             await self.um.save(user)
             cfg = self.cfg
-            if user.trial_used:
-                text = (
-                    "⏰ <b>Пробный период завершён!</b>\n\n"
-                    "Надеемся, что вам понравился бот! 🎉\n\n"
-                    "📅 30 дней  — <b>" + cfg.PRICE_30_DAYS + "</b>\n"
-                    "📅 90 дней  — <b>" + cfg.PRICE_90_DAYS + "</b>\n\n"
-                    "Напишите администратору для оформления подписки 👇"
-                )
-            else:
-                text = (
-                    "⏰ <b>Подписка истекла!</b>\n\n"
-                    "📅 30 дней  — <b>" + cfg.PRICE_30_DAYS + "</b>\n\n"
-                    "Напишите администратору для продления 👇"
-                )
+            text = (
+                "⏰ <b>Подписка истекла!</b>\n\n"
+                "🤖 <b>CHM BOT — автоматический сканер твоей прибыли. Бот, который не даст проспать профит.</b>\n\n"
+                "🤖 Только БОТ:\n"
+                "  📅 1 месяц  — <b>" + cfg.BOT_PRICE_30 + "</b>\n"
+                "  📅 3 месяца — <b>" + cfg.BOT_PRICE_90 + "</b>\n"
+                "  📅 1 ГОД    — <b>" + cfg.BOT_PRICE_365 + "</b>\n\n"
+                "🤖📊 БОТ + ИНДИКАТОР:\n"
+                "  📅 1 месяц  — <b>" + cfg.FULL_PRICE_30 + "</b>\n"
+                "  📅 3 месяца — <b>" + cfg.FULL_PRICE_90 + "</b>\n"
+                "  📅 1 ГОД    — <b>" + cfg.FULL_PRICE_365 + "</b>\n\n"
+                "Напишите администратору для продления 👇"
+            )
             await self.bot.send_message(
                 user.user_id, text,
                 parse_mode="HTML", reply_markup=kb_contact_admin(),
@@ -429,29 +478,11 @@ class MidScanner:
         except Exception:
             pass
 
-    # ── Напоминание за 1 час до конца триала ──────────
-
-    async def _notify_trial_ending_soon(self, user: UserSettings):
-        try:
-            user.trial_reminder_sent = True
-            await self.um.save(user)
-            await self.bot.send_message(
-                user.user_id,
-                "⏳ <b>До конца пробного периода остался 1 час.</b>\n\n"
-                "Не упустите возможность воспользоваться специальным предложением 🎁\n\n"
-                "Пишите @crypto_chm",
-                parse_mode="HTML",
-                reply_markup=kb_contact_admin(),
-            )
-        except Exception:
-            pass
-
     # ── Фоновая проверка подписок ─────────────────────
 
     async def _sub_check_loop(self):
-        """Каждые 5 минут проверяет ВСЕх пользователей:
-        - отправляет напоминание за 1 час до конца триала
-        - отправляет уведомление об окончании подписки (для неактивных пользователей)
+        """Каждые 5 минут проверяет всех пользователей:
+        - отправляет уведомление об окончании подписки
         """
         await asyncio.sleep(60)  # пауза после старта
         while True:
@@ -464,9 +495,6 @@ class MidScanner:
                     left = user.sub_expires - now
                     if left <= 0 and not user.expired_notified:
                         await self._notify_expired(user)
-                    elif 0 < left <= 3600 and user.sub_status == "trial" \
-                            and not user.trial_reminder_sent:
-                        await self._notify_trial_ending_soon(user)
             except Exception as e:
                 log.error("_sub_check_loop: " + str(e))
             await asyncio.sleep(300)  # каждые 5 минут
@@ -601,3 +629,54 @@ class MidScanner:
     def get_perf(self) -> dict:
         cs = cache.cache_stats()
         return {**self._perf, "cache": cs}
+
+    # ── Анализ монеты по запросу пользователя ────────────
+
+    async def analyze_on_demand(
+        self, symbol: str, cfg: TradeCfg
+    ) -> Optional[tuple[SignalResult, str]]:
+        """
+        Анализирует монету по запросу. Возвращает (SignalResult, текст сигнала)
+        или None если сигнала нет.
+        symbol — в формате "BTC", "BTCUSDT" или "BTC-USDT-SWAP"
+        """
+        # Нормализуем символ к OKX формату
+        sym = symbol.upper().strip()
+        if not sym.endswith("-SWAP"):
+            if sym.endswith("USDT"):
+                sym = sym[:-4] + "-USDT-SWAP"
+            else:
+                sym = sym + "-USDT-SWAP"
+
+        tf = cfg.timeframe
+        df = await self.fetcher.get_candles(sym, tf, limit=300)
+        if df is None or len(df) < 60:
+            return None
+
+        ind_cfg = _cfg_to_ind(cfg)
+        ind     = CHMIndicator(ind_cfg)
+
+        df_htf = None
+        if cfg.use_htf:
+            df_htf = await self.fetcher.get_candles(sym, "1D", limit=100)
+
+        try:
+            sig = ind.analyze(sym, df, df_htf)
+        except Exception as e:
+            log.warning("analyze_on_demand %s: %s", sym, e)
+            return None
+
+        if sig is None:
+            return None
+
+        # Корреляция
+        if sym not in ("BTC-USDT-SWAP", "ETH-USDT-SWAP"):
+            btc_df = await self.fetcher.get_candles("BTC-USDT-SWAP", tf, limit=60)
+            eth_df = await self.fetcher.get_candles("ETH-USDT-SWAP", tf, limit=60)
+            if btc_df is not None:
+                sig.btc_corr = _compute_correlation(df, btc_df)
+            if eth_df is not None:
+                sig.eth_corr = _compute_correlation(df, eth_df)
+
+        text = signal_text(sig, cfg)
+        return sig, text

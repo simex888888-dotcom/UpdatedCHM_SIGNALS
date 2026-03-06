@@ -58,9 +58,11 @@ class SignalResult:
     human_explanation: str   = ""
     level_class:       int   = 3    # 1=Абсолютный, 2=Сильный, 3=Рабочий
     test_count:        int   = 0    # Кол-во тестов уровня за последние 30 свечей
-    rr_score:          float = 0.0  # Взвешенный R:R score (rr1*0.5+rr2*0.3+rr3*0.2)
+    rr_score:          float = 0.0  # Взвешенный R:R score
     corr_label:        str   = ""   # Корреляционная метка с BTC/ETH
     session:           str   = ""   # Торговая сессия по UTC
+    btc_corr:          float = 0.0  # Корреляция с BTC (30 свечей)
+    eth_corr:          float = 0.0  # Корреляция с ETH (30 свечей)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1195,10 +1197,8 @@ class CHMIndicator:
                 return None
 
         # ── Проверка R:R ──────────────────────────────────────────────────
-        if signal == "LONG":
-            rr_actual = (tp1 - entry) / risk
-        else:
-            rr_actual = (entry - tp1) / risk
+        rr_actual = ((tp1 - entry) / risk if signal == "LONG"
+                     else (entry - tp1) / risk)
 
         if rr_actual < cfg.MIN_RR:
             log.debug(f"{symbol}: R:R={rr_actual:.2f} < {cfg.MIN_RR} — пропуск")

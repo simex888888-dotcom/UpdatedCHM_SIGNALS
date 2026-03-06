@@ -118,6 +118,13 @@ CREATE TABLE IF NOT EXISTS trades (
 CREATE INDEX IF NOT EXISTS idx_trades_user ON trades(user_id);
 CREATE INDEX IF NOT EXISTS idx_users_active ON users(active, sub_status, sub_expires);
 CREATE INDEX IF NOT EXISTS idx_users_tf ON users(timeframe);
+
+-- Постоянная таблица использованных пробных периодов.
+-- Никогда не сбрасывается при миграциях — гарантирует однократность триала.
+CREATE TABLE IF NOT EXISTS trial_ids (
+    user_id  INTEGER PRIMARY KEY,
+    used_at  REAL    NOT NULL
+);
 """
 
 
@@ -156,6 +163,28 @@ async def init_db(path: str):
 
 def _row_to_dict(description, row) -> dict:
     return {description[i][0]: row[i] for i in range(len(description))}
+
+
+# ── Однократный триал (выживает даже при пересоздании БД) ──
+
+async def db_is_trial_used(user_id: int) -> bool:
+    """Проверяет, использовал ли пользователь пробный период когда-либо."""
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            "SELECT 1 FROM trial_ids WHERE user_id=?", (user_id,)
+        ) as cur:
+            return (await cur.fetchone()) is not None
+
+
+async def db_mark_trial_used(user_id: int):
+    """Помечает пользователя как использовавшего пробный период."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO trial_ids (user_id, used_at) VALUES (?, ?)",
+                (user_id, time.time()),
+            )
+            await db.commit()
 
 
 # ── Пользователи ────────────────────────────────────

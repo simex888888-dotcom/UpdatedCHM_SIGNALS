@@ -1,5 +1,5 @@
 """
-keyboards.py — клавиатуры бота v4 (мультисканнинг)
+keyboards.py — клавиатуры бота v5 (без триала, полные настройки)
 """
 
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -48,6 +48,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
             InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
         ],
+        _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
         _btn("❓ Справка — что делает каждая кнопка", "help_show"),
     ])
 
@@ -59,17 +60,11 @@ def kb_mode_long(user: UserSettings) -> InlineKeyboardMarkup:
     status = "🟢 ЛОНГ ВКЛЮЧЁН — нажми чтобы остановить" if user.long_active \
            else "🔴 ЛОНГ ВЫКЛЮЧЕН — нажми чтобы запустить"
     return InlineKeyboardMarkup(inline_keyboard=[
-        _btn(status,                                           "toggle_long"),
-        _btn("📊 Таймфрейм: " + cfg.timeframe,                "menu_long_tf"),
+        _btn(status,                                                "toggle_long"),
+        _btn("📊 Таймфрейм: " + cfg.timeframe,                     "menu_long_tf"),
         _btn("🔄 Интервал: " + str(cfg.scan_interval//60) + " мин.", "menu_long_interval"),
-        _btn("⚙️ Настройки ЛОНГ →",                           "menu_long_settings"),
-        _btn("📐 Пивоты",    "menu_long_pivots"),
-        _btn("📉 EMA тренд", "menu_long_ema"),
-        _btn("🔬 Фильтры",   "menu_long_filters"),
-        _btn("⭐ Качество",   "menu_long_quality"),
-        _btn("🛡 Стоп-лосс", "menu_long_sl"),
-        _btn("🎯 Цели (TP)", "menu_long_targets"),
-        _btn("🔁 Сбросить настройки ЛОНГ к общим", "reset_long_cfg"),
+        _btn("⚙️ Все настройки ЛОНГ →",                            "menu_long_settings"),
+        _btn("🔁 Сбросить настройки ЛОНГ к общим",                 "reset_long_cfg"),
         _back(),
     ])
 
@@ -81,17 +76,11 @@ def kb_mode_short(user: UserSettings) -> InlineKeyboardMarkup:
     status = "🟢 ШОРТ ВКЛЮЧЁН — нажми чтобы остановить" if user.short_active \
            else "🔴 ШОРТ ВЫКЛЮЧЕН — нажми чтобы запустить"
     return InlineKeyboardMarkup(inline_keyboard=[
-        _btn(status,                                            "toggle_short"),
-        _btn("📊 Таймфрейм: " + cfg.timeframe,                 "menu_short_tf"),
+        _btn(status,                                                 "toggle_short"),
+        _btn("📊 Таймфрейм: " + cfg.timeframe,                      "menu_short_tf"),
         _btn("🔄 Интервал: " + str(cfg.scan_interval//60) + " мин.", "menu_short_interval"),
-        _btn("⚙️ Настройки ШОРТ →",                            "menu_short_settings"),
-        _btn("📐 Пивоты",    "menu_short_pivots"),
-        _btn("📉 EMA тренд", "menu_short_ema"),
-        _btn("🔬 Фильтры",   "menu_short_filters"),
-        _btn("⭐ Качество",   "menu_short_quality"),
-        _btn("🛡 Стоп-лосс", "menu_short_sl"),
-        _btn("🎯 Цели (TP)", "menu_short_targets"),
-        _btn("🔁 Сбросить настройки ШОРТ к общим", "reset_short_cfg"),
+        _btn("⚙️ Все настройки ШОРТ →",                             "menu_short_settings"),
+        _btn("🔁 Сбросить настройки ШОРТ к общим",                  "reset_short_cfg"),
         _back(),
     ])
 
@@ -398,28 +387,50 @@ def kb_notify(user: UserSettings) -> InlineKeyboardMarkup:
     ])
 
 
-# ── ВСПОМОГАТЕЛЬНЫЕ ──────────────────────────────────
+# ── ПОДПИСКА — ВЫБОР ТАРИФА ───────────────────────────
 
-def kb_back()          -> InlineKeyboardMarkup: return InlineKeyboardMarkup(inline_keyboard=[_back()])
-def kb_back_settings() -> InlineKeyboardMarkup: return InlineKeyboardMarkup(inline_keyboard=[_back("menu_settings")])
-
-def kb_subscribe(config) -> InlineKeyboardMarkup:
+def kb_subscribe(config=None) -> InlineKeyboardMarkup:
+    """Меню выбора тарифа при старте — без триала."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        _btn("💳 Оформить — " + config.PRICE_30_DAYS + " / 30 дней", "noop"),
-        [InlineKeyboardButton(text="✍️ Написать администратору", url="https://t.me/crypto_chm")],
-        _btn("ℹ️ Узнать подробнее /subscribe", "noop"),
+        _noop("── 🤖 Только БОТ ───────────────────────────"),
+        _btn("📅 1 месяц  — 70$",  "plan_bot_30"),
+        _btn("📅 3 месяца — 150$", "plan_bot_90"),
+        _btn("📅 1 ГОД    — 330$", "plan_bot_365"),
+        _noop("── 🤖+📊 БОТ + ИНДИКАТОР TradingView ────────"),
+        _btn("📅 1 месяц  — 90$",  "plan_full_30"),
+        _btn("📅 3 месяца — 230$", "plan_full_90"),
+        _btn("📅 1 ГОД    — 630$", "plan_full_365"),
+        _noop("── 🎁 Специальные предложения ─────────────────"),
+        [InlineKeyboardButton(
+            text="💎 Бот + Лаба — написать @crypto_chm",
+            url="https://t.me/crypto_chm"
+        )],
+    ])
+
+
+def kb_payment(plan_label: str, amount: str, address: str) -> InlineKeyboardMarkup:
+    """Инструкция по оплате после выбора тарифа."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _noop("── После оплаты напиши администратору ──────────"),
+        [InlineKeyboardButton(
+            text="✍️ Написать @crypto_chm (после оплаты)",
+            url="https://t.me/crypto_chm"
+        )],
+        _btn("◀️ Назад к тарифам", "show_plans"),
     ])
 
 
 def kb_contact_admin() -> InlineKeyboardMarkup:
-    """Кнопка «Написать администратору» — для уведомлений об окончании триала."""
+    """Кнопка «Написать администратору»."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✍️ Написать администратору", url="https://t.me/crypto_chm")],
+        [InlineKeyboardButton(text="✍️ Написать администратору @crypto_chm", url="https://t.me/crypto_chm")],
     ])
 
 
+def kb_back()          -> InlineKeyboardMarkup: return InlineKeyboardMarkup(inline_keyboard=[_back()])
+def kb_back_settings() -> InlineKeyboardMarkup: return InlineKeyboardMarkup(inline_keyboard=[_back("menu_settings")])
+
 def kb_back_photo() -> InlineKeyboardMarkup:
-    """Кнопка «Назад» для сообщений с фото (удаляет фото, открывает главное меню)."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="◀️ Назад в меню", callback_data="back_photo_main")]
     ])
