@@ -335,36 +335,6 @@ def _apply_shared_cfg(user: UserSettings, cfg: TradeCfg):
 
 
 # ── Хранилище стратегий пользователей ────────────────
-import json, os as _os
-
-_STRATEGY_FILE = "strategy_prefs.json"
-
-def _load_strategies() -> dict:
-    try:
-        if _os.path.exists(_STRATEGY_FILE):
-            return json.loads(open(_STRATEGY_FILE).read())
-    except Exception:
-        pass
-    return {}
-
-def _save_strategies(d: dict):
-    try:
-        with open(_STRATEGY_FILE, "w") as f:
-            json.dump(d, f)
-    except Exception:
-        pass
-
-_user_strategy: dict = _load_strategies()
-
-def _get_user_strategy(uid: int) -> str:
-    """Возвращает "LEVELS" | "SMC" | "" (не выбрана)."""
-    return _user_strategy.get(str(uid), "")
-
-def _set_user_strategy(uid: int, strategy: str):
-    _user_strategy[str(uid)] = strategy
-    _save_strategies(_user_strategy)
-
-
 # ── Клавиатуры выбора стратегии ───────────────────────
 
 def _kb_strategy_select() -> InlineKeyboardMarkup:
@@ -384,10 +354,9 @@ def _kb_strategy_change() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
     ])
 
-def _strategy_text(uid: int) -> str:
-    s = _get_user_strategy(uid)
-    chosen = ("📊 Уровни (Price Action)" if s == "LEVELS"
-              else "🧠 Smart Money (SMC)" if s == "SMC"
+def _strategy_text(strategy: str) -> str:
+    chosen = ("📊 Уровни (Price Action)" if strategy == "LEVELS"
+              else "🧠 Smart Money (SMC)" if strategy == "SMC"
               else "не выбрана")
     return (
         "🎯 <b>ВЫБОР СТРАТЕГИИ</b>\n\n"
@@ -438,13 +407,12 @@ def _analyze_smc_text(symbol: str, sig) -> str:
 # ── Мультитаймфреймный /analyze (человекоподобный) ───
 
 async def _do_analyze_multitf(symbol: str, fetcher, indicator,
-                               uid: int, bot) -> str:
+                               strategy: str, bot) -> str:
     """
     Загружает 1H, 4H, 1D свечи. Анализирует уровни на каждом ТФ.
     Возвращает человекоподобный текст с рекомендацией.
     """
     NL = "\n"
-    strategy = _get_user_strategy(uid)
 
     # Загрузка свечей BTC/ETH для корреляции
     try:
@@ -644,7 +612,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def _on_startup_inner():
         from smc.scanner import run_smc_scanner
         asyncio.create_task(
-            run_smc_scanner(bot, um, _fetcher_for_smc, _get_user_strategy)
+            run_smc_scanner(bot, um, _fetcher_for_smc)
         )
 
     dp.startup.register(_on_startup_inner)
@@ -663,8 +631,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             )
             return
         # Если стратегия не выбрана — предлагаем выбрать
-        if not _get_user_strategy(user.user_id):
-            await msg.answer(_strategy_text(user.user_id), parse_mode="HTML",
+        if not user.strategy:
+            await msg.answer(_strategy_text(user.strategy), parse_mode="HTML",
                              reply_markup=_kb_strategy_select())
             return
         trend = scanner.get_trend()
@@ -712,7 +680,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not has:
             await msg.answer(access_denied_text(reason), parse_mode="HTML", reply_markup=kb_subscribe(config))
             return
-        await msg.answer(_strategy_text(user.user_id), parse_mode="HTML",
+        await msg.answer(_strategy_text(user.strategy), parse_mode="HTML",
                          reply_markup=_kb_strategy_change())
 
     # ─── ПОДПИСКА — ВЫБОР ТАРИФА (callback) ─────────────
@@ -805,7 +773,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             indicator_obj = CHMIndicator(ind_config_obj)
 
             result_text = await _do_analyze_multitf(
-                symbol, _fetcher_for_smc, indicator_obj, uid, bot
+                symbol, _fetcher_for_smc, indicator_obj, user.strategy, bot
             )
 
             try:
@@ -834,18 +802,18 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.callback_query(F.data.startswith("strategy_"))
     async def cb_strategy(cb: CallbackQuery):
         choice = cb.data.replace("strategy_", "")   # "levels" | "smc"
-        uid    = cb.from_user.id
         strategy_map = {"levels": "LEVELS", "smc": "SMC"}
         strategy = strategy_map.get(choice)
         if not strategy:
             await cb.answer("Неизвестная стратегия", show_alert=True); return
 
-        _set_user_strategy(uid, strategy)
+        user = await um.get_or_create(cb.from_user.id)
+        user.strategy = strategy
+        await um.save(user)
         label = "📊 Уровни (Price Action)" if strategy == "LEVELS" else "🧠 Smart Money (SMC)"
-        await cb.answer(f"✅ Стратегия выбрана: {label}", show_alert=False)
+        await cb.answer("✅ Стратегия: " + label, show_alert=False)
 
-        user  = await um.get_or_create(uid)
-        trend = scanner.get_trend()
+        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
         await safe_edit(cb, main_text(user, trend), kb_main(user))
 
     # ─── АНАЛИЗ МОНЕТЫ ПО ЗАПРОСУ ────────────────────
@@ -1007,8 +975,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     @dp.callback_query(F.data == "show_strategy")
     async def show_strategy(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
         await cb.answer()
-        await safe_edit(cb, _strategy_text(cb.from_user.id), _kb_strategy_change())
+        await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_change())
 
     @dp.callback_query(F.data == "my_stats")
     async def my_stats(cb: CallbackQuery):
@@ -1103,9 +1072,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
         # Проверяем стратегию перед включением
-        if not user.long_active and not _get_user_strategy(user.user_id):
+        if not user.long_active and not user.strategy:
             await cb.answer()
-            await safe_edit(cb, _strategy_text(user.user_id), _kb_strategy_select()); return
+            await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.long_active = not user.long_active
         await cb.answer("🟢 ЛОНГ включён!" if user.long_active else "🔴 ЛОНГ выключен.")
         await um.save(user)
@@ -1429,9 +1398,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
         # Проверяем стратегию перед включением
-        if not user.short_active and not _get_user_strategy(user.user_id):
+        if not user.short_active and not user.strategy:
             await cb.answer()
-            await safe_edit(cb, _strategy_text(user.user_id), _kb_strategy_select()); return
+            await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.short_active = not user.short_active
         if user.short_active:
             user.scan_mode = "short"
@@ -1787,9 +1756,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
         is_active = user.active and user.scan_mode == "both"
-        if not is_active and not _get_user_strategy(user.user_id):
+        if not is_active and not user.strategy:
             await cb.answer()
-            await safe_edit(cb, _strategy_text(user.user_id), _kb_strategy_select()); return
+            await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.active = not is_active
         user.scan_mode = "both" if user.active else user.scan_mode
         user.long_active = user.active
@@ -2517,7 +2486,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             "  ШОРТ: " + ("🟢" if user.short_active else "⚫") +
             "  ОБА: " + ("🟢" if user.active else "⚫") + NL +
             "Сигналов: <b>" + str(user.signals_received) + "</b>  Сделок: <b>" + str(stats.get("total",0)) + "</b>  R: <b>" + "{:+.2f}".format(stats.get("total_rr",0)) + "R</b>" + NL +
-            "Стратегия: <b>" + (_get_user_strategy(tid) or "не выбрана") + "</b>",
+            "Стратегия: <b>" + (user.strategy or "не выбрана") + "</b>",
             parse_mode="HTML",
         )
 

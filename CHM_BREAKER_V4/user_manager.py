@@ -150,6 +150,9 @@ class UserSettings:
     trial_reminder_sent:  bool  = False
     expired_notified:     bool  = False
 
+    # ── Стратегия сканера ─────────────────────────
+    strategy:             str   = "LEVELS"   # "LEVELS" | "SMC"
+
     # ── Хелперы конфигов ─────────────────────────
 
     def shared_cfg(self) -> TradeCfg:

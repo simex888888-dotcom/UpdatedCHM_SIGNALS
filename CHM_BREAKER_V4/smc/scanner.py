@@ -6,7 +6,7 @@ smc/scanner.py — Автономный SMC-сканер
 import asyncio
 import logging
 import time
-from typing import Optional, Callable
+from typing import Optional
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramForbiddenError
@@ -73,13 +73,12 @@ async def run_smc_scanner(
     bot:          "Bot",
     um,
     fetcher,
-    get_strategy: Callable[[int], str],
     interval_sec: int = 900,
     tf_key:       str = "1H",
 ) -> None:
     """
     Главный цикл SMC-сканера.
-    get_strategy(user_id) → "SMC" | "LEVELS" | ""
+    Фильтрует пользователей у которых user.strategy == "SMC".
     """
     analyzer = SMCAnalyzer(SMCConfig())
     tf_htf, tf_mtf, tf_ltf = _SMC_TF_MAP.get(tf_key, ("4H", "1H", "15m"))
@@ -87,7 +86,7 @@ async def run_smc_scanner(
 
     while True:
         try:
-            await _scan_cycle(bot, um, fetcher, analyzer, get_strategy,
+            await _scan_cycle(bot, um, fetcher, analyzer,
                               tf_htf, tf_mtf, tf_ltf)
         except asyncio.CancelledError:
             log.info("SMC Scanner stopped.")
@@ -97,10 +96,10 @@ async def run_smc_scanner(
         await asyncio.sleep(interval_sec)
 
 
-async def _scan_cycle(bot, um, fetcher, analyzer, get_strategy,
+async def _scan_cycle(bot, um, fetcher, analyzer,
                       tf_htf, tf_mtf, tf_ltf) -> None:
     users = await um.get_active_users()
-    smc_users = [u for u in users if get_strategy(u.user_id) == "SMC"]
+    smc_users = [u for u in users if u.strategy == "SMC"]
     if not smc_users:
         return
 

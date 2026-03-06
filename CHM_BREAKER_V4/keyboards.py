@@ -40,10 +40,13 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
     long_s  = "🟢" if user.long_active  else "⚫"
     short_s = "🟢" if user.short_active else "⚫"
     both_s  = "🟢" if (user.active and user.scan_mode == "both") else "⚫"
+    strategy = getattr(user, "strategy", "LEVELS")
+    strat_label = "📊 Уровни" if strategy == "LEVELS" else "🧠 SMC" if strategy == "SMC" else "⚙️ Стратегия"
     return InlineKeyboardMarkup(inline_keyboard=[
         _btn(long_s  + " 📈 ЛОНГ сканер  — только сигналы в лонг",  "mode_long"),
         _btn(short_s + " 📉 ШОРТ сканер  — только сигналы в шорт",  "mode_short"),
         _btn(both_s  + " ⚡ ОБА — лонги и шорты одновременно",       "mode_both"),
+        _btn("🎯 Стратегия: " + strat_label + " — сменить",          "show_strategy"),
         [
             InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
             InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
