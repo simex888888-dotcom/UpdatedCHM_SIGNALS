@@ -597,7 +597,7 @@ def _rr(entry, sl, tp) -> str:
 
 
 def _format_smc_deep_analysis(symbol: str, analysis: dict, dfs: dict) -> str:
-    """Детальный SMC анализ в формате торгового плана трейдера."""
+    """Детальный SMC анализ: всегда оба сценария LONG и SHORT."""
     NL = "\n"
     struct = analysis.get("structure", {})
     pd_z   = analysis.get("pd_zone",   {})
@@ -623,189 +623,239 @@ def _format_smc_deep_analysis(symbol: str, analysis: dict, dfs: dict) -> str:
     fvg_b   = (fvg or {}).get("bull_fvg", {}) or {}
     fvg_s   = (fvg or {}).get("bear_fvg", {}) or {}
 
-    # Текущая цена из последней свечи MTF
     df_mtf = dfs.get("4H") if dfs.get("4H") is not None else dfs.get("1H")
     current_price = float(df_mtf["close"].iloc[-1]) if df_mtf is not None else 0
 
-    # Короткое название монеты для заголовка
     clean_sym = symbol.replace("-USDT-SWAP", "").replace("-USDT", "")
 
-    # ── Определяем торговый сценарий ─────────────────
-    # Приоритет: тренд + зона
-    has_long_ob  = ob_b.get("found", False)
-    has_short_ob = ob_s.get("found", False)
+    has_long_ob   = ob_b.get("found", False)
+    has_short_ob  = ob_s.get("found", False)
     has_long_fvg  = fvg_b.get("found", False)
     has_short_fvg = fvg_s.get("found", False)
 
-    long_bias  = trend == "BULLISH"
-    short_bias = trend == "BEARISH"
-    if zone == "DISCOUNT":
-        long_bias = True
-    elif zone == "PREMIUM":
-        short_bias = True
+    # ── Вспомогательная функция: построить сценарий ─────────────────────
+    def _build_scenario(is_long: bool) -> dict:
+        """Возвращает dict с entry_lo/hi, sl, tp1/2/3, zone_src, quality."""
+        rng = (hi - lo) if (hi and lo) else (current_price * 0.1 if current_price else 1)
 
-    # Основной сценарий
-    if long_bias and (has_long_ob or has_long_fvg):
-        scenario = "LONG"
-    elif short_bias and (has_short_ob or has_short_fvg):
-        scenario = "SHORT"
-    elif long_bias:
-        scenario = "LONG_WAIT"   # тренд есть, но зоны нет
-    elif short_bias:
-        scenario = "SHORT_WAIT"
-    else:
-        scenario = "NEUTRAL"
+        if is_long:
+            # Зона входа: OB → FVG → swing_l → discount зона
+            if has_long_ob:
+                entry_lo = ob_b["ob_low"]
+                entry_hi = ob_b["ob_high"]
+                zone_src = "Бычий Order Block"
+                quality  = 4
+            elif has_long_fvg:
+                entry_lo = fvg_b["low"]
+                entry_hi = fvg_b["high"]
+                zone_src = "Бычий FVG (имбаланс)"
+                quality  = 3
+            elif swing_l and lo and swing_l > lo:
+                entry_hi = swing_l
+                entry_lo = swing_l * 0.995
+                zone_src = "Зона у Swing Low"
+                quality  = 2
+            else:
+                base     = lo if lo else (current_price * 0.95 if current_price else 0)
+                entry_lo = base
+                entry_hi = base * 1.005 if base else 0
+                zone_src = "Дискаунт-зона диапазона"
+                quality  = 1
 
+            if not entry_lo:
+                return {}
+            entry_mid = (entry_lo + entry_hi) / 2
+            sl = entry_lo * (1 - 0.0015)
+            risk = entry_mid - sl
+            tp1 = eq50 if (eq50 and eq50 > entry_mid) else (entry_mid + risk * 2)
+            tp2 = swing_h if (swing_h and swing_h > tp1) else (entry_mid + risk * 3.5)
+            tp3 = hi if (hi and hi > tp2) else (entry_mid + risk * 6)
+            liq_status = "✅ снята" if sweep_u.get("swept") else "⏳ не снята"
+            liq_label  = f"Ликвидность снизу (buy-side): {liq_status}"
+        else:
+            # Зона входа: OB → FVG → swing_h → premium зона
+            if has_short_ob:
+                entry_lo = ob_s["ob_low"]
+                entry_hi = ob_s["ob_high"]
+                zone_src = "Медвежий Order Block"
+                quality  = 4
+            elif has_short_fvg:
+                entry_lo = fvg_s["low"]
+                entry_hi = fvg_s["high"]
+                zone_src = "Медвежий FVG (имбаланс)"
+                quality  = 3
+            elif swing_h and hi and swing_h < hi:
+                entry_lo = swing_h
+                entry_hi = swing_h * 1.005
+                zone_src = "Зона у Swing High"
+                quality  = 2
+            else:
+                base     = hi if hi else (current_price * 1.05 if current_price else 0)
+                entry_lo = base * 0.995 if base else 0
+                entry_hi = base
+                zone_src = "Премиум-зона диапазона"
+                quality  = 1
+
+            if not entry_hi:
+                return {}
+            entry_mid = (entry_lo + entry_hi) / 2
+            sl = entry_hi * (1 + 0.0015)
+            risk = sl - entry_mid
+            tp1 = eq50 if (eq50 and eq50 < entry_mid) else (entry_mid - risk * 2)
+            tp2 = swing_l if (swing_l and swing_l < tp1) else (entry_mid - risk * 3.5)
+            tp3 = lo if (lo and lo < tp2) else (entry_mid - risk * 6)
+            liq_status = "✅ снята" if sweep_d.get("swept") else "⏳ не снята"
+            liq_label  = f"Ликвидность сверху (sell-side): {liq_status}"
+
+        return dict(
+            entry_lo=entry_lo, entry_hi=entry_hi, entry_mid=entry_mid,
+            sl=sl, tp1=tp1, tp2=tp2, tp3=tp3, zone_src=zone_src,
+            quality=quality, liq_label=liq_label
+        )
+
+    # ── Определяем приоритет сценариев ──────────────────────────────────
+    long_priority = (
+        (trend == "BULLISH") * 3 +
+        (zone == "DISCOUNT") * 2 +
+        has_long_ob * 2 +
+        has_long_fvg * 1 +
+        sweep_u.get("swept", False) * 1
+    )
+    short_priority = (
+        (trend == "BEARISH") * 3 +
+        (zone == "PREMIUM") * 2 +
+        has_short_ob * 2 +
+        has_short_fvg * 1 +
+        sweep_d.get("swept", False) * 1
+    )
+    long_is_priority = long_priority >= short_priority
+
+    # ── Строим оба сценария ──────────────────────────────────────────────
+    long_sc  = _build_scenario(True)
+    short_sc = _build_scenario(False)
+
+    def _render_scenario(is_long: bool, sc: dict, is_priority: bool) -> list:
+        if not sc:
+            return []
+        lines = []
+        tag   = "🔥 ПРИОРИТЕТНЫЙ" if is_priority else "⚠️ КОНТР-ТРЕНДОВЫЙ"
+        dir_em = "📈 LONG" if is_long else "📉 SHORT"
+        lines.append(f"{tag} СЦЕНАРИЙ: {dir_em}" + NL)
+
+        # Качество сигнала
+        q_stars = "⭐" * sc["quality"] + "☆" * (4 - sc["quality"])
+        lines.append(f"Качество зоны: {q_stars}  ({sc['zone_src']})" + NL + NL)
+
+        # Зона входа
+        lines.append(f"🎯 ЗОНА ВХОДА:" + NL)
+        lines.append(f"   <code>{_fmt_price(sc['entry_lo'])} – {_fmt_price(sc['entry_hi'])}</code>" + NL)
+
+        # SL
+        sl_pct = _pct_diff(sc["sl"], sc["entry_mid"])
+        lines.append(f"🛑 СТОП-ЛОСС: <code>{_fmt_price(sc['sl'])}</code>  (-{sl_pct})" + NL)
+        lines.append(f"   {'Ниже' if is_long else 'Выше'} зоны с буфером 0.15%" + NL + NL)
+
+        # TPs
+        lines.append("🎯 ЦЕЛИ:" + NL)
+        tp1_pct = _pct_diff(sc["tp1"], sc["entry_mid"])
+        tp2_pct = _pct_diff(sc["tp2"], sc["entry_mid"])
+        tp3_pct = _pct_diff(sc["tp3"], sc["entry_mid"])
+        eq_lbl  = f"← Равновесие 50% <code>{_fmt_price(eq50)}</code>" if eq50 else ""
+        sh_lbl  = f"← Swing High <code>{_fmt_price(swing_h)}</code>" if (swing_h and is_long) else ""
+        sl_lbl  = f"← Swing Low <code>{_fmt_price(swing_l)}</code>" if (swing_l and not is_long) else ""
+        hi_lbl  = f"← Максимум диапазона" if is_long else ""
+        lo_lbl  = f"← Минимум диапазона" if not is_long else ""
+        sign = "+" if is_long else "-"
+        lines.append(f"   TP1: <code>{_fmt_price(sc['tp1'])}</code>  ({sign}{tp1_pct})  {_rr(sc['entry_mid'], sc['sl'], sc['tp1'])}  {eq_lbl}" + NL)
+        lines.append(f"   TP2: <code>{_fmt_price(sc['tp2'])}</code>  ({sign}{tp2_pct})  {_rr(sc['entry_mid'], sc['sl'], sc['tp2'])}  {sh_lbl}{sl_lbl}" + NL)
+        lines.append(f"   TP3: <code>{_fmt_price(sc['tp3'])}</code>  ({sign}{tp3_pct})  {_rr(sc['entry_mid'], sc['sl'], sc['tp3'])}  {hi_lbl}{lo_lbl}" + NL + NL)
+
+        # Факторы
+        lines.append("📋 ФАКТОРЫ:" + NL)
+        if is_long:
+            lines.append(f"{'✅' if trend == 'BULLISH' else '⚠️'} HTF тренд: {'📈 Бычий' if trend == 'BULLISH' else '📉 Медвежий' if trend == 'BEARISH' else '↔️ Боковик'}" + NL)
+            lines.append(f"{'✅' if zone == 'DISCOUNT' else '⚠️'} Позиция: {zone} ({pos:.0f}%) {'— оптимально для LONG' if zone == 'DISCOUNT' else '— против тренда' if zone == 'PREMIUM' else ''}" + NL)
+            lines.append(f"{'✅' if has_long_ob else '—'} Бычий OB: {'найден' if has_long_ob else 'не найден'}" + NL)
+            lines.append(f"{'✅' if has_long_fvg else '—'} Бычий FVG: {'найден' if has_long_fvg else 'не найден'}" + NL)
+            lines.append(f"{'✅' if bos_d else '—'} BOS: {'подтверждён' if bos_d else 'нет'}" + NL)
+            lines.append(f"{'✅' if sweep_u.get('swept') else '⏳'} {sc['liq_label']}" + NL)
+        else:
+            lines.append(f"{'✅' if trend == 'BEARISH' else '⚠️'} HTF тренд: {'📉 Медвежий' if trend == 'BEARISH' else '📈 Бычий' if trend == 'BULLISH' else '↔️ Боковик'}" + NL)
+            lines.append(f"{'✅' if zone == 'PREMIUM' else '⚠️'} Позиция: {zone} ({pos:.0f}%) {'— оптимально для SHORT' if zone == 'PREMIUM' else '— против тренда' if zone == 'DISCOUNT' else ''}" + NL)
+            lines.append(f"{'✅' if has_short_ob else '—'} Медвежий OB: {'найден' if has_short_ob else 'не найден'}" + NL)
+            lines.append(f"{'✅' if has_short_fvg else '—'} Медвежий FVG: {'найден' if has_short_fvg else 'не найден'}" + NL)
+            lines.append(f"{'✅' if bos_d else '—'} BOS: {'подтверждён' if bos_d else 'нет'}" + NL)
+            lines.append(f"{'✅' if sweep_d.get('swept') else '⏳'} {sc['liq_label']}" + NL)
+        if choch:
+            lines.append("⚠️ CHoCH: смена структуры — дождись подтверждения" + NL)
+
+        # Условие входа
+        lines.append(NL + "⏳ УСЛОВИЕ ВХОДА:" + NL)
+        lines.append(f"   Ждать возврата в зону <code>{_fmt_price(sc['entry_lo'])}–{_fmt_price(sc['entry_hi'])}</code>." + NL)
+        lines.append(f"   Вход после закрытой <b>{'бычьей' if is_long else 'медвежьей'} свечи</b> в зоне." + NL)
+        if eq50:
+            if is_long:
+                lines.append(f"   ❌ Не входить выше EQ <code>{_fmt_price(eq50)}</code>." + NL)
+            else:
+                lines.append(f"   ❌ Не входить ниже EQ <code>{_fmt_price(eq50)}</code>." + NL)
+        return lines
+
+    # ── Заголовок и контекст ─────────────────────────────────────────────
     p = []
     p.append(f"🔍 <b>АНАЛИЗ: {clean_sym} — Smart Money</b>" + NL)
     p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
 
-    # ── Блок 1: Рыночный контекст ─────────────────────
-    trend_txt = {"BULLISH": "📈 Бычий — структура HH/HL",
-                 "BEARISH": "📉 Медвежий — структура LH/LL",
-                 "RANGING": "↔️ Боковик — нет чёткой структуры"}
-    zone_txt  = {"PREMIUM":     "🔴 Премиум — выше 50%",
-                 "DISCOUNT":    "🟢 Дискаунт — ниже 50%",
-                 "EQUILIBRIUM": "⚖️ Равновесие",
+    trend_txt = {"BULLISH": "📈 Бычий (HH/HL)",
+                 "BEARISH": "📉 Медвежий (LH/LL)",
+                 "RANGING": "↔️ Боковик (нет структуры)"}
+    zone_txt  = {"PREMIUM":     "🔴 Премиум &gt;50%",
+                 "DISCOUNT":    "🟢 Дискаунт &lt;50%",
+                 "EQUILIBRIUM": "⚖️ Равновесие ~50%",
                  "NEUTRAL":     "—"}
 
-    p.append(f"🌍 <b>РЫНОЧНЫЙ КОНТЕКСТ</b>" + NL)
+    p.append("🌍 <b>РЫНОЧНЫЙ КОНТЕКСТ</b>" + NL)
     p.append(f"Тренд (HTF): <b>{trend_txt.get(trend, trend)}</b>" + NL)
     if current_price:
         p.append(f"Текущая цена: <code>{_fmt_price(current_price)}</code>" + NL)
-    p.append(f"Позиция цены: <b>{zone_txt.get(zone, zone)}</b> ({pos:.0f}% диапазона)" + NL)
+    p.append(f"Позиция: <b>{zone_txt.get(zone, zone)}</b> — {pos:.0f}% диапазона" + NL)
     if hi and lo:
         p.append(f"Диапазон HTF: <code>{_fmt_price(lo)}</code> — <code>{_fmt_price(hi)}</code>" + NL)
     if eq50:
         p.append(f"Равновесие 50%: <code>{_fmt_price(eq50)}</code>" + NL)
+    if swing_h:
+        p.append(f"Swing High: <code>{_fmt_price(swing_h)}</code>  {'✅ swept' if sweep_d.get('swept') else '⏳ не снят'}" + NL)
+    if swing_l:
+        p.append(f"Swing Low:  <code>{_fmt_price(swing_l)}</code>  {'✅ swept' if sweep_u.get('swept') else '⏳ не снят'}" + NL)
     if bos_d:
-        p.append("✅ <b>BOS</b>: пробой структуры — тренд подтверждён" + NL)
+        p.append("✅ <b>BOS:</b> пробой структуры — тренд подтверждён" + NL)
     if choch:
-        p.append("⚠️ <b>CHoCH</b>: была смена структуры — следи за подтверждением" + NL)
+        p.append("⚠️ <b>CHoCH:</b> смена структуры — возможный разворот" + NL)
 
     p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
 
-    # ── Блок 2: Торговый план ─────────────────────────
-    if scenario in ("LONG", "SHORT"):
-        is_long = scenario == "LONG"
-        dir_em  = "📈 LONG" if is_long else "📉 SHORT"
-        p.append(f"💼 <b>ТОРГОВЫЙ ПЛАН: {dir_em}</b>" + NL + NL)
-
-        # Зона входа: OB приоритет, потом FVG
-        if is_long:
-            if has_long_ob:
-                entry_lo  = ob_b["ob_low"]
-                entry_hi  = ob_b["ob_high"]
-                zone_src  = "Бычий Order Block"
-            else:
-                entry_lo  = fvg_b["low"]
-                entry_hi  = fvg_b["high"]
-                zone_src  = "Бычий FVG (имбаланс)"
-            entry_mid = (entry_lo + entry_hi) / 2
-            sl        = entry_lo * (1 - 0.0015)       # -0.15% под зоной
-            tp1       = eq50 if eq50 and eq50 > entry_mid else (entry_mid + abs(entry_mid - sl) * 2)
-            tp2       = swing_h if swing_h and swing_h > tp1 else (entry_mid + abs(entry_mid - sl) * 3.5)
-            tp3       = hi if hi and hi > tp2 else (entry_mid + abs(entry_mid - sl) * 6)
-        else:
-            if has_short_ob:
-                entry_lo  = ob_s["ob_low"]
-                entry_hi  = ob_s["ob_high"]
-                zone_src  = "Медвежий Order Block"
-            else:
-                entry_lo  = fvg_s["low"]
-                entry_hi  = fvg_s["high"]
-                zone_src  = "Медвежий FVG (имбаланс)"
-            entry_mid = (entry_lo + entry_hi) / 2
-            sl        = entry_hi * (1 + 0.0015)       # +0.15% над зоной
-            tp1       = eq50 if eq50 and eq50 < entry_mid else (entry_mid - abs(sl - entry_mid) * 2)
-            tp2       = swing_l if swing_l and swing_l < tp1 else (entry_mid - abs(sl - entry_mid) * 3.5)
-            tp3       = lo if lo and lo < tp2 else (entry_mid - abs(sl - entry_mid) * 6)
-
-        sl_pct = _pct_diff(sl, entry_mid)
-
-        p.append(f"🎯 <b>ЗОНА НАБОРА</b> ({zone_src}):" + NL)
-        p.append(f"   Вход: <code>{_fmt_price(entry_lo)} – {_fmt_price(entry_hi)}</code>" + NL + NL)
-
-        p.append(f"🛑 <b>СТОП-ЛОСС:</b>" + NL)
-        p.append(f"   <code>{_fmt_price(sl)}</code>  (-{sl_pct} от зоны)" + NL)
-        p.append(f"   Размещён {'ниже' if is_long else 'выше'} OB с буфером 0.15%" + NL + NL)
-
-        p.append(f"🎯 <b>ЦЕЛИ (Take Profit):</b>" + NL)
-        tp1_pct = _pct_diff(tp1, entry_mid)
-        tp2_pct = _pct_diff(tp2, entry_mid)
-        tp3_pct = _pct_diff(tp3, entry_mid)
-        p.append(f"   TP1: <code>{_fmt_price(tp1)}</code>  (+{tp1_pct})  {_rr(entry_mid, sl, tp1)}  ← Равновесие 50%" + NL)
-        if swing_h and is_long:
-            p.append(f"   TP2: <code>{_fmt_price(tp2)}</code>  (+{tp2_pct})  {_rr(entry_mid, sl, tp2)}  ← Swing High (ликвидность)" + NL)
-        elif swing_l and not is_long:
-            p.append(f"   TP2: <code>{_fmt_price(tp2)}</code>  (-{tp2_pct})  {_rr(entry_mid, sl, tp2)}  ← Swing Low (ликвидность)" + NL)
-        else:
-            p.append(f"   TP2: <code>{_fmt_price(tp2)}</code>  (+{tp2_pct})  {_rr(entry_mid, sl, tp2)}" + NL)
-        p.append(f"   TP3: <code>{_fmt_price(tp3)}</code>  (+{tp3_pct})  {_rr(entry_mid, sl, tp3)}  ← Цель диапазона" + NL)
-
-        p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
-
-        # ── Блок 3: Причины входа ─────────────────────
-        p.append(f"📋 <b>ПРИЧИНЫ ВХОДА</b>" + NL)
-        reasons = []
-        if trend == ("BULLISH" if is_long else "BEARISH"):
-            reasons.append(f"✅ {'Бычий' if is_long else 'Медвежий'} HTF тренд — структура {'HH/HL' if is_long else 'LH/LL'}")
-        if zone == ("DISCOUNT" if is_long else "PREMIUM"):
-            reasons.append(f"✅ Цена в {'дискаунте' if is_long else 'премиуме'} ({pos:.0f}%) — {'оптимальная зона покупок' if is_long else 'оптимальная зона продаж'}")
-        if has_long_ob and is_long:
-            reasons.append(f"✅ Бычий OB: зона набора позиции институционалами")
-        if has_short_ob and not is_long:
-            reasons.append(f"✅ Медвежий OB: зона распределения позиции")
-        if bos_d:
-            reasons.append(f"✅ BOS подтверждён: продолжение тренда")
-        if sweep_u.get("swept") and is_long:
-            reasons.append(f"✅ Sweep снизу: ликвидность снята → разворот вверх")
-        if sweep_d.get("swept") and not is_long:
-            reasons.append(f"✅ Sweep сверху: ликвидность снята → разворот вниз")
-        if has_long_fvg and is_long:
-            reasons.append(f"✅ Бычий FVG: незакрытый имбаланс в зоне входа")
-        if has_short_fvg and not is_long:
-            reasons.append(f"✅ Медвежий FVG: незакрытый имбаланс в зоне входа")
-        if choch:
-            reasons.append(f"⚠️ CHoCH: краткосрочная смена структуры — дождись подтверждения")
-        if not sweep_u.get("swept") and is_long:
-            reasons.append(f"⏳ Sweep снизу ещё не было — вход более рискованный")
-        for r in reasons:
-            p.append(f"{r}" + NL)
-
-        p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
-
-        # ── Блок 4: Условие входа ─────────────────────
-        p.append(f"⏳ <b>УСЛОВИЕ ВХОДА</b>" + NL)
-        if is_long:
-            p.append(f"Ждать возврата цены в зону <code>{_fmt_price(entry_lo)}–{_fmt_price(entry_hi)}</code>." + NL)
-            p.append("Вход после первой закрытой <b>бычьей свечи</b> в зоне OB." + NL)
-            if eq50:
-                p.append(f"❌ Не входить выше равновесия <code>{_fmt_price(eq50)}</code>." + NL)
-        else:
-            p.append(f"Ждать возврата цены в зону <code>{_fmt_price(entry_lo)}–{_fmt_price(entry_hi)}</code>." + NL)
-            p.append("Вход после первой закрытой <b>медвежьей свечи</b> в зоне OB." + NL)
-            if eq50:
-                p.append(f"❌ Не входить ниже равновесия <code>{_fmt_price(eq50)}</code>." + NL)
-
-    elif scenario in ("LONG_WAIT", "SHORT_WAIT"):
-        is_long = scenario == "LONG_WAIT"
-        dir_em  = "📈 LONG" if is_long else "📉 SHORT"
-        p.append(f"⚠️ <b>СЦЕНАРИЙ: {dir_em} — нет зоны набора</b>" + NL + NL)
-        p.append(f"Тренд {'бычий' if is_long else 'медвежий'}, но подходящий OB/FVG не найден." + NL)
-        p.append(f"Цена в {'дискаунте' if zone == 'DISCOUNT' else 'премиуме' if zone == 'PREMIUM' else 'равновесии'} ({pos:.0f}%)." + NL + NL)
-        if is_long and swing_l:
-            p.append(f"👉 Ждать формирования нового бычьего OB у <code>{_fmt_price(swing_l)}</code>." + NL)
-        elif not is_long and swing_h:
-            p.append(f"👉 Ждать формирования нового медвежьего OB у <code>{_fmt_price(swing_h)}</code>." + NL)
-        p.append(f"Ликвидность снизу: {'✅ снята' if sweep_u.get('swept') else '⏳ ещё не снята'}" + NL)
-        p.append(f"Ликвидность сверху: {'✅ снята' if sweep_d.get('swept') else '⏳ ещё не снята'}" + NL)
+    # ── Приоритетный сценарий ────────────────────────────────────────────
+    if long_is_priority:
+        first_sc, first_long = long_sc,  True
+        second_sc, second_long = short_sc, False
     else:
-        p.append("↔️ <b>БОКОВИК — воздержись от торговли</b>" + NL + NL)
-        p.append("Структура не определена. Рынок в флете." + NL)
-        if swing_h and swing_l:
-            p.append(f"Диапазон боковика: <code>{_fmt_price(swing_l)}</code> — <code>{_fmt_price(swing_h)}</code>" + NL)
-        p.append("Ждать BOS (пробой структуры) для определения направления." + NL)
+        first_sc, first_long = short_sc, False
+        second_sc, second_long = long_sc,  True
+
+    p.extend(_render_scenario(first_long,  first_sc,  True))
+    p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+    p.extend(_render_scenario(second_long, second_sc, False))
+    p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+
+    # ── Итоговый вывод ──────────────────────────────────────────────────
+    p.append("🏆 <b>ЛУЧШИЙ СЦЕНАРИЙ:</b>" + NL)
+    best_dir = "📈 LONG" if long_is_priority else "📉 SHORT"
+    best_sc  = first_sc
+    if best_sc:
+        p.append(f"{best_dir} от зоны <code>{_fmt_price(best_sc['entry_lo'])}–{_fmt_price(best_sc['entry_hi'])}</code>" + NL)
+        p.append(f"SL: <code>{_fmt_price(best_sc['sl'])}</code>  →  TP1: <code>{_fmt_price(best_sc['tp1'])}</code>  TP3: <code>{_fmt_price(best_sc['tp3'])}</code>" + NL)
+        strength = long_priority if long_is_priority else short_priority
+        conf = "🔥 Высокая" if strength >= 6 else "✅ Средняя" if strength >= 3 else "⚠️ Низкая (торговать осторожно)"
+        p.append(f"Уверенность: {conf}" + NL)
 
     p.append(NL + "⚡ <i>CHM Laboratory — SMC Strategy</i>")
     return "".join(p)
