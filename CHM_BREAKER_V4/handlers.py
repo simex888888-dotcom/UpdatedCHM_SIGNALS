@@ -56,9 +56,7 @@ _ANALYZE_COOLDOWN_SEC = 10  # секунд между /analyze запросам�
 def _dedup_keyboard(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
     """
     Удаляет кнопки с дублирующимся callback_data из InlineKeyboardMarkup.
-    Кнопки с url (не callback_data) не трогаются.
-    Если дубликат callback_data — удаляется вторая кнопка.
-    Если дубликат текста, но разный callback_data — оба остаются.
+    Кнопки с url, без callback_data и с callback_data="noop" (заголовки разделов) не трогаются.
     """
     seen_callbacks: set = set()
     new_rows = []
@@ -66,8 +64,8 @@ def _dedup_keyboard(markup: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
         new_row = []
         for btn in row:
             cb = btn.callback_data
-            if cb is None:
-                # кнопка с url или без callback — оставляем
+            if cb is None or cb == "noop":
+                # url-кнопки и разделители (noop) всегда оставляем
                 new_row.append(btn)
             elif cb not in seen_callbacks:
                 seen_callbacks.add(cb)
@@ -488,6 +486,7 @@ async def _do_analyze_multitf(symbol: str, fetcher, indicator,
         # LEVELS анализ (Price Action)
         best_sig = None
         tf_analyses = {}
+        zones_data = {}
 
         for tf, df in dfs.items():
             try:
@@ -496,72 +495,282 @@ async def _do_analyze_multitf(symbol: str, fetcher, indicator,
                 tf_analyses[tf] = sig
                 if sig and (best_sig is None or sig.quality > best_sig.quality):
                     best_sig = sig
+                # Собираем зоны для dual-scenario независимо от наличия сигнала
+                try:
+                    import numpy as np
+                    atr_s  = indicator._atr(df, indicator.cfg.ATR_PERIOD)
+                    atr_now = float(atr_s.iloc[-1])
+                    ema50  = indicator._ema(df["close"], indicator.cfg.EMA_FAST)
+                    ema200 = indicator._ema(df["close"], indicator.cfg.EMA_SLOW)
+                    sup, res = indicator._get_zones(df, indicator.cfg.PIVOT_STRENGTH, atr_now)
+                    c_now  = float(df["close"].iloc[-1])
+                    rsi_s  = indicator._rsi(df["close"], indicator.cfg.RSI_PERIOD)
+                    rsi_now = float(rsi_s.iloc[-1])
+                    vol_ma  = df["volume"].rolling(indicator.cfg.VOL_LEN).mean()
+                    vol_ratio = (float(df["volume"].iloc[-1]) /
+                                 float(vol_ma.iloc[-1]) if vol_ma.iloc[-1] > 0 else 1.0)
+                    zones_data[tf] = {
+                        "sup": sup, "res": res,
+                        "price": c_now, "atr": atr_now,
+                        "rsi": rsi_now, "vol_ratio": vol_ratio,
+                        "bull_local": c_now > ema50.iloc[-1] > ema200.iloc[-1],
+                        "bear_local": c_now < ema50.iloc[-1] < ema200.iloc[-1],
+                    }
+                except Exception:
+                    pass
             except Exception:
                 tf_analyses[tf] = None
 
-        return _format_multitf_levels_text(symbol, tf_analyses, tf_labels, best_sig)
+        return _format_multitf_levels_text(symbol, tf_analyses, tf_labels, best_sig, zones_data, dfs)
 
 
 def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
-                                  tf_labels: dict, best_sig) -> str:
+                                  tf_labels: dict, best_sig,
+                                  zones_data: dict = None, dfs: dict = None) -> str:
+    """Детальный анализ уровней: всегда два сценария LONG и SHORT."""
     NL = "\n"
-    lines = [f"🔍 <b>Анализ: {symbol}</b>" + NL + NL,
-             "📊 <b>Мультитаймфреймный обзор:</b>" + NL]
+    cls_map = {1: "Абсолютный", 2: "Сильный", 3: "Рабочий"}
+    clean_sym = symbol.replace("-USDT-SWAP", "").replace("-USDT", "")
+    zones_data = zones_data or {}
 
-    tf_order = ["1H", "4H", "1D"]
-    has_any = False
+    # Берём данные лучшего TF (4H приоритет)
+    z4h = zones_data.get("4H") or zones_data.get("1H") or zones_data.get("1D") or {}
+    z1d = zones_data.get("1D") or {}
+    current_price = z4h.get("price", 0)
+    rsi_now       = z4h.get("rsi", 50)
+    vol_ratio     = z4h.get("vol_ratio", 1.0)
+    bull_local    = z4h.get("bull_local", False)
+    bear_local    = z4h.get("bear_local", False)
 
-    for tf in tf_order:
-        sig = tf_analyses.get(tf)
-        label = tf_labels.get(tf, tf)
-        if sig:
-            has_any = True
-            dir_em = "🟢 LONG" if sig.direction == "LONG" else "🔴 SHORT"
-            cls_map = {1: "Абсолютный", 2: "Сильный", 3: "Рабочий"}
-            cls_name = cls_map.get(sig.level_class, "")
-            stars = "⭐" * sig.quality
-            lines.append(
-                NL + f"🕐 <b>{label} ({tf}):</b> {dir_em}  {stars}" + NL +
-                f"  Уровень: <code>{sig.entry:.4g}</code> ({cls_name}, {sig.test_count} касания)" + NL +
-                f"  Паттерн: {sig.pattern or sig.breakout_type}" + NL +
-                (f"  Сессия: {sig.session}" + NL if sig.session else "") +
-                (f"  Корреляция: {sig.corr_label}" + NL if sig.corr_label else "")
-            )
-        else:
-            lines.append(NL + f"🕐 <b>{label} ({tf}):</b> нет сигнала" + NL)
+    # Все зоны по всем ТФ (объединяем, приоритет HTF)
+    all_sup: list = []
+    all_res: list = []
+    for tf in ["1D", "4H", "1H"]:
+        zd = zones_data.get(tf, {})
+        for z in zd.get("sup", []):
+            z2 = dict(z); z2["_tf"] = tf
+            all_sup.append(z2)
+        for z in zd.get("res", []):
+            z2 = dict(z); z2["_tf"] = tf
+            all_res.append(z2)
 
-    if best_sig:
-        risk = abs(best_sig.entry - best_sig.sl)
-        rr1  = abs(best_sig.tp1 - best_sig.entry) / risk if risk > 0 else 0
-
-        dir_txt = "LONG" if best_sig.direction == "LONG" else "SHORT"
-        best_tf = next((tf for tf, s in tf_analyses.items() if s is best_sig), "?")
-
-        lines.append(
-            NL + "━━━━━━━━━━━━━━━━━━━━" + NL +
-            "🎯 <b>РЕКОМЕНДАЦИЯ:</b>" + NL + NL +
-            f"<b>{dir_txt}</b> от <code>{best_sig.entry:.4g}</code> — "
-            f"лучший сетап на {best_tf}." + NL +
-            f"🛑 SL: <code>{best_sig.sl:.4g}</code> (-{best_sig.risk_pct:.2f}%)" + NL +
-            f"🎯 TP1: <code>{best_sig.tp1:.4g}</code>  (R:R {rr1:.1f})" + NL +
-            f"🎯 TP2: <code>{best_sig.tp2:.4g}</code>" + NL +
-            f"🏆 TP3: <code>{best_sig.tp3:.4g}</code>" + NL + NL +
-            f"💡 <i>{best_sig.human_explanation}</i>"
-        )
-    elif not has_any:
-        lines.append(
-            NL + "━━━━━━━━━━━━━━━━━━━━" + NL +
-            "⚠️ <b>Сигналов не найдено</b>" + NL + NL +
-            "Монета не в зоне ни на одном таймфрейме. " + NL +
-            "Рекомендуется дождаться приближения к ключевым уровням."
-        )
+    # Тренд из 1D (HTF)
+    z1d_data = zones_data.get("1D", {})
+    htf_bull = z1d_data.get("bull_local", False)
+    htf_bear = z1d_data.get("bear_local", False)
+    if htf_bull:
+        trend_str = "📈 Бычий (EMA50 > EMA200)"
+    elif htf_bear:
+        trend_str = "📉 Медвежий (EMA50 < EMA200)"
     else:
-        lines.append(
-            NL + "━━━━━━━━━━━━━━━━━━━━" + NL +
-            "ℹ️ Уровни найдены, но качество входа пока недостаточно." + NL +
-            "Рекомендуется ждать подтверждения паттерна."
+        trend_str = "↔️ Боковик"
+
+    # ── Вспомогательная: построить план от уровня ───────────────────────────
+    def _plan_from_level(is_long: bool, entry_zone: dict,
+                         all_opposite: list, current_p: float) -> dict:
+        """Строим план входа от уровня поддержки (LONG) или сопротивления (SHORT)."""
+        lvl       = entry_zone["price"]
+        lvl_class = entry_zone.get("class", 3)
+        hits      = entry_zone.get("hits", 1)
+        tf_src    = entry_zone.get("_tf", "4H")
+        zone_buf  = lvl * 0.007   # 0.7% зона
+
+        if is_long:
+            entry_lo = lvl - zone_buf
+            entry_hi = lvl + zone_buf
+            sl       = lvl - zone_buf * 2.5  # стоп за структуру уровня
+            # TP1: ближайшее сопротивление выше
+            cands = sorted([z["price"] for z in all_opposite if z["price"] > lvl * 1.005])
+            tp1   = cands[0] if cands else lvl + abs(lvl - sl) * 2.5
+            tp2   = cands[1] if len(cands) > 1 else (lvl + abs(lvl - sl) * 4)
+            tp3   = cands[2] if len(cands) > 2 else (lvl + abs(lvl - sl) * 6)
+        else:
+            entry_lo = lvl - zone_buf
+            entry_hi = lvl + zone_buf
+            sl       = lvl + zone_buf * 2.5
+            # TP1: ближайшая поддержка ниже
+            cands = sorted([z["price"] for z in all_opposite if z["price"] < lvl * 0.995], reverse=True)
+            tp1   = cands[0] if cands else lvl - abs(sl - lvl) * 2.5
+            tp2   = cands[1] if len(cands) > 1 else (lvl - abs(sl - lvl) * 4)
+            tp3   = cands[2] if len(cands) > 2 else (lvl - abs(sl - lvl) * 6)
+
+        return dict(
+            lvl=lvl, lvl_class=lvl_class, hits=hits, tf_src=tf_src,
+            entry_lo=entry_lo, entry_hi=entry_hi,
+            sl=sl, tp1=tp1, tp2=tp2, tp3=tp3,
         )
-    return "".join(lines)
+
+    # ── Ищем лучшие зоны для каждого сценария ─────────────────────────────
+    def _best_zone(zones: list, is_long: bool, current_p: float):
+        """Ближайшая значимая зона для входа."""
+        if not zones or not current_p:
+            return None
+        # Сортируем по близости к текущей цене, с бонусом за класс
+        def score(z):
+            dist = abs(z["price"] - current_p) / current_p
+            cls_bonus = (4 - z.get("class", 3)) * 0.005  # class 1 = +0.015 бонус
+            return dist - cls_bonus
+        candidates = sorted(zones, key=score)
+        return candidates[0] if candidates else None
+
+    long_zone  = _best_zone(all_sup, True,  current_price)
+    short_zone = _best_zone(all_res, False, current_price)
+
+    long_plan  = _plan_from_level(True,  long_zone,  all_res, current_price) if long_zone  else None
+    short_plan = _plan_from_level(False, short_zone, all_sup, current_price) if short_zone else None
+
+    # ── Приоритет сценариев ────────────────────────────────────────────────
+    long_score  = (htf_bull * 3 + bull_local * 2 +
+                   (rsi_now < 40) * 2 + (vol_ratio > 1.5) * 1 +
+                   (long_zone and long_zone.get("class", 3) == 1) * 2)
+    short_score = (htf_bear * 3 + bear_local * 2 +
+                   (rsi_now > 60) * 2 + (vol_ratio > 1.5) * 1 +
+                   (short_zone and short_zone.get("class", 3) == 1) * 2)
+    long_is_priority = long_score >= short_score
+
+    # ── Рендер одного сценария ────────────────────────────────────────────
+    def _render_plan(is_long: bool, plan: dict, is_priority: bool,
+                     sig: "SignalResult | None") -> list:
+        lines = []
+        tag   = "🔥 ПРИОРИТЕТНЫЙ" if is_priority else "⚠️ КОНТР-ТРЕНДОВЫЙ"
+        dir_em = "📈 LONG" if is_long else "📉 SHORT"
+        lines.append(f"{tag} СЦЕНАРИЙ: {dir_em}" + NL)
+
+        lvl_name = cls_map.get(plan["lvl_class"], "Рабочий")
+        q_stars  = "⭐" * (4 - plan["lvl_class"]) + "☆" * (plan["lvl_class"] - 1)
+        lines.append(f"Уровень {plan['tf_src']}: <code>{_fmt_price(plan['lvl'])}</code> — "
+                     f"{lvl_name} ({plan['hits']} касания)  {q_stars}" + NL + NL)
+
+        lines.append(f"🎯 ЗОНА ВХОДА:" + NL)
+        lines.append(f"   <code>{_fmt_price(plan['entry_lo'])} – {_fmt_price(plan['entry_hi'])}</code>" + NL)
+        lines.append(f"   {'Ждать отскок у поддержки' if is_long else 'Ждать отказ у сопротивления'}" + NL + NL)
+
+        sl_pct = _pct_diff(plan["sl"], plan["lvl"])
+        lines.append(f"🛑 СТОП-ЛОСС: <code>{_fmt_price(plan['sl'])}</code>  (-{sl_pct})" + NL)
+        lines.append(f"   {'Ниже' if is_long else 'Выше'} зоны с буфером 2.5×" + NL + NL)
+
+        entry_mid = (plan["entry_lo"] + plan["entry_hi"]) / 2
+        tp1_pct = _pct_diff(plan["tp1"], entry_mid)
+        tp2_pct = _pct_diff(plan["tp2"], entry_mid)
+        tp3_pct = _pct_diff(plan["tp3"], entry_mid)
+        sign = "+" if is_long else "-"
+        lines.append("🎯 ЦЕЛИ:" + NL)
+        lines.append(f"   TP1: <code>{_fmt_price(plan['tp1'])}</code>  ({sign}{tp1_pct})  "
+                     f"{_rr(entry_mid, plan['sl'], plan['tp1'])}  ← ближайший уровень" + NL)
+        lines.append(f"   TP2: <code>{_fmt_price(plan['tp2'])}</code>  ({sign}{tp2_pct})  "
+                     f"{_rr(entry_mid, plan['sl'], plan['tp2'])}" + NL)
+        lines.append(f"   TP3: <code>{_fmt_price(plan['tp3'])}</code>  ({sign}{tp3_pct})  "
+                     f"{_rr(entry_mid, plan['sl'], plan['tp3'])}" + NL + NL)
+
+        # Факторы
+        lines.append("📋 ФАКТОРЫ:" + NL)
+        if is_long:
+            lines.append(f"{'✅' if htf_bull else '⚠️'} HTF тренд: {trend_str}" + NL)
+            lines.append(f"{'✅' if bull_local else '⚠️'} 4H тренд: {'📈 Бычий' if bull_local else '📉 Медвежий/Боковик'}" + NL)
+            lines.append(f"{'✅' if rsi_now < 45 else '⚠️'} RSI: <code>{rsi_now:.0f}</code> "
+                         f"{'— перепродан ✅' if rsi_now < 35 else '— нейтральный' if rsi_now < 55 else '— высокий ⚠️'}" + NL)
+            lines.append(f"{'✅' if vol_ratio > 1.3 else '—'} Объём: x{vol_ratio:.1f} {'— подтверждён' if vol_ratio > 1.3 else ''}" + NL)
+            lines.append(f"{'✅' if plan['lvl_class'] == 1 else '⭐' if plan['lvl_class'] == 2 else '—'} "
+                         f"Уровень: {lvl_name}" + NL)
+        else:
+            lines.append(f"{'✅' if htf_bear else '⚠️'} HTF тренд: {trend_str}" + NL)
+            lines.append(f"{'✅' if bear_local else '⚠️'} 4H тренд: {'📉 Медвежий' if bear_local else '📈 Бычий/Боковик'}" + NL)
+            lines.append(f"{'✅' if rsi_now > 55 else '⚠️'} RSI: <code>{rsi_now:.0f}</code> "
+                         f"{'— перекуплен ✅' if rsi_now > 65 else '— нейтральный' if rsi_now > 45 else '— низкий ⚠️'}" + NL)
+            lines.append(f"{'✅' if vol_ratio > 1.3 else '—'} Объём: x{vol_ratio:.1f} {'— подтверждён' if vol_ratio > 1.3 else ''}" + NL)
+            lines.append(f"{'✅' if plan['lvl_class'] == 1 else '⭐' if plan['lvl_class'] == 2 else '—'} "
+                         f"Уровень: {lvl_name}" + NL)
+
+        # Если есть реальный сигнал — добавляем
+        if sig and sig.direction == ("LONG" if is_long else "SHORT"):
+            lines.append(NL + f"⚡ <b>АКТИВНЫЙ СИГНАЛ</b>: {sig.pattern or sig.breakout_type}" + NL)
+            lines.append(f"   Вход сейчас: <code>{_fmt_price(sig.entry)}</code>  "
+                         f"SL: <code>{_fmt_price(sig.sl)}</code>" + NL)
+            lines.append(f"   Качество: {'⭐' * sig.quality}  RSI: {sig.rsi:.0f}" + NL)
+            if sig.corr_label:
+                lines.append(f"   {sig.corr_label}" + NL)
+
+        lines.append(NL + "⏳ УСЛОВИЕ ВХОДА:" + NL)
+        lines.append(f"   Возврат в зону <code>{_fmt_price(plan['entry_lo'])}–{_fmt_price(plan['entry_hi'])}</code>" + NL)
+        lines.append(f"   + {'бычья' if is_long else 'медвежья'} свеча-подтверждение" + NL)
+        if is_long and rsi_now > 60:
+            lines.append("   ⚠️ RSI высокий — ждать снижения RSI перед входом" + NL)
+        if not is_long and rsi_now < 40:
+            lines.append("   ⚠️ RSI низкий — ждать роста RSI перед входом" + NL)
+        return lines
+
+    # ── Заголовок ─────────────────────────────────────────────────────────
+    p = []
+    p.append(f"🔍 <b>АНАЛИЗ: {clean_sym} — Уровни (Price Action)</b>" + NL)
+    p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+
+    # Мультитаймфреймный обзор
+    p.append("🌍 <b>РЫНОЧНЫЙ КОНТЕКСТ</b>" + NL)
+    p.append(f"Тренд HTF (1D): <b>{trend_str}</b>" + NL)
+    p.append(f"Тренд MTF (4H): <b>{'📈 Бычий' if bull_local else '📉 Медвежий' if bear_local else '↔️ Боковик'}</b>" + NL)
+    if current_price:
+        p.append(f"Текущая цена: <code>{_fmt_price(current_price)}</code>" + NL)
+    p.append(f"RSI (4H): <code>{rsi_now:.0f}</code>  |  Объём: x{vol_ratio:.1f}" + NL)
+
+    p.append(NL + "📊 <b>ОБЗОР ПО ТАЙМФРЕЙМАМ:</b>" + NL)
+    tf_order = ["1H", "4H", "1D"]
+    for tf in tf_order:
+        sig   = tf_analyses.get(tf)
+        label = tf_labels.get(tf, tf)
+        zd    = zones_data.get(tf, {})
+        n_sup = len(zd.get("sup", []))
+        n_res = len(zd.get("res", []))
+        if sig:
+            dir_em   = "🟢 LONG" if sig.direction == "LONG" else "🔴 SHORT"
+            stars    = "⭐" * sig.quality
+            cls_name = cls_map.get(sig.level_class, "")
+            p.append(f"  {label} ({tf}): {dir_em}  {stars}  —  {sig.pattern or sig.breakout_type}" + NL)
+            p.append(f"    Уровень: <code>{_fmt_price(sig.entry)}</code>  ({cls_name})" + NL)
+        else:
+            p.append(f"  {label} ({tf}): нет сигнала у уровня  [{n_sup} sup / {n_res} res]" + NL)
+
+    p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+
+    # Находим лучший сигнал для каждого направления
+    best_long  = next((tf_analyses[tf] for tf in ["4H","1D","1H"]
+                       if tf_analyses.get(tf) and tf_analyses[tf].direction == "LONG"), None)
+    best_short = next((tf_analyses[tf] for tf in ["4H","1D","1H"]
+                       if tf_analyses.get(tf) and tf_analyses[tf].direction == "SHORT"), None)
+
+    # ── Рендеринг обоих сценариев ──────────────────────────────────────────
+    if long_is_priority:
+        if long_plan:
+            p.extend(_render_plan(True,  long_plan,  True,  best_long))
+        p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+        if short_plan:
+            p.extend(_render_plan(False, short_plan, False, best_short))
+    else:
+        if short_plan:
+            p.extend(_render_plan(False, short_plan, True,  best_short))
+        p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+        if long_plan:
+            p.extend(_render_plan(True,  long_plan,  False, best_long))
+
+    if not long_plan and not short_plan:
+        p.append("⚠️ Ключевых уровней не найдено — недостаточно данных." + NL)
+        p.append("Попробуйте более ликвидную монету или другой таймфрейм." + NL)
+
+    p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+
+    # ── Итог ──────────────────────────────────────────────────────────────
+    p.append("🏆 <b>ЛУЧШИЙ СЦЕНАРИЙ:</b>" + NL)
+    best_plan = (long_plan if long_is_priority else short_plan) or long_plan or short_plan
+    best_dir  = "📈 LONG" if long_is_priority else "📉 SHORT"
+    if best_plan:
+        conf = "🔥 Высокая" if max(long_score, short_score) >= 6 else \
+               "✅ Средняя" if max(long_score, short_score) >= 3 else "⚠️ Низкая"
+        p.append(f"{best_dir} от зоны <code>{_fmt_price(best_plan['entry_lo'])}–{_fmt_price(best_plan['entry_hi'])}</code>" + NL)
+        p.append(f"SL: <code>{_fmt_price(best_plan['sl'])}</code>  →  TP1: <code>{_fmt_price(best_plan['tp1'])}</code>  "
+                 f"TP3: <code>{_fmt_price(best_plan['tp3'])}</code>" + NL)
+        p.append(f"Уверенность: {conf}" + NL)
+
+    p.append(NL + "⚡ <i>CHM Laboratory — Price Action Strategy</i>")
+    return "".join(p)
 
 
 
@@ -1974,7 +2183,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = cb.data.replace("short_set_tf_", "")
         await cb.answer("✅ " + v)
-        _update_short_field(user, "timeframe", v); await um.save(user)
+        user.short_tf = v  # критично: TF хранится в user.short_tf, не в short_cfg
+        await um.save(user)
         await safe_edit(cb, "📊 <b>Таймфрейм ШОРТ</b>\n\nТекущий: <b>" + v + "</b>", kb_short_timeframes(v))
 
     @dp.callback_query(F.data == "menu_short_interval")
@@ -1989,7 +2199,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_interval_", ""))
         await cb.answer("✅ " + str(v//60) + " мин.")
-        _update_short_field(user, "scan_interval", v); await um.save(user)
+        user.short_interval = v  # критично: интервал хранится в user.short_interval
+        await um.save(user)
         await safe_edit(cb, "🔄 <b>Интервал ШОРТ</b>\n\nТекущий: <b>" + str(v//60) + " мин.</b>", kb_short_intervals(v))
 
     @dp.callback_query(F.data == "menu_short_settings")
