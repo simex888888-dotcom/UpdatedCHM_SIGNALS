@@ -413,14 +413,12 @@ def _analyze_smc_text(symbol: str, sig) -> str:
         confs + NL +
         "🧠 <b>Логика входа:</b>" + NL +
         "<i>" + sig.narrative + "</i>" + NL + NL +
-        "━━━━━━━━━━━━━━━━━━━━" + NL +
         "💰 Вход: <code>" + _fmt_price(sig.entry_low) + " – " + _fmt_price(sig.entry_high) + "</code>" + NL +
         "🛑 Стоп: <code>" + _fmt_price(sig.sl) + "</code>  <i>(-" + "{:.2f}".format(sig.risk_pct) + "%)</i>" + NL + NL +
         "🎯 TP1: <code>" + _fmt_price(sig.tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp1)) + "%)</i>" + NL +
         "🎯 TP2: <code>" + _fmt_price(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
         "🏆 TP3: <code>" + _fmt_price(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
-        "📐 R:R = 1:" + str(sig.rr) + NL +
-        "━━━━━━━━━━━━━━━━━━━━" + NL +
+        "📐 R:R = 1:" + str(sig.rr) + NL + NL +
         "⚡ <i>CHM Laboratory — SMC Strategy</i>"
     )
 
@@ -558,9 +556,9 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
     htf_bull = z1d_data.get("bull_local", False)
     htf_bear = z1d_data.get("bear_local", False)
     if htf_bull:
-        trend_str = "📈 Бычий (EMA50 > EMA200)"
+        trend_str = "📈 Бычий"
     elif htf_bear:
-        trend_str = "📉 Медвежий (EMA50 < EMA200)"
+        trend_str = "📉 Медвежий"
     else:
         trend_str = "↔️ Боковик"
 
@@ -632,7 +630,7 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
                      sig: "SignalResult | None") -> list:
         lines = []
         tag   = "🔥 ПРИОРИТЕТНЫЙ" if is_priority else "⚠️ КОНТР-ТРЕНДОВЫЙ"
-        dir_em = "📈 LONG" if is_long else "📉 SHORT"
+        dir_em = "🟢 LONG" if is_long else "🔴 SHORT"
         lines.append(f"{tag} СЦЕНАРИЙ: {dir_em}" + NL)
 
         lvl_name = cls_map.get(plan["lvl_class"], "Рабочий")
@@ -703,13 +701,12 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
         tp1_pct = _pct_diff(plan["tp1"], entry_mid)
         tp2_pct = _pct_diff(plan["tp2"], entry_mid)
         tp3_pct = _pct_diff(plan["tp3"], entry_mid)
-        sign = "+" if is_long else "-"
         lines.append("🎯 ЦЕЛИ:" + NL)
-        lines.append(f"   TP1: <code>{_fmt_price(plan['tp1'])}</code>  ({sign}{tp1_pct})  "
+        lines.append(f"   TP1: <code>{_fmt_price(plan['tp1'])}</code>  (+{tp1_pct})  "
                      f"{_rr(entry_mid, plan['sl'], plan['tp1'])}  ← ближайший уровень" + NL)
-        lines.append(f"   TP2: <code>{_fmt_price(plan['tp2'])}</code>  ({sign}{tp2_pct})  "
+        lines.append(f"   TP2: <code>{_fmt_price(plan['tp2'])}</code>  (+{tp2_pct})  "
                      f"{_rr(entry_mid, plan['sl'], plan['tp2'])}" + NL)
-        lines.append(f"   TP3: <code>{_fmt_price(plan['tp3'])}</code>  ({sign}{tp3_pct})  "
+        lines.append(f"   TP3: <code>{_fmt_price(plan['tp3'])}</code>  (+{tp3_pct})  "
                      f"{_rr(entry_mid, plan['sl'], plan['tp3'])}" + NL + NL)
 
         # Факторы
@@ -751,8 +748,7 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
 
     # ── Заголовок ─────────────────────────────────────────────────────────
     p = []
-    p.append(f"🔍 <b>АНАЛИЗ: {clean_sym} — Уровни (Price Action)</b>" + NL)
-    p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+    p.append(f"🔍 <b>АНАЛИЗ: {clean_sym} — Уровни (Price Action)</b>" + NL + NL)
 
     # Мультитаймфреймный обзор
     p.append("🌍 <b>РЫНОЧНЫЙ КОНТЕКСТ</b>" + NL)
@@ -779,7 +775,7 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
         else:
             p.append(f"  {label} ({tf}): нет сигнала у уровня  [{n_sup} sup / {n_res} res]" + NL)
 
-    p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+    p.append(NL)
 
     # Находим лучший сигнал для каждого направления
     best_long  = next((tf_analyses[tf] for tf in ["4H","1D","1H"]
@@ -791,13 +787,13 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
     if long_is_priority:
         if long_plan:
             p.extend(_render_plan(True,  long_plan,  True,  best_long))
-        p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+        p.append(NL)
         if short_plan:
             p.extend(_render_plan(False, short_plan, False, best_short))
     else:
         if short_plan:
             p.extend(_render_plan(False, short_plan, True,  best_short))
-        p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+        p.append(NL)
         if long_plan:
             p.extend(_render_plan(True,  long_plan,  False, best_long))
 
@@ -805,12 +801,12 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
         p.append("⚠️ Ключевых уровней не найдено — недостаточно данных." + NL)
         p.append("Попробуйте более ликвидную монету или другой таймфрейм." + NL)
 
-    p.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL)
+    p.append(NL)
 
     # ── Итог ──────────────────────────────────────────────────────────────
     p.append("🏆 <b>ЛУЧШИЙ СЦЕНАРИЙ:</b>" + NL)
     best_plan = (long_plan if long_is_priority else short_plan) or long_plan or short_plan
-    best_dir  = "📈 LONG" if long_is_priority else "📉 SHORT"
+    best_dir  = "🟢 LONG" if long_is_priority else "🔴 SHORT"
     if best_plan:
         conf = "🔥 Высокая" if max(long_score, short_score) >= 6 else \
                "✅ Средняя" if max(long_score, short_score) >= 3 else "⚠️ Низкая"
@@ -998,7 +994,7 @@ def _format_smc_deep_analysis(symbol: str, analysis: dict, dfs: dict) -> str:
             return []
         lines = []
         tag   = "🔥 ПРИОРИТЕТНЫЙ" if is_priority else "⚠️ КОНТР-ТРЕНДОВЫЙ"
-        dir_em = "📈 LONG" if is_long else "📉 SHORT"
+        dir_em = "🟢 LONG" if is_long else "🔴 SHORT"
         lines.append(f"{tag} СЦЕНАРИЙ: {dir_em}" + NL)
 
         # Качество сигнала

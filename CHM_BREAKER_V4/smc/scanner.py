@@ -29,19 +29,20 @@ _sent_signals: dict[str, float] = {}
 _DEDUP_HOURS = 4  # часов между одинаковыми сигналами
 
 
+def _fp(v: float) -> str:
+    """Форматирует цену без научной нотации."""
+    if v >= 10_000: return f"{v:,.0f}"
+    if v >= 100:    return f"{v:,.1f}"
+    if v >= 1:      return f"{v:.4f}".rstrip("0").rstrip(".")
+    return f"{v:.6f}".rstrip("0").rstrip(".")
+
+
 def _signal_text_smc(sig: SMCSignalResult) -> str:
     NL = "\n"
     is_long = sig.direction == "LONG"
-    # Крупный чёткий заголовок направления
-    dir_banner = (
-        "┌─────────────────────────────┐" + NL +
-        "│  📈📈  LONG — ПОКУПКА  📈📈  │" + NL +
-        "└─────────────────────────────┘"
-    ) if is_long else (
-        "┌─────────────────────────────┐" + NL +
-        "│  📉📉  SHORT — ПРОДАЖА 📉📉  │" + NL +
-        "└─────────────────────────────┘"
-    )
+    dir_line = ("🟢 <b>LONG — ПОКУПКА</b>" if is_long
+                else "🔴 <b>SHORT — ПРОДАЖА</b>")
+    stars = "⭐" * sig.score + "☆" * (5 - sig.score)
 
     confirmations_block = ""
     for label, passed in sig.confirmations:
@@ -49,25 +50,21 @@ def _signal_text_smc(sig: SMCSignalResult) -> str:
         confirmations_block += mark + " " + label + NL
 
     def pct(t): return abs((t - sig.entry) / sig.entry * 100)
-    sign = "+" if is_long else "-"
 
     return (
-        dir_banner + NL +
-        sig.grade + "  " + sig.symbol + NL +
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL +
+        dir_line + "  " + sig.grade + NL +
+        "<b>" + sig.symbol + "</b>  " + stars + NL + NL +
         "📊 ТФ: " + sig.tf_ltf + " → " + sig.tf_mtf + " → " + sig.tf_htf + NL +
-        "💰 Вход: <code>" + "{:.4g}".format(sig.entry_low) + " – " + "{:.4g}".format(sig.entry_high) + "</code>" + NL +
-        "🛑 Стоп: <code>" + "{:.4g}".format(sig.sl) + "</code>  (-" + "{:.2f}".format(sig.risk_pct) + "%)" + NL + NL +
-        "🎯 TP1: <code>" + "{:.4g}".format(sig.tp1) + "</code>  (" + sign + "{:.2f}".format(pct(sig.tp1)) + "%) — 33% позиции" + NL +
-        "🎯 TP2: <code>" + "{:.4g}".format(sig.tp2) + "</code>  (" + sign + "{:.2f}".format(pct(sig.tp2)) + "%) — 50% позиции" + NL +
-        "🏆 TP3: <code>" + "{:.4g}".format(sig.tp3) + "</code>  (" + sign + "{:.2f}".format(pct(sig.tp3)) + "%) — 17% позиции" + NL +
-        "📐 R:R = 1:" + str(sig.rr) + NL +
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL +
+        "💰 Вход: <code>" + _fp(sig.entry_low) + " – " + _fp(sig.entry_high) + "</code>" + NL +
+        "🛑 Стоп: <code>" + _fp(sig.sl) + "</code>  (-" + "{:.2f}".format(sig.risk_pct) + "%)" + NL + NL +
+        "🎯 TP1: <code>" + _fp(sig.tp1) + "</code>  (+" + "{:.2f}".format(pct(sig.tp1)) + "%) — 33% позиции" + NL +
+        "🎯 TP2: <code>" + _fp(sig.tp2) + "</code>  (+" + "{:.2f}".format(pct(sig.tp2)) + "%) — 50% позиции" + NL +
+        "🏆 TP3: <code>" + _fp(sig.tp3) + "</code>  (+" + "{:.2f}".format(pct(sig.tp3)) + "%) — 17% позиции" + NL +
+        "📐 R:R = 1:" + str(sig.rr) + NL + NL +
         "📋 ПОДТВЕРЖДЕНИЯ (" + str(sig.score) + "/5):" + NL +
         confirmations_block + NL +
         "🧠 ЛОГИКА ВХОДА:" + NL +
-        sig.narrative + NL +
-        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + NL +
+        sig.narrative + NL + NL +
         "⚡ <i>CHM Laboratory — SMC Strategy</i>"
     )
 
