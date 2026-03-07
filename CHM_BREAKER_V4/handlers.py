@@ -468,8 +468,8 @@ async def _do_analyze_multitf(symbol: str, fetcher, indicator,
         smc_cfg      = SMCConfig()
         smc_analyzer = SMCAnalyzer(smc_cfg)
 
-        df_htf = dfs.get("1D") or dfs.get("4H")
-        df_mtf = dfs.get("4H") or dfs.get("1H")
+        df_htf = dfs.get("1D") if dfs.get("1D") is not None else dfs.get("4H")
+        df_mtf = dfs.get("4H") if dfs.get("4H") is not None else dfs.get("1H")
         df_ltf = dfs.get("1H")
 
         if df_htf is None or df_mtf is None:
