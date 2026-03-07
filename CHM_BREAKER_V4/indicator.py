@@ -844,6 +844,14 @@ class CHMIndicator:
     # ГЕНЕРАЦИЯ human_explanation
     # ─────────────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _fmt_p(v: float) -> str:
+        """Форматирует цену без научной нотации."""
+        if v >= 10_000: return f"{v:,.0f}"
+        if v >= 100:    return f"{v:,.1f}"
+        if v >= 1:      return f"{v:.4f}".rstrip("0").rstrip(".")
+        return f"{v:.6f}".rstrip("0").rstrip(".")
+
     def _build_human_explanation(self, signal: str, s_level: float,
                                  s_class: int, s_hits: int, s_type: str,
                                  entry: float, sl: float,
@@ -852,22 +860,72 @@ class CHMIndicator:
                                  risk_pct: float, session: str,
                                  corr_label: str,
                                  diverg_label: str) -> str:
-        class_names = {1: "Абсолютному", 2: "Сильному", 3: "Рабочему"}
-        lvl_name    = class_names.get(s_class, "Рабочему")
-        parts = [
-            f"Цена подошла к {lvl_name} уровню {s_level:.4g} ({s_hits} касаний). "
-            f"{s_type}."
-        ]
+        fp = self._fmt_p
+        is_long = signal == "LONG"
+        cls_names = {1: "Абсолютный", 2: "Сильный", 3: "Рабочий"}
+        lvl_label = cls_names.get(s_class, "Рабочий")
+        side_lvl  = "поддержки" if is_long else "сопротивления"
+
+        # 1. Описание уровня
+        hits_str = (f"{s_hits} касания" if s_hits <= 4
+                    else f"{s_hits} касаний")
+        if s_hits >= 3:
+            lvl_part = (f"{lvl_label} уровень {fp(s_level)} ({hits_str}) — "
+                        f"каждый раз давал уверенную реакцию.")
+        else:
+            lvl_part = (f"{lvl_label} уровень {fp(s_level)} ({hits_str}).")
+
+        # 2. Тип сетапа
+        if "Ложный пробой" in s_type or "Fakeout" in s_type:
+            if is_long:
+                setup_part = ("Цена ушла ниже уровня, но быстро вернулась — "
+                              "ложный пробой вниз, ловушка для продавцов.")
+            else:
+                setup_part = ("Цена пробила уровень вверх, но не закрепилась — "
+                              "ложный пробой, ловушка для покупателей.")
+        elif "SFP" in s_type:
+            if is_long:
+                setup_part = ("Захват ликвидности снизу (SFP): пробой ниже уровня "
+                              "со быстрым возвратом — бычья ловушка медвежьих стопов.")
+            else:
+                setup_part = ("Захват ликвидности сверху (SFP): пробой выше уровня "
+                              "со быстрым возвратом — медвежья ловушка бычьих стопов.")
+        elif "Ретест" in s_type:
+            if is_long:
+                setup_part = ("Уровень пробит снизу вверх и сменил роль — "
+                              "бывшее сопротивление стало поддержкой. "
+                              "Ретест — классическая точка входа в лонг.")
+            else:
+                setup_part = ("Уровень пробит сверху вниз и сменил роль — "
+                              "бывшая поддержка стала сопротивлением. "
+                              "Ретест подтверждает смену тренда.")
+        elif "Пробой" in s_type:
+            if is_long:
+                setup_part = ("Пробой ключевого уровня вверх с закреплением. "
+                              "Вход на импульсе по тренду.")
+            else:
+                setup_part = ("Пробой ключевой поддержки вниз с закреплением. "
+                              "Вход на импульсе по тренду.")
+        else:
+            if is_long:
+                setup_part = (f"Цена подошла к уровню {side_lvl} и показывает "
+                              "признаки разворота. Отскок от ключевой зоны.")
+            else:
+                setup_part = (f"Цена подошла к уровню {side_lvl} и теряет импульс. "
+                              "Ожидается отказ и разворот вниз.")
+
+        # 3. Риск и цели
+        risk_part = (f"Стоп за структуру {fp(sl)} (риск {risk_pct:.1f}%). "
+                     f"TP1: {fp(tp1)} (R:R 1:{rr1:.1f}), TP2: {fp(tp2)} (R:R 1:{rr2:.1f}).")
+
+        parts = [lvl_part, setup_part]
         if session:
             parts.append(session)
         if corr_label:
             parts.append(corr_label)
         if diverg_label:
             parts.append(diverg_label)
-        parts.append(
-            f"Стоп за структуру на {sl:.4g} (риск {risk_pct:.1f}%). "
-            f"Цель TP1: {tp1:.4g} (R:R {rr1:.1f}), TP2: {tp2:.4g} (R:R {rr2:.1f})."
-        )
+        parts.append(risk_part)
         return " ".join(parts)
 
     # ─────────────────────────────────────────────────────────────────────────
