@@ -202,6 +202,12 @@ def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
     quality_factors = (
         "📋 <b>Факторы качества:</b>" + NL + NL.join(sig.reasons)
     ) if sig.reasons else ""
+    def _fp(v: float) -> str:
+        if v >= 10_000: return f"{v:,.0f}"
+        if v >= 100:    return f"{v:,.1f}"
+        if v >= 1:      return f"{v:.4f}".rstrip("0").rstrip(".")
+        return f"{v:.6f}".rstrip("0").rstrip(".")
+
     return (
         header + NL + NL +
         "💎 <b>" + sig.symbol + "</b>  " + emoji + "  <b>" + sig.breakout_type + "</b>" +
@@ -210,11 +216,11 @@ def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
         quality_factors + NL + NL +
         "🧠 <b>Анализ:</b> <i>" + sig.human_explanation + "</i>" + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
-        "💰 Вход:    <code>" + "{:.6g}".format(sig.entry) + "</code>" + NL +
-        "🛑 Стоп:    <code>" + "{:.6g}".format(sig.sl) + "</code>  <i>(-" + "{:.2f}".format(sig.risk_pct) + "%)</i>" + NL + NL +
-        "🎯 Цель 1: <code>" + "{:.6g}".format(sig.tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp1)) + "%)</i>" + NL +
-        "🎯 Цель 2: <code>" + "{:.6g}".format(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
-        "🏆 Цель 3: <code>" + "{:.6g}".format(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
+        "💰 Вход:    <code>" + _fp(sig.entry) + "</code>" + NL +
+        "🛑 Стоп:    <code>" + _fp(sig.sl) + "</code>  <i>(-" + "{:.2f}".format(sig.risk_pct) + "%)</i>" + NL + NL +
+        "🎯 Цель 1: <code>" + _fp(sig.tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp1)) + "%)</i>" + NL +
+        "🎯 Цель 2: <code>" + _fp(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
+        "🏆 Цель 3: <code>" + _fp(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL + NL +
         "📊 " + sig.trend_local + "  |  RSI: <code>" + "{:.1f}".format(sig.rsi) + "</code>  |  Vol: <code>x" + "{:.1f}".format(sig.volume_ratio) + "</code>" + NL +
         _corr_label(sig.btc_corr, sig.eth_corr) + NL + NL +

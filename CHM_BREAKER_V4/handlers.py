@@ -637,12 +637,63 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
 
         lvl_name = cls_map.get(plan["lvl_class"], "Рабочий")
         q_stars  = "⭐" * (4 - plan["lvl_class"]) + "☆" * (plan["lvl_class"] - 1)
+        hits = plan["hits"]
+        hits_str = f"{hits} касания" if hits <= 4 else f"{hits} касаний"
         lines.append(f"Уровень {plan['tf_src']}: <code>{_fmt_price(plan['lvl'])}</code> — "
-                     f"{lvl_name} ({plan['hits']} касания)  {q_stars}" + NL + NL)
+                     f"{lvl_name} ({hits_str})  {q_stars}" + NL + NL)
+
+        # ── Логика входа как трейдер ──────────────────────────────────────
+        setup_type = (sig.breakout_type if sig and sig.direction == ("LONG" if is_long else "SHORT")
+                      else ("Отскок от поддержки" if is_long else "Отскок от сопротивления"))
+        if "Ложный пробой" in setup_type or "Fakeout" in setup_type:
+            setup_label = "Ложный пробой"
+            if is_long:
+                setup_desc = ("Цена ушла ниже уровня, но быстро вернулась — "
+                              "ловушка для продавцов. Вход после возврата за уровень.")
+            else:
+                setup_desc = ("Цена пробила уровень вверх, но не закрепилась — "
+                              "ловушка для покупателей. Вход после возврата под уровень.")
+        elif "SFP" in setup_type:
+            setup_label = "Захват ликвидности (SFP)"
+            if is_long:
+                setup_desc = ("Пробой ниже ликвидности со быстрым возвратом — "
+                              "бычья ловушка. Вход при закрытии свечи выше уровня.")
+            else:
+                setup_desc = ("Пробой выше ликвидности со быстрым возвратом — "
+                              "медвежья ловушка. Вход при закрытии свечи ниже уровня.")
+        elif "Ретест" in setup_type:
+            setup_label = "Ретест пробитого уровня"
+            if is_long:
+                setup_desc = ("Бывшее сопротивление стало поддержкой — "
+                              "уровень сменил роль. Ретест подтверждает смену и даёт точку входа.")
+            else:
+                setup_desc = ("Бывшая поддержка стала сопротивлением — "
+                              "уровень сменил роль. Ретест = точка входа в шорт.")
+        elif "Пробой" in setup_type:
+            setup_label = "Пробой уровня"
+            if is_long:
+                setup_desc = "Пробой сопротивления вверх с закреплением. Вход на импульсе."
+            else:
+                setup_desc = "Пробой поддержки вниз с закреплением. Вход на импульсе."
+        else:
+            setup_label = "Отбой от уровня"
+            if is_long:
+                setup_desc = ("Цена приближается к поддержке. "
+                              "Ждать замедления и бычьей свечи-подтверждения.")
+            else:
+                setup_desc = ("Цена приближается к сопротивлению. "
+                              "Ждать отказа и медвежьей свечи-подтверждения.")
+
+        htf_ctx = ("✅ Старший ТФ бычий — сделка по тренду." if (is_long and htf_bull)
+                   else "✅ Старший ТФ медвежий — сделка по тренду." if (not is_long and htf_bear)
+                   else "⚠️ Старший ТФ нейтрален — повышенная осторожность.")
+        lines.append(f"🧠 ЛОГИКА ВХОДА: <i>{setup_label}</i>" + NL)
+        lines.append(f"   {setup_desc}" + NL)
+        lines.append(f"   {htf_ctx}" + NL + NL)
+        # ─────────────────────────────────────────────────────────────────
 
         lines.append(f"🎯 ЗОНА ВХОДА:" + NL)
-        lines.append(f"   <code>{_fmt_price(plan['entry_lo'])} – {_fmt_price(plan['entry_hi'])}</code>" + NL)
-        lines.append(f"   {'Ждать отскок у поддержки' if is_long else 'Ждать отказ у сопротивления'}" + NL + NL)
+        lines.append(f"   <code>{_fmt_price(plan['entry_lo'])} – {_fmt_price(plan['entry_hi'])}</code>" + NL + NL)
 
         sl_pct = _pct_diff(plan["sl"], plan["lvl"])
         lines.append(f"🛑 СТОП-ЛОСС: <code>{_fmt_price(plan['sl'])}</code>  (-{sl_pct})" + NL)

@@ -172,7 +172,6 @@ def _settings_menu(prefix: str, back_cb: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         _noop("── Сигналы ──────────────────"),
         _btn("📐 Пивоты и уровни S/R",          "menu_" + p + "pivots"),
-        _btn("📉 EMA тренд",                     "menu_" + p + "ema"),
         _btn("🔬 Фильтры (RSI / Объём / HTF)",  "menu_" + p + "filters"),
         _btn("⭐ Качество сигнала",               "menu_" + p + "quality"),
         _btn("🔁 Cooldown между сигналами",       "menu_" + p + "cooldown"),
