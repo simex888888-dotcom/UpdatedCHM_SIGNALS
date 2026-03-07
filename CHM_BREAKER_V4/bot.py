@@ -91,9 +91,47 @@ async def main():
 
     register_handlers(dp, bot, um, scanner, config)
 
+    # ─── Авто-восстановление подписок при старте ─────────────────────────────
+    async def _auto_restore_subs():
+        """Восстанавливает подписки из subs_backup.txt если БД пуста."""
+        import os
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subs_backup.txt")
+        if not os.path.exists(path):
+            return
+        existing = await um.all_users()
+        active_ids = {u.user_id for u in existing if u.sub_status in ("active", "trial")}
+        if active_ids:
+            log.info(f"✅ В БД уже есть {len(active_ids)} активных пользователей — авторестор не нужен")
+            return
+        import time as _time
+        restored = 0
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    parts = line.split("\t")
+                    if len(parts) < 4:
+                        continue
+                    uid = int(parts[0]); username = parts[1]
+                    sub_status = parts[2]; sub_expires = float(parts[3])
+                    if sub_expires <= _time.time():
+                        continue
+                    user = await um.get_or_create(uid, username)
+                    user.sub_status = sub_status
+                    user.sub_expires = sub_expires
+                    user.username = username or user.username
+                    await um.save(user)
+                    restored += 1
+            log.info(f"🔄 Авторестор подписок: восстановлено {restored}")
+        except Exception as e:
+            log.error(f"Авторестор ошибка: {e}")
+
     # Рассылка при запуске — после того как aiogram установит соединение с Telegram
     @dp.startup()
     async def on_startup():
+        await _auto_restore_subs()
         log.info("🔄 Рассылка уведомлений о перезапуске...")
         await notify_restart(bot, um, config.ADMIN_IDS)
 

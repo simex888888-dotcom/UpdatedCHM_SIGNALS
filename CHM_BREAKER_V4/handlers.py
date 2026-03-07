@@ -968,7 +968,30 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await wait_msg.delete()
         except Exception:
             pass
-        await send(result_text, parse_mode="HTML")
+        # Telegram limit: 4096 chars. Split if needed.
+        MAX = 4000
+        if len(result_text) <= MAX:
+            try:
+                await send(result_text, parse_mode="HTML")
+            except Exception as e:
+                log.error(f"_do_analyze send error: {e}")
+                await send(f"❌ Не удалось отправить анализ: {e}")
+        else:
+            parts = []
+            current = ""
+            for line in result_text.split("\n"):
+                if len(current) + len(line) + 1 > MAX:
+                    parts.append(current)
+                    current = line
+                else:
+                    current = (current + "\n" + line) if current else line
+            if current:
+                parts.append(current)
+            for part in parts:
+                try:
+                    await send(part, parse_mode="HTML")
+                except Exception:
+                    await send(part)  # fallback без HTML если тег сломан
 
     @dp.message(Command("analyze"))
     async def cmd_analyze(msg: Message, state: FSMContext):
@@ -2757,6 +2780,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await msg.answer("❌ Пользователь " + str(tid) + " не найден"); return
         user.grant_access(days)
         await um.save(user)
+        await _save_subs_backup()   # автосохранение на диск
         await msg.answer("✅ Доступ выдан @" + str(user.username or tid) + " на " + str(days) + " дней")
         try:
             await bot.send_message(
@@ -2867,6 +2891,86 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.message(Command("help"))
     async def cmd_help(msg: Message):
         await msg.answer(help_text(), parse_mode="HTML", reply_markup=kb_help())
+
+    # ─── ЭКСПОРТ / ИМПОРТ ПОДПИСОК ────────────────────
+    # После редеплоя БД может быть пуста. /export_subs сохраняет
+    # список активных подписок в файл и в Telegram.
+    # /import_subs восстанавливает их из файла.
+
+    def _subs_backup_path() -> str:
+        import os
+        return os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "subs_backup.txt"
+        )
+
+    async def _save_subs_backup():
+        """Сохраняет активных пользователей в файл рядом со скриптом."""
+        import os, datetime
+        users = await um.all_users()
+        lines = [f"# Backup: {datetime.datetime.utcnow().isoformat()}"]
+        for u in users:
+            if u.sub_status in ("active", "trial") and u.sub_expires > time.time():
+                lines.append(
+                    f"{u.user_id}\t{u.username or ''}\t{u.sub_status}\t{u.sub_expires:.0f}"
+                )
+        path = _subs_backup_path()
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+        except Exception as e:
+            log.warning(f"subs backup write error: {e}")
+
+    @dp.message(Command("export_subs"))
+    async def cmd_export_subs(msg: Message):
+        if not is_admin(msg.from_user.id): return
+        await _save_subs_backup()
+        users = await um.all_users()
+        active = [u for u in users if u.sub_status in ("active", "trial") and u.sub_expires > time.time()]
+        if not active:
+            await msg.answer("📋 Нет активных подписок."); return
+        lines = ["📋 <b>Активные подписки:</b>", ""]
+        for u in active:
+            left = u.time_left_str()
+            lines.append(f"<code>/give {u.user_id} ___</code>  @{u.username or u.user_id}  осталось: {left}")
+        lines.append("")
+        lines.append(f"<i>Файл: subs_backup.txt — используй /import_subs после редеплоя</i>")
+        await msg.answer("\n".join(lines), parse_mode="HTML")
+
+    @dp.message(Command("import_subs"))
+    async def cmd_import_subs(msg: Message):
+        if not is_admin(msg.from_user.id): return
+        path = _subs_backup_path()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            await msg.answer("❌ Файл subs_backup.txt не найден. Сначала сделай /export_subs."); return
+        restored = 0
+        errors = 0
+        for line in lines:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 4:
+                continue
+            try:
+                uid = int(parts[0])
+                username = parts[1]
+                sub_status = parts[2]
+                sub_expires = float(parts[3])
+                if sub_expires <= time.time():
+                    continue  # уже истекла
+                user = await um.get_or_create(uid, username)
+                user.sub_status  = sub_status
+                user.sub_expires = sub_expires
+                user.username    = username or user.username
+                await um.save(user)
+                restored += 1
+            except Exception as e:
+                log.warning(f"import_subs line error: {e}")
+                errors += 1
+        await msg.answer(f"✅ Восстановлено: {restored}  ❌ Ошибок: {errors}")
 
     # ─── Закрываем register_handlers ──────────────────
     # (конец функции)
