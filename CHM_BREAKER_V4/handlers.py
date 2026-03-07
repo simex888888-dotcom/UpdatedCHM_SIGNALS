@@ -594,8 +594,8 @@ def _format_smc_deep_analysis(symbol: str, analysis: dict, dfs: dict) -> str:
     trend_map = {"BULLISH": "📈 Восходящий (HH/HL)",
                  "BEARISH": "📉 Нисходящий (LH/LL)",
                  "RANGING": "↔️ Боковик (флет)"}
-    zone_map  = {"PREMIUM":      "🔴 Премиум — зона продаж (>50%)",
-                 "DISCOUNT":     "🟢 Дискаунт — зона покупок (<50%)",
+    zone_map  = {"PREMIUM":      "🔴 Премиум — зона продаж (&gt;50%)",
+                 "DISCOUNT":     "🟢 Дискаунт — зона покупок (&lt;50%)",
                  "EQUILIBRIUM":  "⚖️ Равновесие (50%)"}
 
     p = [f"🔍 <b>SMC Анализ: {symbol}</b>" + NL + NL]
