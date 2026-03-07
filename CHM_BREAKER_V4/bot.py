@@ -93,38 +93,56 @@ async def main():
 
     # ─── Авто-восстановление подписок при старте ─────────────────────────────
     async def _auto_restore_subs():
-        """Восстанавливает подписки из subs_backup.txt если БД пуста."""
-        import os
+        """Восстанавливает подписки из subs_backup.txt при каждом старте.
+
+        Логика слияния (merge): обновляем пользователя только если
+        бэкап содержит более позднюю дату истечения, чем в БД.
+        Это безопасно при любом сценарии (пустая БД, частично заполненная,
+        или полностью заполненная — лишних перезаписей не будет).
+        """
+        import os, time as _time
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subs_backup.txt")
         if not os.path.exists(path):
             return
-        existing = await um.all_users()
-        active_ids = {u.user_id for u in existing if u.sub_status in ("active", "trial")}
-        if active_ids:
-            log.info(f"✅ В БД уже есть {len(active_ids)} активных пользователей — авторестор не нужен")
-            return
-        import time as _time
         restored = 0
+        skipped  = 0
+        now = _time.time()
         try:
             with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith("#"):
-                        continue
-                    parts = line.split("\t")
-                    if len(parts) < 4:
-                        continue
-                    uid = int(parts[0]); username = parts[1]
-                    sub_status = parts[2]; sub_expires = float(parts[3])
-                    if sub_expires <= _time.time():
-                        continue
-                    user = await um.get_or_create(uid, username)
-                    user.sub_status = sub_status
-                    user.sub_expires = sub_expires
-                    user.username = username or user.username
-                    await um.save(user)
-                    restored += 1
-            log.info(f"🔄 Авторестор подписок: восстановлено {restored}")
+                lines = f.readlines()
+            # Загружаем текущих пользователей из БД одним запросом
+            existing = {u.user_id: u for u in await um.all_users()}
+            for line in lines:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("\t")
+                if len(parts) < 4:
+                    continue
+                try:
+                    uid        = int(parts[0])
+                    username   = parts[1]
+                    sub_status = parts[2]
+                    sub_expires = float(parts[3])
+                except (ValueError, IndexError):
+                    continue
+                if sub_expires <= now:
+                    continue  # подписка уже истекла — пропускаем
+                # Применяем только если бэкап даёт более позднюю дату
+                cur = existing.get(uid)
+                if cur and cur.sub_expires >= sub_expires:
+                    skipped += 1
+                    continue  # в БД уже лучше или равно
+                user = await um.get_or_create(uid, username)
+                user.sub_status  = sub_status
+                user.sub_expires = sub_expires
+                if username:
+                    user.username = username
+                await um.save(user)
+                existing[uid] = user  # обновляем кэш
+                restored += 1
+            if restored or skipped:
+                log.info(f"🔄 Авторестор подписок: восстановлено {restored}, без изменений {skipped}")
         except Exception as e:
             log.error(f"Авторестор ошибка: {e}")
 

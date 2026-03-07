@@ -215,6 +215,7 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
                     user.user_id, text,
                     parse_mode="HTML",
                     reply_markup=_smc_keyboard(sig.symbol),
+                    protect_content=True,
                 )
                 log.info(f"SMC ✅ {symbol} {sig.direction} {sig.grade} → @{user.username or user.user_id}")
             except TelegramForbiddenError:

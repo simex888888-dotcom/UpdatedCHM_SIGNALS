@@ -414,6 +414,7 @@ class MidScanner:
                 signal_text(sig, cfg),
                 parse_mode="HTML",
                 reply_markup=signal_compact_keyboard(trade_id, sig.symbol),
+                protect_content=True,
             )
             user.signals_received += 1
             await self.um.save(user)
