@@ -318,11 +318,11 @@ def _analyze_result_text(symbol: str, sig) -> str:
         reasons_block +
         "🧠 <b>Анализ:</b> <i>" + sig.human_explanation + "</i>" + NL + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
-        "💰 Вход:    <code>" + "{:.6g}".format(sig.entry) + "</code>" + NL +
-        "🛑 Стоп:    <code>" + "{:.6g}".format(sig.sl) + "</code>  <i>(-" + "{:.2f}".format(sig.risk_pct) + "%)</i>" + NL + NL +
-        "🎯 Цель 1: <code>" + "{:.6g}".format(sig.tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp1)) + "%)</i>" + NL +
-        "🎯 Цель 2: <code>" + "{:.6g}".format(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
-        "🏆 Цель 3: <code>" + "{:.6g}".format(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
+        "💰 Вход:    <code>" + _fmt_price(sig.entry) + "</code>" + NL +
+        "🛑 Стоп:    <code>" + _fmt_price(sig.sl) + "</code>  <i>(-" + "{:.2f}".format(sig.risk_pct) + "%)</i>" + NL + NL +
+        "🎯 Цель 1: <code>" + _fmt_price(sig.tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp1)) + "%)</i>" + NL +
+        "🎯 Цель 2: <code>" + _fmt_price(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
+        "🏆 Цель 3: <code>" + _fmt_price(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
         "📊 RSI: <code>" + "{:.1f}".format(sig.rsi) + "</code>  |  Vol: <code>x" + "{:.1f}".format(sig.volume_ratio) + "</code>" + NL +
         "⚡ <i>CHM Laboratory — ручной анализ</i>"
@@ -414,11 +414,11 @@ def _analyze_smc_text(symbol: str, sig) -> str:
         "🧠 <b>Логика входа:</b>" + NL +
         "<i>" + sig.narrative + "</i>" + NL + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
-        "💰 Вход: <code>" + "{:.4g}".format(sig.entry_low) + " – " + "{:.4g}".format(sig.entry_high) + "</code>" + NL +
-        "🛑 Стоп: <code>" + "{:.4g}".format(sig.sl) + "</code>  <i>(-" + "{:.2f}".format(sig.risk_pct) + "%)</i>" + NL + NL +
-        "🎯 TP1: <code>" + "{:.4g}".format(sig.tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp1)) + "%)</i>" + NL +
-        "🎯 TP2: <code>" + "{:.4g}".format(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
-        "🏆 TP3: <code>" + "{:.4g}".format(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
+        "💰 Вход: <code>" + _fmt_price(sig.entry_low) + " – " + _fmt_price(sig.entry_high) + "</code>" + NL +
+        "🛑 Стоп: <code>" + _fmt_price(sig.sl) + "</code>  <i>(-" + "{:.2f}".format(sig.risk_pct) + "%)</i>" + NL + NL +
+        "🎯 TP1: <code>" + _fmt_price(sig.tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp1)) + "%)</i>" + NL +
+        "🎯 TP2: <code>" + _fmt_price(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
+        "🏆 TP3: <code>" + _fmt_price(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
         "📐 R:R = 1:" + str(sig.rr) + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
         "⚡ <i>CHM Laboratory — SMC Strategy</i>"
@@ -497,7 +497,6 @@ async def _do_analyze_multitf(symbol: str, fetcher, indicator,
                     best_sig = sig
                 # Собираем зоны для dual-scenario независимо от наличия сигнала
                 try:
-                    import numpy as np
                     atr_s  = indicator._atr(df, indicator.cfg.ATR_PERIOD)
                     atr_now = float(atr_s.iloc[-1])
                     ema50  = indicator._ema(df["close"], indicator.cfg.EMA_FAST)
@@ -1083,14 +1082,14 @@ def _smc_recommendation(analysis: dict, df_1h=None) -> str:
         return (
             "\n💡 <b>Рекомендация:</b> Тренд бычий, цена в дискаунте. "
             f"Лучшая точка входа в LONG — бычий OB "
-            f"{ob_b['ob_low']:.4g}–{ob_b['ob_high']:.4g}. "
+            f"{_fmt_price(ob_b['ob_low'])}–{_fmt_price(ob_b['ob_high'])}. "
             "Ждать митигации (возврата в зону) для входа."
         )
     if trend == "BEARISH" and zone == "PREMIUM" and ob_s.get("found"):
         return (
             "\n💡 <b>Рекомендация:</b> Тренд медвежий, цена в премиуме. "
             f"Лучшая точка входа в SHORT — медвежий OB "
-            f"{ob_s['ob_low']:.4g}–{ob_s['ob_high']:.4g}. "
+            f"{_fmt_price(ob_s['ob_low'])}–{_fmt_price(ob_s['ob_high'])}. "
             "Ждать тест зоны для входа."
         )
     if trend == "BULLISH":
@@ -1222,82 +1221,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def show_plans(cb: CallbackQuery):
         await cb.answer()
         await safe_edit(cb, pricing_text(config), kb_subscribe(config))
-
-    # ── /analyze [SYMBOL] ─────────────────────────────────────────────────
-    @dp.message(Command("analyze"))
-    async def cmd_analyze(msg: Message):
-        user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
-        has, reason = user.check_access()
-        if not has:
-            await msg.answer(access_denied_text(reason), parse_mode="HTML"); return
-
-        # Rate-limit: не чаще 1 раза в 10 секунд
-        uid = msg.from_user.id
-        now = time.time()
-        if now - _analyze_cooldown.get(uid, 0) < _ANALYZE_COOLDOWN_SEC:
-            await msg.answer(
-                f"⏳ Подожди {_ANALYZE_COOLDOWN_SEC} секунд между запросами.",
-                parse_mode="HTML"
-            )
-            return
-        _analyze_cooldown[uid] = now
-
-        # Парсим символ
-        parts = msg.text.split(maxsplit=1)
-        if len(parts) < 2 or not parts[1].strip():
-            await msg.answer(
-                "Использование: <code>/analyze BTCUSDT</code> или <code>/analyze BTC</code>",
-                parse_mode="HTML"
-            )
-            return
-
-        raw_sym = parts[1].strip()
-        symbol  = _normalize_symbol(raw_sym)
-
-        wait_msg = await msg.answer(f"🔍 Анализирую <b>{symbol}</b>...", parse_mode="HTML")
-
-        try:
-            from indicator import CHMIndicator
-            from scanner_mid import _cfg_to_ind, IndConfig
-
-            # Используем дефолтный индикатор для анализа
-            from user_manager import TradeCfg as _TradeCfg
-            _ind_cfg = _TradeCfg()
-            from scanner_mid import IndConfig
-            ind_config_obj = IndConfig(
-                TIMEFRAME="1H", PIVOT_STRENGTH=7, ATR_PERIOD=14, ATR_MULT=1.0,
-                MAX_RISK_PCT=1.5, EMA_FAST=50, EMA_SLOW=200,
-                RSI_PERIOD=14, RSI_OB=65, RSI_OS=35,
-                VOL_MULT=1.0, VOL_LEN=20, MAX_LEVEL_AGE=100,
-                MAX_RETEST_BARS=30, COOLDOWN_BARS=0, ZONE_BUFFER=0.3,
-                TP1_RR=2.0, TP2_RR=3.0, TP3_RR=4.5,
-            )
-            indicator_obj = CHMIndicator(ind_config_obj)
-
-            result_text = await _do_analyze_multitf(
-                symbol, _fetcher_for_smc, indicator_obj, user.strategy, bot
-            )
-
-            try:
-                await wait_msg.delete()
-            except Exception:
-                pass
-
-            await msg.answer(result_text, parse_mode="HTML")
-
-        except Exception as e:
-            log.error(f"cmd_analyze error: {e}")
-            try:
-                await wait_msg.delete()
-            except Exception:
-                pass
-            await msg.answer(f"❌ Ошибка анализа <b>{symbol}</b>: {e}", parse_mode="HTML")
-
-    # Альтернативный формат: "/analyze BTCUSDT" как обычный текст
-    @dp.message(F.text.regexp(r'^/analyze\s+\S+'))
-    async def cmd_analyze_inline(msg: Message):
-        """Дублёр для обеспечения работы без слэша."""
-        await cmd_analyze(msg)
 
     # ─── ВЫБОР СТРАТЕГИИ ──────────────────────────────
 
