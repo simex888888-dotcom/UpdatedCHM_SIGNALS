@@ -624,7 +624,7 @@ def _format_smc_deep_analysis(symbol: str, analysis: dict, dfs: dict) -> str:
     fvg_s   = (fvg or {}).get("bear_fvg", {}) or {}
 
     # Текущая цена из последней свечи MTF
-    df_mtf = dfs.get("4H") or dfs.get("1H")
+    df_mtf = dfs.get("4H") if dfs.get("4H") is not None else dfs.get("1H")
     current_price = float(df_mtf["close"].iloc[-1]) if df_mtf is not None else 0
 
     # Короткое название монеты для заголовка
