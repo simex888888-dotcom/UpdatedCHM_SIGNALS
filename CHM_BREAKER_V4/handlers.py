@@ -3,6 +3,7 @@ handlers.py v5 — CHM BREAKER BOT
 Правило: cb.answer() ВСЕГДА первым, до любых await с БД.
 Улучшения: /analyze команда, rate-limit, dedup keyboard helper, corr_label в ответе.
 """
+import html as _html
 import io
 import time
 import matplotlib
@@ -730,12 +731,12 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
 
         # Если есть реальный сигнал — добавляем
         if sig and sig.direction == ("LONG" if is_long else "SHORT"):
-            lines.append(NL + f"⚡ <b>АКТИВНЫЙ СИГНАЛ</b>: {sig.pattern or sig.breakout_type}" + NL)
+            lines.append(NL + f"⚡ <b>АКТИВНЫЙ СИГНАЛ</b>: {_html.escape(sig.pattern or sig.breakout_type or '')}" + NL)
             lines.append(f"   Вход сейчас: <code>{_fmt_price(sig.entry)}</code>  "
                          f"SL: <code>{_fmt_price(sig.sl)}</code>" + NL)
             lines.append(f"   Качество: {'⭐' * sig.quality}  RSI: {sig.rsi:.0f}" + NL)
             if sig.corr_label:
-                lines.append(f"   {sig.corr_label}" + NL)
+                lines.append(f"   {_html.escape(sig.corr_label)}" + NL)
 
         lines.append(NL + "⏳ УСЛОВИЕ ВХОДА:" + NL)
         lines.append(f"   Возврат в зону <code>{_fmt_price(plan['entry_lo'])}–{_fmt_price(plan['entry_hi'])}</code>" + NL)
@@ -770,7 +771,7 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
             dir_em   = "🟢 LONG" if sig.direction == "LONG" else "🔴 SHORT"
             stars    = "⭐" * sig.quality
             cls_name = cls_map.get(sig.level_class, "")
-            p.append(f"  {label} ({tf}): {dir_em}  {stars}  —  {sig.pattern or sig.breakout_type}" + NL)
+            p.append(f"  {label} ({tf}): {dir_em}  {stars}  —  {_html.escape(sig.pattern or sig.breakout_type or '')}" + NL)
             p.append(f"    Уровень: <code>{_fmt_price(sig.entry)}</code>  ({cls_name})" + NL)
         else:
             p.append(f"  {label} ({tf}): нет сигнала у уровня  [{n_sup} sup / {n_res} res]" + NL)
