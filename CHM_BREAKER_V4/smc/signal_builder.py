@@ -134,26 +134,41 @@ def calculate_levels(analysis: dict, direction: str, cfg) -> Optional[dict]:
         return None
 
     # TP1 = FVG zone или 1R
+    # Используем FVG только если он ПОЛНОСТЬЮ за пределами зоны входа
     fvg_obj = fvg.get("bull_fvg") if direction == "LONG" else fvg.get("bear_fvg")
     if fvg_obj:
         if direction == "LONG":
-            tp1 = fvg_obj["fvg_high"]
+            # FVG-цель должна быть выше ВЕРХНЕЙ границы зоны входа
+            if fvg_obj["fvg_high"] > entry_high:
+                tp1 = fvg_obj["fvg_high"]
+            else:
+                tp1 = None  # FVG внутри/ниже зоны — не использовать
         else:
-            tp1 = fvg_obj["fvg_low"]
+            # FVG-цель должна быть ниже НИЖНЕЙ границы зоны входа
+            if fvg_obj["fvg_low"] < entry_low:
+                tp1 = fvg_obj["fvg_low"]
+            else:
+                tp1 = None  # FVG внутри/выше зоны — не использовать
     else:
-        tp1 = entry_mid + risk * cfg.TP1_RATIO * 3 if direction == "LONG" \
-              else entry_mid - risk * cfg.TP1_RATIO * 3
+        tp1 = None
 
-    # TP2 = swing high/low
+    # Fallback: считаем от entry_high/entry_low (худший вход в зону)
+    if tp1 is None:
+        if direction == "LONG":
+            tp1 = entry_high + risk * cfg.TP1_RATIO * 3
+        else:
+            tp1 = entry_low - risk * cfg.TP1_RATIO * 3
+
+    # TP2 = swing high/low (должен быть за пределами зоны входа)
     sh = s.get("last_swing_high")
     sl_sw = s.get("last_swing_low")
-    if direction == "LONG" and sh and sh["price"] > entry_mid:
+    if direction == "LONG" and sh and sh["price"] > entry_high:
         tp2 = sh["price"]
-    elif direction == "SHORT" and sl_sw and sl_sw["price"] < entry_mid:
+    elif direction == "SHORT" and sl_sw and sl_sw["price"] < entry_low:
         tp2 = sl_sw["price"]
     else:
-        tp2 = entry_mid + risk * 2.0 if direction == "LONG" \
-              else entry_mid - risk * 2.0
+        tp2 = entry_high + risk * 2.0 if direction == "LONG" \
+              else entry_low - risk * 2.0
 
     # TP3 = следующая зона ликвидности
     eq_highs = liq.get("equal_highs", [])
@@ -166,22 +181,22 @@ def calculate_levels(analysis: dict, direction: str, cfg) -> Optional[dict]:
         cands = [e["price"] for e in eq_lows if e["price"] < tp2]
         tp3 = max(cands) if cands else None
     if tp3 is None:
-        tp3 = entry_mid + risk * 4.0 if direction == "LONG" \
-              else entry_mid - risk * 4.0
+        tp3 = entry_high + risk * 4.0 if direction == "LONG" \
+              else entry_low - risk * 4.0
 
-    # Проверка порядка TP
+    # Проверка порядка TP — база от worst-case входа (entry_high/entry_low)
     if direction == "LONG":
-        if not (entry_mid < tp1 <= tp2 <= tp3):
-            tp2 = entry_mid + risk * 2.5
-            tp3 = entry_mid + risk * 4.0
-            if tp1 >= tp2:
-                tp1 = entry_mid + risk * 1.2
+        # Все TP должны быть ВЫШЕ entry_high (верхней границы зоны входа)
+        if not (entry_high < tp1 <= tp2 <= tp3):
+            tp2 = entry_high + risk * 2.5
+            tp3 = entry_high + risk * 4.0
+            tp1 = entry_high + risk * 1.2
     else:
-        if not (entry_mid > tp1 >= tp2 >= tp3):
-            tp2 = entry_mid - risk * 2.5
-            tp3 = entry_mid - risk * 4.0
-            if tp1 <= tp2:
-                tp1 = entry_mid - risk * 1.2
+        # Все TP должны быть НИЖЕ entry_low (нижней границы зоны входа)
+        if not (entry_low > tp1 >= tp2 >= tp3):
+            tp2 = entry_low - risk * 2.5
+            tp3 = entry_low - risk * 4.0
+            tp1 = entry_low - risk * 1.2
 
     rr = abs(tp2 - entry_mid) / risk if risk > 0 else 0.0
     if rr < cfg.MIN_RR:
