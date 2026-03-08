@@ -103,7 +103,8 @@ CREATE TABLE IF NOT EXISTS users (
     auto_trade          INTEGER DEFAULT 0,
     auto_trade_mode     TEXT    DEFAULT 'confirm',
     trade_risk_pct      REAL    DEFAULT 1.0,
-    trade_leverage      INTEGER DEFAULT 10
+    trade_leverage      INTEGER DEFAULT 10,
+    max_trades_limit    INTEGER DEFAULT 5
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -173,6 +174,7 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN auto_trade_mode TEXT DEFAULT 'confirm'",
             "ALTER TABLE users ADD COLUMN trade_risk_pct REAL DEFAULT 1.0",
             "ALTER TABLE users ADD COLUMN trade_leverage INTEGER DEFAULT 10",
+            "ALTER TABLE users ADD COLUMN max_trades_limit INTEGER DEFAULT 5",
         ]
         for sql in migrations:
             try:
@@ -317,6 +319,18 @@ async def db_get_user_trades(user_id: int) -> list[dict]:
         ) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
+
+
+async def db_count_open_trades(user_id: int, window_hours: int = 24) -> int:
+    """Количество сделок без результата за последние window_hours часов."""
+    since = time.time() - window_hours * 3600
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM trades WHERE user_id=? AND result='' AND created_at>=?",
+            (user_id, since),
+        ) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else 0
 
 
 async def db_get_user_stats(user_id: int) -> dict:
