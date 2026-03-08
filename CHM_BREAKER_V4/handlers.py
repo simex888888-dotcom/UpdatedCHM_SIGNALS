@@ -42,6 +42,7 @@ from keyboards import (
     kb_smc_main, kb_smc_tf, kb_smc_interval, kb_smc_direction,
     kb_smc_confirmations, kb_smc_rr, kb_smc_sl, kb_smc_volume, kb_smc_ob_age,
     kb_smc_mode_long, kb_smc_mode_short, kb_smc_mode_both,
+    kb_auto_trade,
 )
 from scanner_mid import signal_compact_keyboard, trade_records_keyboard
 
@@ -110,6 +111,11 @@ class EditState(StatesGroup):
 
 class AnalyzeState(StatesGroup):
     waiting_symbol = State()
+
+
+class SetupBybitState(StatesGroup):
+    api_key    = State()
+    api_secret = State()
 
 
 # ── Тексты ───────────────────────────────────────────
@@ -3119,6 +3125,242 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def help_show(cb: CallbackQuery):
         await cb.answer()
         await safe_edit(cb, help_text(), kb_help())
+
+    # ─── АВТО-ТРЕЙДИНГ BYBIT ──────────────────────────
+
+    def _auto_trade_text(user: UserSettings) -> str:
+        at      = getattr(user, "auto_trade",      False)
+        mode    = getattr(user, "auto_trade_mode", "confirm")
+        risk    = getattr(user, "trade_risk_pct",  1.0)
+        lev     = getattr(user, "trade_leverage",  10)
+        has_key = bool(getattr(user, "bybit_api_key", ""))
+        NL = "\n"
+        mode_label = "👆 С подтверждением (кнопка)" if mode == "confirm" else "🤖 Авто (без кнопки)"
+        return (
+            "💹 <b>Авто-трейдинг Bybit</b>" + NL + NL +
+            "Статус: " + ("🟢 <b>Включён</b>" if at else "🔴 <b>Выключен</b>") + NL +
+            "Режим: <b>" + mode_label + "</b>" + NL +
+            "Риск: <b>" + str(risk) + "% от баланса</b>" + NL +
+            "Плечо: <b>x" + str(lev) + "</b>" + NL +
+            "API: " + ("✅ <b>Подключено</b>" if has_key else "❌ <b>Не настроено</b>") + NL + NL +
+            "⚠️ <i>Используй только собственные API-ключи.\n"
+            "Разрешение: только Contract Trade. Без Withdraw!</i>"
+        )
+
+    @dp.callback_query(F.data == "auto_trade_menu")
+    async def auto_trade_menu(cb: CallbackQuery):
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        has, reason = user.check_access()
+        if not has:
+            await cb.answer("❌ Нет доступа", show_alert=True); return
+        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+
+    @dp.callback_query(F.data == "toggle_auto_trade")
+    async def toggle_auto_trade(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        has, _ = user.check_access()
+        if not has:
+            await cb.answer("❌ Нет доступа", show_alert=True); return
+        if not getattr(user, "bybit_api_key", ""):
+            await cb.answer("⚠️ Сначала настрой API ключи!", show_alert=True); return
+        user.auto_trade = not user.auto_trade
+        await um.save(user)
+        await cb.answer("💹 Авто-трейд: " + ("✅ вкл" if user.auto_trade else "❌ выкл"))
+        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+
+    @dp.callback_query(F.data.in_({"set_at_mode_confirm", "set_at_mode_auto"}))
+    async def set_at_mode(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.auto_trade_mode = "confirm" if cb.data == "set_at_mode_confirm" else "auto"
+        await um.save(user)
+        await cb.answer("Режим: " + user.auto_trade_mode)
+        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+
+    @dp.callback_query(F.data.startswith("set_at_risk_"))
+    async def set_at_risk(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        try:
+            user.trade_risk_pct = float(cb.data.split("_")[-1])
+        except ValueError:
+            await cb.answer("Ошибка"); return
+        await um.save(user)
+        await cb.answer(f"Риск: {user.trade_risk_pct}%")
+        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+
+    @dp.callback_query(F.data.startswith("set_at_lev_"))
+    async def set_at_lev(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        try:
+            user.trade_leverage = int(cb.data.split("_")[-1])
+        except ValueError:
+            await cb.answer("Ошибка"); return
+        await um.save(user)
+        await cb.answer(f"Плечо: x{user.trade_leverage}")
+        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+
+    @dp.callback_query(F.data == "setup_bybit_api")
+    async def setup_bybit_api(cb: CallbackQuery, state: FSMContext):
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        has, _ = user.check_access()
+        if not has:
+            await cb.answer("❌ Нет доступа", show_alert=True); return
+        await state.set_state(SetupBybitState.api_key)
+        await cb.message.answer(
+            "🔑 <b>Настройка Bybit API</b>\n\n"
+            "Введи свой <b>API Key</b> (публичный ключ):\n\n"
+            "💡 Создать ключ: Bybit → Аккаунт → API Management\n"
+            "⚠️ Права: только <b>Contract - Trade</b> (без Withdraw!)",
+            parse_mode="HTML",
+        )
+
+    @dp.message(SetupBybitState.api_key)
+    async def bybit_api_key_input(msg: Message, state: FSMContext):
+        key = (msg.text or "").strip()
+        if len(key) < 10:
+            await msg.answer("❌ Слишком короткий ключ. Попробуй снова:")
+            return
+        await state.update_data(api_key=key)
+        await state.set_state(SetupBybitState.api_secret)
+        await msg.answer(
+            "✅ API Key получен.\n\n"
+            "Теперь введи <b>API Secret</b> (секретный ключ):",
+            parse_mode="HTML",
+        )
+
+    @dp.message(SetupBybitState.api_secret)
+    async def bybit_api_secret_input(msg: Message, state: FSMContext):
+        secret = (msg.text or "").strip()
+        if len(secret) < 10:
+            await msg.answer("❌ Слишком короткий секрет. Попробуй снова:")
+            return
+        data = await state.get_data()
+        api_key = data.get("api_key", "")
+        await state.clear()
+
+        wait = await msg.answer("⏳ Проверяю соединение с Bybit...")
+        try:
+            import bybit_trader
+            result = await bybit_trader.test_connection(api_key, secret)
+        except Exception as e:
+            await wait.delete()
+            await msg.answer(f"❌ Ошибка: {e}")
+            return
+
+        await wait.delete()
+        if result["ok"]:
+            user = await um.get_or_create(msg.from_user.id)
+            user.bybit_api_key    = api_key
+            user.bybit_api_secret = secret
+            await um.save(user)
+            balance = result["balance"]
+            await msg.answer(
+                f"✅ <b>Bybit подключён!</b>\n\n"
+                f"💰 Баланс USDT: <code>${balance:.2f}</code>\n\n"
+                f"Теперь включи авто-трейд в меню 💹",
+                parse_mode="HTML",
+            )
+        else:
+            await msg.answer(
+                f"❌ <b>Не удалось подключиться</b>\n\n"
+                f"Ошибка: {result.get('error', '?')}\n\n"
+                f"Проверь ключи и попробуй снова через кнопку <b>🔑 Настроить Bybit API</b>.",
+                parse_mode="HTML",
+            )
+
+    @dp.callback_query(F.data == "test_bybit_api")
+    async def test_bybit_api(cb: CallbackQuery):
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        api_key    = getattr(user, "bybit_api_key",    "")
+        api_secret = getattr(user, "bybit_api_secret", "")
+        if not api_key:
+            await cb.answer("❌ Ключи не настроены", show_alert=True); return
+        wait = await cb.message.answer("⏳ Проверяю соединение...")
+        try:
+            import bybit_trader
+            result = await bybit_trader.test_connection(api_key, api_secret)
+        except Exception as e:
+            await wait.delete()
+            await cb.message.answer(f"❌ Ошибка: {e}")
+            return
+        await wait.delete()
+        if result["ok"]:
+            await cb.message.answer(
+                f"✅ <b>Bybit — соединение OK</b>\n"
+                f"💰 Баланс: <code>${result['balance']:.2f} USDT</code>",
+                parse_mode="HTML",
+            )
+        else:
+            await cb.message.answer(
+                f"❌ <b>Ошибка соединения</b>\n{result.get('error', '?')}",
+                parse_mode="HTML",
+            )
+
+    @dp.callback_query(F.data == "remove_bybit_api")
+    async def remove_bybit_api(cb: CallbackQuery):
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        user.bybit_api_key    = ""
+        user.bybit_api_secret = ""
+        user.auto_trade       = False
+        await um.save(user)
+        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+
+    @dp.callback_query(F.data.startswith("exec_trade_"))
+    async def exec_trade(cb: CallbackQuery):
+        """Пользователь нажал '✅ Открыть сделку на Bybit'."""
+        await cb.answer()
+        trade_id = cb.data[len("exec_trade_"):]
+        user = await um.get_or_create(cb.from_user.id)
+        has, _ = user.check_access()
+        if not has:
+            await cb.answer("❌ Нет доступа", show_alert=True); return
+
+        api_key    = getattr(user, "bybit_api_key",    "")
+        api_secret = getattr(user, "bybit_api_secret", "")
+        if not api_key or not api_secret:
+            await cb.message.answer(
+                "❌ <b>Bybit API не настроен</b>\n\n"
+                "Перейди в 💹 Авто-трейдинг → 🔑 Настроить Bybit API",
+                parse_mode="HTML",
+            )
+            return
+
+        trade = await db.db_get_trade(trade_id)
+        if not trade:
+            await cb.answer("❌ Сделка не найдена", show_alert=True); return
+
+        wait = await cb.message.answer("⏳ Открываю позицию на Bybit...")
+        try:
+            import bybit_trader
+            result = await bybit_trader.place_trade(
+                api_key, api_secret,
+                trade["symbol"],
+                trade["direction"],
+                float(trade["entry"]),
+                float(trade["sl"]),
+                float(trade["tp1"]),
+                getattr(user, "trade_risk_pct",  1.0),
+                getattr(user, "trade_leverage",  10),
+            )
+            text = bybit_trader.format_trade_result(
+                result,
+                trade["direction"],
+                trade["symbol"],
+                float(trade["entry"]),
+                float(trade["sl"]),
+                float(trade["tp1"]),
+                getattr(user, "trade_risk_pct", 1.0),
+                getattr(user, "trade_leverage", 10),
+            )
+        except Exception as e:
+            log.error(f"exec_trade {trade_id}: {e}")
+            text = f"❌ Ошибка открытия сделки:\n{e}"
+
+        await wait.delete()
+        await cb.message.answer(text, parse_mode="HTML")
 
     # ─── АДМИН-КОМАНДЫ ────────────────────────────────
 

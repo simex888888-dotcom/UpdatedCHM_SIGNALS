@@ -34,6 +34,46 @@ def trend_text(trend: dict) -> str:
         "🪙 ETH: " + eth.get("trend_text", "—") + "\n"
     )
 
+# ── Авто-трейдинг ────────────────────────────────────
+
+def _auto_trade_label(user: UserSettings) -> str:
+    at = getattr(user, "auto_trade", False)
+    return "💹✅" if at else "💹"
+
+
+def kb_auto_trade(user: UserSettings) -> InlineKeyboardMarkup:
+    """Меню авто-трейдинга Bybit."""
+    at      = getattr(user, "auto_trade",      False)
+    mode    = getattr(user, "auto_trade_mode", "confirm")
+    risk    = getattr(user, "trade_risk_pct",  1.0)
+    lev     = getattr(user, "trade_leverage",  10)
+    has_key = bool(getattr(user, "bybit_api_key", ""))
+
+    status_label = "🟢 ВКЛ — нажать чтобы выключить" if at else "🔴 ВЫКЛ — нажать чтобы включить"
+    mode_label   = ("🤖 Авто (открывать сразу)"       if mode == "auto"
+                    else "👆 С подтверждением (кнопка)")
+    key_label    = "🔑 Ключи: ✅ подключены" if has_key else "🔑 Ключи: ❌ не настроены"
+
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _noop("── 💹 Авто-трейдинг Bybit ──────────────────────"),
+        _btn(status_label,                                          "toggle_auto_trade"),
+        _noop("── Режим входа ────────────────────────────────────"),
+        _btn(("◉ " if mode == "confirm" else "○ ") + "👆 Кнопка подтверждения",  "set_at_mode_confirm"),
+        _btn(("◉ " if mode == "auto"    else "○ ") + "🤖 Авто-вход (без кнопки)", "set_at_mode_auto"),
+        _noop("── Риск на сделку (% от баланса) ─────────────────"),
+        *[_btn(("◉ " if risk == r else "○ ") + f"{r}%", f"set_at_risk_{r}")
+          for r in [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]],
+        _noop("── Плечо ───────────────────────────────────────────"),
+        *[_btn(("◉ " if lev == l else "○ ") + f"x{l}", f"set_at_lev_{l}")
+          for l in [5, 10, 15, 20]],
+        _noop("── API ключи ────────────────────────────────────────"),
+        _btn(key_label,              "setup_bybit_api"),
+        _btn("🧪 Проверить соединение", "test_bybit_api") if has_key else _noop("── Введи ключи для проверки ──"),
+        _btn("🗑 Удалить ключи",      "remove_bybit_api") if has_key else _noop("──────────────────────────────────"),
+        _back(),
+    ])
+
+
 # ── ГЛАВНОЕ МЕНЮ ─────────────────────────────────────
 
 def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
@@ -52,6 +92,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
             ],
             _btn("🔍 Анализ монеты — разовый сигнал по запросу",               "analyze_coin"),
+            _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",             "auto_trade_menu"),
             _btn("❓ Справка — что делает каждая кнопка",                       "help_show"),
         ])
     # ── LEVELS (default) ──
@@ -68,6 +109,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
         ],
         _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
+        _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",  "auto_trade_menu"),
         _btn("❓ Справка — что делает каждая кнопка", "help_show"),
     ])
 
