@@ -5,7 +5,9 @@ smc/scanner.py — Автономный SMC-сканер
 """
 import asyncio
 import logging
+import sys
 import time
+from pathlib import Path
 from typing import Optional
 
 from aiogram import Bot
@@ -14,6 +16,10 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 from .analyzer      import SMCAnalyzer, SMCConfig
 from .signal_builder import build_smc_signal, SMCSignalResult
+
+# database лежит в родительском каталоге (CHM_BREAKER_V4/)
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import database as db
 
 log = logging.getLogger("CHM.SMC.Scanner")
 
@@ -69,14 +75,21 @@ def _signal_text_smc(sig: SMCSignalResult) -> str:
     )
 
 
-def _smc_keyboard(symbol: str) -> InlineKeyboardMarkup:
-    from fetcher import OKXFetcher
+def _smc_keyboard(symbol: str, trade_id: str = "", show_trade_btn: bool = False) -> InlineKeyboardMarkup:
     clean = symbol.replace("-SWAP", "").replace("-", "")
     tv_url = "https://www.tradingview.com/chart/?symbol=OKX:" + clean + ".P"
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="📈 График",      url=tv_url),
-        InlineKeyboardButton(text="📊 Статистика",  callback_data="my_stats"),
-    ]])
+    rows = [[
+        InlineKeyboardButton(text="📈 График",     url=tv_url),
+        InlineKeyboardButton(text="📊 Статистика", callback_data="my_stats"),
+    ]]
+    if show_trade_btn and trade_id:
+        rows.insert(0, [
+            InlineKeyboardButton(
+                text="✅ Открыть сделку на Bybit",
+                callback_data="exec_trade_" + trade_id,
+            )
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def run_smc_scanner(
@@ -206,12 +219,78 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
                 continue
             _sent_signals[sig_hash] = time.time()
 
+            # ── Сохраняем сигнал в БД ────────────────────────────
+            trade_id = f"{user.user_id}_{int(time.time() * 1000)}"
+            await db.db_add_trade({
+                "trade_id":      trade_id,
+                "user_id":       user.user_id,
+                "symbol":        sig.symbol,
+                "direction":     sig.direction,
+                "entry":         sig.entry,
+                "sl":            sig.sl,
+                "tp1":           sig.tp1,
+                "tp2":           sig.tp2,
+                "tp3":           sig.tp3,
+                "tp1_rr":        sig.rr,
+                "tp2_rr":        round(sig.rr * 1.5, 2),
+                "tp3_rr":        round(sig.rr * 2.0, 2),
+                "quality":       sig.score,
+                "timeframe":     tf_ltf,
+                "breakout_type": "SMC",
+                "created_at":    time.time(),
+            })
+
+            # ── Авто-трейдинг ────────────────────────────────────
+            auto_trade      = getattr(user, "auto_trade",      False)
+            auto_trade_mode = getattr(user, "auto_trade_mode", "confirm")
+            api_key         = getattr(user, "bybit_api_key",   "")
+            api_secret      = getattr(user, "bybit_api_secret","")
+            risk_pct        = getattr(user, "trade_risk_pct",  1.0)
+            leverage        = getattr(user, "trade_leverage",  10)
+            show_trade_btn  = False
+
+            if auto_trade and api_key and api_secret:
+                max_trades = getattr(user, "max_trades_limit", 5)
+                open_count = await db.db_count_open_trades(user.user_id)
+                if open_count >= max_trades:
+                    await bot.send_message(
+                        user.user_id,
+                        f"⛔ Авто-трейд отклонён: достигнут лимит открытых сделок "
+                        f"({open_count}/{max_trades}).\n"
+                        f"Сигнал: {sig.symbol} {sig.direction}"
+                    )
+                    auto_trade = False
+
+            if auto_trade and api_key and api_secret:
+                if auto_trade_mode == "auto":
+                    try:
+                        import bybit_trader
+                        result = await bybit_trader.place_trade(
+                            api_key, api_secret,
+                            sig.symbol, sig.direction,
+                            sig.entry, sig.sl, sig.tp1,
+                            risk_pct, leverage,
+                        )
+                        trade_msg = bybit_trader.format_trade_result(
+                            result, sig.direction, sig.symbol,
+                            sig.entry, sig.sl, sig.tp1, risk_pct, leverage,
+                        )
+                        await bot.send_message(user.user_id, trade_msg, parse_mode="HTML")
+                    except Exception as e:
+                        log.error(f"SMC auto_trade {sig.symbol}: {e}")
+                        await bot.send_message(
+                            user.user_id,
+                            f"⚠️ Авто-трейд: ошибка открытия {sig.symbol}: {e}"
+                        )
+                else:
+                    show_trade_btn = True
+
             text = _signal_text_smc(sig)
             try:
                 await bot.send_message(
                     user.user_id, text,
                     parse_mode="HTML",
-                    reply_markup=_smc_keyboard(sig.symbol),
+                    reply_markup=_smc_keyboard(sig.symbol, trade_id, show_trade_btn),
                     protect_content=True,
                 )
                 log.info(f"SMC ✅ {symbol} {sig.direction} {sig.grade} → @{user.username or user.user_id}")
