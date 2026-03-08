@@ -190,6 +190,14 @@ class UserSettings:
     # ── Стратегия сканера ─────────────────────────
     strategy:             str   = "LEVELS"   # "LEVELS" | "SMC"
 
+    # ── Авто-трейдинг Bybit ───────────────────────
+    bybit_api_key:        str   = ""
+    bybit_api_secret:     str   = ""
+    auto_trade:           bool  = False
+    auto_trade_mode:      str   = "confirm"   # "auto" | "confirm"
+    trade_risk_pct:       float = 1.0         # % от баланса на сделку
+    trade_leverage:       int   = 10          # плечо
+
     # ── Хелперы конфигов ─────────────────────────
 
     def shared_cfg(self) -> TradeCfg:
@@ -281,6 +289,7 @@ class UserSettings:
             "use_pattern", "use_htf", "notify_signal", "notify_breakout",
             "long_active", "short_active", "smc_long_active", "smc_short_active",
             "trend_only", "trial_reminder_sent", "expired_notified",
+            "auto_trade",
         }
         d = {}
         for f in fields(self):
@@ -296,6 +305,7 @@ def _from_db(row: dict) -> UserSettings:
         "use_pattern", "use_htf", "notify_signal", "notify_breakout",
         "long_active", "short_active", "smc_long_active", "smc_short_active",
         "trend_only", "trial_reminder_sent", "expired_notified",
+        "auto_trade",
     }
     for f in fields(u):
         if f.name in row and row[f.name] is not None:

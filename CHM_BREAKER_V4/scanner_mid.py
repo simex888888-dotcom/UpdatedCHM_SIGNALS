@@ -155,9 +155,12 @@ def _tv_url(symbol: str) -> str:
     return "https://www.tradingview.com/chart/?symbol=OKX:" + clean + ".P"
 
 
-def signal_compact_keyboard(trade_id: str, symbol: str) -> InlineKeyboardMarkup:
-    """Компактная клавиатура под сигналом: График | Статистика | Результат →"""
-    return InlineKeyboardMarkup(inline_keyboard=[
+def signal_compact_keyboard(trade_id: str, symbol: str,
+                            show_trade_btn: bool = False) -> InlineKeyboardMarkup:
+    """Компактная клавиатура под сигналом.
+    show_trade_btn=True добавляет кнопку ручного подтверждения входа.
+    """
+    rows = [
         [
             InlineKeyboardButton(text="📈 График",     url=_tv_url(symbol)),
             InlineKeyboardButton(text="📊 Статистика", callback_data="my_stats"),
@@ -165,7 +168,15 @@ def signal_compact_keyboard(trade_id: str, symbol: str) -> InlineKeyboardMarkup:
         [
             InlineKeyboardButton(text="📋 Записать результат ▾", callback_data="sig_records_" + trade_id),
         ],
-    ])
+    ]
+    if show_trade_btn:
+        rows.insert(0, [
+            InlineKeyboardButton(
+                text="✅ Открыть сделку на Bybit",
+                callback_data="exec_trade_" + trade_id,
+            )
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def trade_records_keyboard(trade_id: str) -> InlineKeyboardMarkup:
@@ -390,6 +401,9 @@ class MidScanner:
         trade_id = str(user.user_id) + "_" + str(int(time.time() * 1000))
         risk     = abs(sig.entry - sig.sl)
         sign     = 1 if sig.direction == "LONG" else -1
+        tp1      = sig.entry + sign * risk * cfg.tp1_rr
+        tp2      = sig.entry + sign * risk * cfg.tp2_rr
+        tp3      = sig.entry + sign * risk * cfg.tp3_rr
         await db.db_add_trade({
             "trade_id":      trade_id,
             "user_id":       user.user_id,
@@ -397,9 +411,9 @@ class MidScanner:
             "direction":     sig.direction,
             "entry":         sig.entry,
             "sl":            sig.sl,
-            "tp1":           sig.entry + sign * risk * cfg.tp1_rr,
-            "tp2":           sig.entry + sign * risk * cfg.tp2_rr,
-            "tp3":           sig.entry + sign * risk * cfg.tp3_rr,
+            "tp1":           tp1,
+            "tp2":           tp2,
+            "tp3":           tp3,
             "tp1_rr":        cfg.tp1_rr,
             "tp2_rr":        cfg.tp2_rr,
             "tp3_rr":        cfg.tp3_rr,
@@ -408,12 +422,52 @@ class MidScanner:
             "breakout_type": sig.breakout_type,
             "created_at":    time.time(),
         })
+
+        # ── Авто-трейдинг ────────────────────────────
+        auto_trade      = getattr(user, "auto_trade",      False)
+        auto_trade_mode = getattr(user, "auto_trade_mode", "confirm")
+        api_key         = getattr(user, "bybit_api_key",    "")
+        api_secret      = getattr(user, "bybit_api_secret", "")
+        risk_pct        = getattr(user, "trade_risk_pct",   1.0)
+        leverage        = getattr(user, "trade_leverage",   10)
+        show_trade_btn  = False
+
+        if auto_trade and api_key and api_secret:
+            if auto_trade_mode == "auto":
+                # Открываем сразу
+                try:
+                    import bybit_trader
+                    result = await bybit_trader.place_trade(
+                        api_key, api_secret,
+                        sig.symbol, sig.direction,
+                        sig.entry, sig.sl, tp1,
+                        risk_pct, leverage,
+                    )
+                    trade_msg = bybit_trader.format_trade_result(
+                        result, sig.direction, sig.symbol,
+                        sig.entry, sig.sl, tp1, risk_pct, leverage,
+                    )
+                    await self.bot.send_message(
+                        user.user_id, trade_msg, parse_mode="HTML"
+                    )
+                except Exception as e:
+                    log.error(f"auto_trade {sig.symbol}: {e}")
+                    await self.bot.send_message(
+                        user.user_id,
+                        f"⚠️ Авто-трейд: ошибка открытия {sig.symbol}: {e}"
+                    )
+            else:
+                # Режим подтверждения — показать кнопку
+                show_trade_btn = True
+
         try:
             await self.bot.send_message(
                 user.user_id,
                 signal_text(sig, cfg),
                 parse_mode="HTML",
-                reply_markup=signal_compact_keyboard(trade_id, sig.symbol),
+                reply_markup=signal_compact_keyboard(
+                    trade_id, sig.symbol, show_trade_btn=show_trade_btn
+                ),
                 protect_content=True,
             )
             user.signals_received += 1

@@ -95,7 +95,15 @@ CREATE TABLE IF NOT EXISTS users (
     expired_notified    INTEGER DEFAULT 0,
     created_at          REAL    DEFAULT 0,
     updated_at          REAL    DEFAULT 0,
-    strategy            TEXT    DEFAULT 'LEVELS'
+    strategy            TEXT    DEFAULT 'LEVELS',
+
+    -- Авто-трейдинг Bybit
+    bybit_api_key       TEXT    DEFAULT '',
+    bybit_api_secret    TEXT    DEFAULT '',
+    auto_trade          INTEGER DEFAULT 0,
+    auto_trade_mode     TEXT    DEFAULT 'confirm',
+    trade_risk_pct      REAL    DEFAULT 1.0,
+    trade_leverage      INTEGER DEFAULT 10
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -159,6 +167,12 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN smc_cfg TEXT DEFAULT '{}'",
             "ALTER TABLE users ADD COLUMN smc_long_active INTEGER DEFAULT 0",
             "ALTER TABLE users ADD COLUMN smc_short_active INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN bybit_api_key TEXT DEFAULT ''",
+            "ALTER TABLE users ADD COLUMN bybit_api_secret TEXT DEFAULT ''",
+            "ALTER TABLE users ADD COLUMN auto_trade INTEGER DEFAULT 0",
+            "ALTER TABLE users ADD COLUMN auto_trade_mode TEXT DEFAULT 'confirm'",
+            "ALTER TABLE users ADD COLUMN trade_risk_pct REAL DEFAULT 1.0",
+            "ALTER TABLE users ADD COLUMN trade_leverage INTEGER DEFAULT 10",
         ]
         for sql in migrations:
             try:
