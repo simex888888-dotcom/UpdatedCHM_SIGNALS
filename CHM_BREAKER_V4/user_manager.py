@@ -197,6 +197,7 @@ class UserSettings:
     auto_trade_mode:      str   = "confirm"   # "auto" | "confirm"
     trade_risk_pct:       float = 1.0         # % от баланса на сделку
     trade_leverage:       int   = 10          # плечо
+    max_trades_limit:     int   = 5           # макс. одновременных открытых сделок
 
     # ── Хелперы конфигов ─────────────────────────
 

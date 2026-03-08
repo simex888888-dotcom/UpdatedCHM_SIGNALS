@@ -43,11 +43,12 @@ def _auto_trade_label(user: UserSettings) -> str:
 
 def kb_auto_trade(user: UserSettings) -> InlineKeyboardMarkup:
     """Меню авто-трейдинга Bybit."""
-    at      = getattr(user, "auto_trade",      False)
-    mode    = getattr(user, "auto_trade_mode", "confirm")
-    risk    = getattr(user, "trade_risk_pct",  1.0)
-    lev     = getattr(user, "trade_leverage",  10)
-    has_key = bool(getattr(user, "bybit_api_key", ""))
+    at        = getattr(user, "auto_trade",       False)
+    mode      = getattr(user, "auto_trade_mode",  "confirm")
+    risk      = getattr(user, "trade_risk_pct",   1.0)
+    lev       = getattr(user, "trade_leverage",   10)
+    max_tr    = getattr(user, "max_trades_limit",  5)
+    has_key   = bool(getattr(user, "bybit_api_key", ""))
 
     status_label = "🟢 ВКЛ — нажать чтобы выключить" if at else "🔴 ВЫКЛ — нажать чтобы включить"
     mode_label   = ("🤖 Авто (открывать сразу)"       if mode == "auto"
@@ -66,6 +67,9 @@ def kb_auto_trade(user: UserSettings) -> InlineKeyboardMarkup:
         _noop("── Плечо ───────────────────────────────────────────"),
         *[_btn(("◉ " if lev == l else "○ ") + f"x{l}", f"set_at_lev_{l}")
           for l in [5, 10, 15, 20]],
+        _noop("── Лимит открытых сделок (за 24ч) ─────────────────"),
+        *[_btn(("◉ " if max_tr == n else "○ ") + f"{n} сделок", f"set_at_maxtr_{n}")
+          for n in [1, 2, 3, 5, 10]],
         _noop("── API ключи ────────────────────────────────────────"),
         _btn(key_label,              "setup_bybit_api"),
         _btn("🧪 Проверить соединение", "test_bybit_api") if has_key else _noop("── Введи ключи для проверки ──"),

@@ -3129,11 +3129,12 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     # ─── АВТО-ТРЕЙДИНГ BYBIT ──────────────────────────
 
     def _auto_trade_text(user: UserSettings) -> str:
-        at      = getattr(user, "auto_trade",      False)
-        mode    = getattr(user, "auto_trade_mode", "confirm")
-        risk    = getattr(user, "trade_risk_pct",  1.0)
-        lev     = getattr(user, "trade_leverage",  10)
-        has_key = bool(getattr(user, "bybit_api_key", ""))
+        at       = getattr(user, "auto_trade",        False)
+        mode     = getattr(user, "auto_trade_mode",   "confirm")
+        risk     = getattr(user, "trade_risk_pct",    1.0)
+        lev      = getattr(user, "trade_leverage",    10)
+        max_tr   = getattr(user, "max_trades_limit",  5)
+        has_key  = bool(getattr(user, "bybit_api_key", ""))
         NL = "\n"
         mode_label = "👆 С подтверждением (кнопка)" if mode == "confirm" else "🤖 Авто (без кнопки)"
         return (
@@ -3142,6 +3143,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             "Режим: <b>" + mode_label + "</b>" + NL +
             "Риск: <b>" + str(risk) + "% от баланса</b>" + NL +
             "Плечо: <b>x" + str(lev) + "</b>" + NL +
+            "Лимит сделок: <b>" + str(max_tr) + " за 24ч</b>" + NL +
             "API: " + ("✅ <b>Подключено</b>" if has_key else "❌ <b>Не настроено</b>") + NL + NL +
             "⚠️ <i>Используй только собственные API-ключи.\n"
             "Разрешение: только Contract Trade. Без Withdraw!</i>"
@@ -3197,6 +3199,17 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.answer("Ошибка"); return
         await um.save(user)
         await cb.answer(f"Плечо: x{user.trade_leverage}")
+        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+
+    @dp.callback_query(F.data.startswith("set_at_maxtr_"))
+    async def set_at_maxtr(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        try:
+            user.max_trades_limit = int(cb.data.split("_")[-1])
+        except ValueError:
+            await cb.answer("Ошибка"); return
+        await um.save(user)
+        await cb.answer(f"Лимит сделок: {user.max_trades_limit}")
         await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data == "setup_bybit_api")
@@ -3331,6 +3344,16 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         trade = await db.db_get_trade(trade_id)
         if not trade:
             await cb.answer("❌ Сделка не найдена", show_alert=True); return
+
+        max_trades = getattr(user, "max_trades_limit", 5)
+        open_count = await db.db_count_open_trades(user.user_id)
+        if open_count >= max_trades:
+            await cb.answer(
+                f"⛔ Лимит сделок достигнут ({open_count}/{max_trades}). "
+                f"Дождись закрытия открытых позиций.",
+                show_alert=True,
+            )
+            return
 
         wait = await cb.message.answer("⏳ Открываю позицию на Bybit...")
         try:
