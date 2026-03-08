@@ -34,22 +34,39 @@ def _to_bybit_symbol(symbol: str) -> str:
     return s.replace("-", "")
 
 
-# ── Округление qty ───────────────────────────────────
+# ── Получение qtyStep для символа ────────────────────
 
-def _round_qty(qty: float, price: float) -> str:
+def _get_qty_step(session, symbol: str) -> float:
     """
-    Округляем размер позиции в меньшую сторону.
-    Количество знаков зависит от цены монеты.
+    Запрашивает реальный lotSizeFilter.qtyStep у Bybit.
+    При ошибке — возвращает запасное значение по цене.
     """
-    if price >= 10_000:
-        decimals = 3      # BTC: 0.001
-    elif price >= 1_000:
-        decimals = 2      # ETH: 0.01
-    elif price >= 10:
-        decimals = 1      # SOL: 0.1
+    try:
+        resp = session.get_instruments_info(category="linear", symbol=symbol)
+        if resp.get("retCode", -1) == 0:
+            items = resp["result"].get("list", [])
+            if items:
+                step = items[0].get("lotSizeFilter", {}).get("qtyStep", "")
+                if step:
+                    return float(step)
+    except Exception as e:
+        log.debug(f"get_instruments_info {symbol}: {e}")
+    return 0.001   # fallback — перестрахуемся минимальным шагом
+
+
+def _round_qty(qty: float, qty_step: float) -> str:
+    """
+    Округляем размер позиции вниз до ближайшего шага qtyStep.
+    """
+    if qty_step <= 0:
+        qty_step = 0.001
+    # Определяем количество знаков после запятой в шаге
+    step_str = f"{qty_step:.10f}".rstrip("0")
+    if "." in step_str:
+        decimals = len(step_str.split(".")[1])
     else:
-        decimals = 0      # DOGE, SHIB: 1
-    factor = 10 ** decimals
+        decimals = 0
+    factor = 1.0 / qty_step
     qty_floor = math.floor(qty * factor) / factor
     return f"{qty_floor:.{decimals}f}"
 
@@ -82,9 +99,12 @@ def _get_balance_sync(api_key: str, api_secret: str) -> float:
     coins = resp["result"]["list"][0]["coin"]
     for coin in coins:
         if coin["coin"] == "USDT":
-            # availableToWithdraw или walletBalance
-            val = coin.get("availableToWithdraw") or coin.get("walletBalance") or "0"
-            return float(val)
+            val = (coin.get("availableToWithdraw") or
+                   coin.get("walletBalance") or "0")
+            try:
+                return float(val)
+            except (ValueError, TypeError):
+                return 0.0
     return 0.0
 
 
@@ -166,7 +186,9 @@ def _place_trade_sync(
         qty_raw  = MIN_NOTIONAL / entry
         notional = MIN_NOTIONAL
 
-    qty_str = _round_qty(qty_raw, entry)
+    # Получаем реальный шаг лота с Bybit и округляем
+    qty_step = _get_qty_step(session, bb_symbol)
+    qty_str  = _round_qty(qty_raw, qty_step)
     if float(qty_str) <= 0:
         return {
             "ok": False,
@@ -174,9 +196,13 @@ def _place_trade_sync(
                      f"Нужен депозит от ${MIN_NOTIONAL / (risk_pct / 100):.0f} при риске {risk_pct}%."
         }
 
-    # Выставляем ордер
-    try:
-        resp = session.place_order(
+    # Выставляем ордер.
+    # positionIdx: 0 = One-Way Mode, 1 = Hedge Buy, 2 = Hedge Sell.
+    # Пробуем One-Way, при ошибке режима — переключаемся на Hedge.
+    hedge_idx = 1 if side == "Buy" else 2
+
+    def _do_place(position_idx: int) -> dict:
+        return session.place_order(
             category="linear",
             symbol=bb_symbol,
             side=side,
@@ -186,11 +212,19 @@ def _place_trade_sync(
             takeProfit=str(round(tp1, 8)),
             slTriggerBy="MarkPrice",
             tpTriggerBy="MarkPrice",
-            positionIdx=0,   # One-Way Mode
+            positionIdx=position_idx,
         )
+
+    try:
+        resp = _do_place(0)
+        # Bybit retCode 130125 = "position idx not match position mode" (Hedge Mode)
+        if resp.get("retCode") == 130125:
+            log.info(f"{bb_symbol}: One-Way Mode failed, retrying with Hedge Mode (idx={hedge_idx})")
+            resp = _do_place(hedge_idx)
+
         if resp.get("retCode", -1) == 0:
-            order_id  = resp["result"].get("orderId", "")
-            qty_f     = float(qty_str)
+            order_id      = resp["result"].get("orderId", "")
+            qty_f         = float(qty_str)
             notional_real = qty_f * entry
             return {
                 "ok":       True,
