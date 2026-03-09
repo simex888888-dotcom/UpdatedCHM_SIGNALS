@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 from aiogram.types import BufferedInputFile
 import asyncio
 import logging
+import time
+from dataclasses import fields
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
@@ -247,13 +249,18 @@ def pricing_text(config) -> str:
         "🤖 <b>CHM BOT — автоматический сканер твоей прибыли. Бот, который не даст проспать профит.</b>" + NL + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
         "🤖 <b>Только БОТ:</b>" + NL +
+        "  📅 1 месяц  — <b>" + config.BOT_PRICE_30 + "</b>" + NL +
         "  📅 3 месяца — <b>" + config.BOT_PRICE_90 + "</b>" + NL +
         "  📅 1 ГОД    — <b>" + config.BOT_PRICE_365 + "</b>" + NL + NL +
-        "💎 <b>Для лабы — дешевле.</b> Пишите @crypto_chm" + NL + NL +
-                "🎁 <b>Супер предложение</b> (бот + лаба) — @crypto_chm" + NL + NL +
-                "Выберите тариф 👇"
-            )
-        
+        "🤖📊 <b>БОТ + ИНДИКАТОР на TradingView:</b>" + NL +
+        "  📅 1 месяц  — <b>" + config.FULL_PRICE_30 + "</b>" + NL +
+        "  📅 3 месяца — <b>" + config.FULL_PRICE_90 + "</b>" + NL +
+        "  📅 1 ГОД    — <b>" + config.FULL_PRICE_365 + "</b>" + NL + NL +
+        "💎 <b>Для лабы — дешевле.</b> Пишите @crypto_chm" + NL +
+        "🎁 <b>Супер предложение</b> (бот + лаба) — @crypto_chm" + NL + NL +
+        "Выберите тариф 👇"
+    )
+
 
 def payment_instruction_text(plan_name: str, amount: str, config) -> str:
     NL = "\n"
@@ -1147,145 +1154,6 @@ def _smc_recommendation(analysis: dict, df_1h=None) -> str:
 
 
 
-# ─── БЛОК 1: Фильтры качества сигнала (SMC / Price Action) ────────────
-
-def _check_signal_quality_pa(sig, atr: float, price: float, symbol: str) -> tuple[bool, list[str]]:
-    """
-    БЛОК 1: Фильтры качества для Price Action сигналов.
-    Проверяет: ATR-стоп, мин. стоп по типу актива, зону входа,
-    волатильность, взвешенный R:R, мем-коин рейтинг.
-    Возвращает (passed: bool, reasons: list[str])
-    """
-    reasons = []
-    passed = True
-
-    # 1. Стоп не меньше 0.3x ATR (защита от "шумового" стопа)
-    if atr > 0 and sig.sl is not None and sig.entry is not None:
-        stop_dist = abs(sig.entry - sig.sl)
-        if stop_dist < atr * 0.3:
-            reasons.append("⚠️ Стоп меньше 0.3×ATR — слишком шумовой")
-            passed = False
-        else:
-            reasons.append("✅ Стоп ≥ 0.3×ATR")
-
-    # 2. Мин. стоп по типу актива (мем-коины: мин. 1.5%, крупняк: мин. 0.5%)
-    MEMCOIN_KEYWORDS = ["PEPE", "SHIB", "DOGE", "FLOKI", "BONK", "WIF", "MEME",
-                        "TURBO", "BRETT", "NEIRO", "MOG", "COQ", "BOME", "CATS"]
-    sym_clean = symbol.replace("-USDT-SWAP", "").replace("-USDT", "").upper()
-    is_memcoin = any(k in sym_clean for k in MEMCOIN_KEYWORDS)
-    min_stop_pct = 1.5 if is_memcoin else 0.5
-    if sig.entry and sig.sl and sig.entry > 0:
-        stop_pct = abs(sig.entry - sig.sl) / sig.entry * 100
-        if stop_pct < min_stop_pct:
-            reasons.append(f"⚠️ Стоп {stop_pct:.2f}% < мин. {min_stop_pct}% для {'мем-коина' if is_memcoin else 'актива'}")
-            passed = False
-        else:
-            reasons.append(f"✅ Стоп {stop_pct:.2f}% {'(мем-коин)' if is_memcoin else ''}")
-
-    # 3. Мем-коин — понижение рейтинга качества на 1
-    if is_memcoin:
-        reasons.append("⚠️ Мем-коин — повышенный риск, -1 к качеству")
-        if hasattr(sig, 'quality') and sig.quality > 1:
-            sig.quality -= 1
-
-    # 4. Взвешенный R:R (мин. 1.5 для продолжения)
-    if sig.entry and sig.sl and sig.tp1:
-        risk = abs(sig.entry - sig.sl)
-        reward = abs(sig.tp1 - sig.entry)
-        rr = reward / risk if risk > 0 else 0
-        if rr < 1.5:
-            reasons.append(f"⚠️ R:R {rr:.1f} < 1.5 — невыгодное соотношение")
-            passed = False
-        else:
-            reasons.append(f"✅ R:R 1:{rr:.1f}")
-
-    # 5. Фильтр волатильности (ATR/price > 3% = высокая волатильность)
-    if atr > 0 and price > 0:
-        atr_pct = atr / price * 100
-        if atr_pct > 3.0:
-            reasons.append(f"⚠️ Высокая волатильность ATR={atr_pct:.1f}% — осторожно")
-        else:
-            reasons.append(f"✅ Волатильность ATR={atr_pct:.2f}%")
-
-    return passed, reasons
-
-
-# ─── БЛОК 2: Дополнительные фильтры (MTF + сессия + корреляция) ───────
-def _check_signal_quality_advanced(
-    sig,
-    df_htf=None,
-    df_btc=None,
-    df_eth=None,
-    symbol: str = "",
-) -> tuple[bool, list[str]]:
-    """
-    БЛОК 2: Расширенные фильтры качества.
-    Проверяет: выравнивание тренда по HTF, торговую сессию,
-    корреляцию с BTC/ETH, аномалию объёма.
-    Возвращает (passed: bool, reasons: list[str])
-    """
-    import datetime
-    reasons = []
-    passed = True
-
-    # 1. HTF тренд выравнивание
-    if df_htf is not None and len(df_htf) >= 50:
-        try:
-            close = df_htf["close"]
-            ema50 = close.ewm(span=50, adjust=False).mean()
-            ema200 = close.ewm(span=200, adjust=False).mean()
-            price_now = float(close.iloc[-1])
-            htf_bull = price_now > float(ema50.iloc[-1]) > float(ema200.iloc[-1])
-            htf_bear = price_now < float(ema50.iloc[-1]) < float(ema200.iloc[-1])
-            if sig.direction == "LONG" and not htf_bull:
-                reasons.append("⚠️ HTF тренд не бычий — LONG против тренда")
-            elif sig.direction == "SHORT" and not htf_bear:
-                reasons.append("⚠️ HTF тренд не медвежий — SHORT против тренда")
-            else:
-                reasons.append("✅ HTF тренд совпадает с направлением")
-        except Exception:
-            pass
-
-    # 2. Торговая сессия (избегаем 00:00–03:00 UTC — низкая ликвидность)
-    now_utc = datetime.datetime.utcnow()
-    hour = now_utc.hour
-    if 0 <= hour < 3:
-        reasons.append("⚠️ Азиатская ночная сессия (00–03 UTC) — низкая ликвидность")
-    elif 8 <= hour < 12:
-        reasons.append("✅ Европейская сессия — хорошая ликвидность")
-    elif 13 <= hour < 21:
-        reasons.append("✅ Американская сессия — максимальная ликвидность")
-    else:
-        reasons.append("ℹ️ Межсессионный период")
-
-    # 3. Корреляция с BTC (если монета не BTC/ETH)
-    sym_clean = symbol.replace("-USDT-SWAP", "").upper()
-    if sym_clean not in ("BTC", "ETH") and df_btc is not None and len(df_btc) >= 20:
-        try:
-            btc_close = df_btc["close"].pct_change().dropna().tail(20)
-            btc_last = float(btc_close.iloc[-1]) * 100
-            if sig.direction == "LONG" and btc_last < -1.5:
-                reasons.append(f"⚠️ BTC падает ({btc_last:.1f}%) — риск для LONG")
-            elif sig.direction == "SHORT" and btc_last > 1.5:
-                reasons.append(f"⚠️ BTC растёт (+{btc_last:.1f}%) — риск для SHORT")
-            else:
-                reasons.append("✅ BTC движение не противоречит сигналу")
-        except Exception:
-            pass
-
-    # 4. Аномалия объёма (объём в 2x выше среднего — подтверждение)
-    if hasattr(sig, 'volume_ratio') and sig.volume_ratio is not None:
-        if sig.volume_ratio >= 2.0:
-            reasons.append(f"✅ Объём x{sig.volume_ratio:.1f} — сильное подтверждение")
-        elif sig.volume_ratio < 0.8:
-            reasons.append(f"⚠️ Объём низкий x{sig.volume_ratio:.1f} — слабое подтверждение")
-            passed = False
-        else:
-            reasons.append(f"ℹ️ Объём x{sig.volume_ratio:.1f}")
-
-    return passed, reasons
-
-
 # ─── Основная функция регистрации хендлеров ──────────
 
 def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config):
@@ -1372,32 +1240,36 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     # ─── ПОДПИСКА — ВЫБОР ТАРИФА (callback) ─────────────
 
-@dp.callback_query(F.data.in_({"plan_bot_90", "plan_bot_365"}))
-async def select_plan(cb: CallbackQuery):
     PLANS = {
-        "plan_bot_90":  ("🤖 Только БОТ — 3 месяца", "290$"),
-        "plan_bot_365": ("🤖 Только БОТ — 1 ГОД",    "990$"),
+        "plan_bot_30":   ("🤖 Только БОТ — 1 месяц",   "70$"),
+        "plan_bot_90":   ("🤖 Только БОТ — 3 месяца",  "150$"),
+        "plan_bot_365":  ("🤖 Только БОТ — 1 ГОД",    "330$"),
+        "plan_full_30":  ("🤖📊 БОТ + ИНДИКАТОР — 1 месяц",  "90$"),
+        "plan_full_90":  ("🤖📊 БОТ + ИНДИКАТОР — 3 месяца", "230$"),
+        "plan_full_365": ("🤖📊 БОТ + ИНДИКАТОР — 1 ГОД",   "630$"),
     }
 
-    await cb.answer()
-    plan_key = cb.data
-    if plan_key not in PLANS:
-        return
-    plan_name, amount = PLANS[plan_key]
-    NL = "\n"
-    text = (
-        "💳 <b>Оплата подписки</b>" + NL + NL +
-        "📦 Тариф: <b>" + plan_name + " — " + amount + "</b>" + NL + NL +
-        "━━━━━━━━━━━━━━━━━━━━" + NL +
-        "🔗 Сеть: <b>" + config.PAYMENT_NETWORK + "</b>" + NL + NL +
-        "📋 Адрес для перевода:" + NL +
-        "<code>" + config.PAYMENT_ADDRESS + "</code>" + NL + NL +
-        "━━━━━━━━━━━━━━━━━━━━" + NL +
-        "✅ После оплаты отправь скриншот + свой Telegram ID администратору:" + NL + NL +
-        "🆔 Твой ID: <code>" + str(cb.from_user.id) + "</code>"
-    )
-    from keyboards import kb_payment
-    await safe_edit(cb, text, kb_payment(plan_name, amount, config.PAYMENT_ADDRESS))
+    @dp.callback_query(F.data.startswith("plan_"))
+    async def plan_selected(cb: CallbackQuery):
+        await cb.answer()
+        plan_key = cb.data
+        if plan_key not in PLANS:
+            return
+        plan_name, amount = PLANS[plan_key]
+        NL = "\n"
+        text = (
+            "💳 <b>Оплата подписки</b>" + NL + NL +
+            "📦 Тариф: <b>" + plan_name + " — " + amount + "</b>" + NL + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "🔗 Сеть: <b>" + config.PAYMENT_NETWORK + "</b>" + NL + NL +
+            "📋 Адрес для перевода:" + NL +
+            "<code>" + config.PAYMENT_ADDRESS + "</code>" + NL + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "✅ После оплаты отправь скриншот + свой Telegram ID администратору:" + NL + NL +
+            "🆔 Твой ID: <code>" + str(cb.from_user.id) + "</code>"
+        )
+        from keyboards import kb_payment
+        await safe_edit(cb, text, kb_payment(plan_name, amount, config.PAYMENT_ADDRESS))
 
     @dp.callback_query(F.data == "show_plans")
     async def show_plans(cb: CallbackQuery):
@@ -3179,7 +3051,7 @@ async def select_plan(cb: CallbackQuery):
 
     # ─── РЕЗУЛЬТАТЫ СДЕЛОК ────────────────────────────
 
-    @dp.callback_query(F.data.regexp(r"^res_(win|loss|be)_"))
+    @dp.callback_query(F.data.startswith("res_"))
     async def res_handler(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         parts = cb.data.split("_")
@@ -3198,8 +3070,56 @@ async def select_plan(cb: CallbackQuery):
         if signal:
             txt = "📊 " + str(signal.get("symbol", "")) + "\n" + txt
         await safe_edit(cb, txt, kb)
-    
-# ─── ПОМОЩЬ ───────────────────────────────────────
+
+    # ─── НАВИГАЦИЯ ────────────────────────────────────
+
+    @dp.callback_query(F.data == "back_main")
+    async def back_main(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
+        await safe_edit(cb, main_text(user, trend), kb_main(user))
+
+    @dp.callback_query(F.data == "my_stats")
+    async def my_stats(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        stats = await db.db_get_user_stats(user.user_id)
+        await safe_edit(cb, stats_text(user, stats), kb_back())
+
+    @dp.callback_query(F.data == "my_chart")
+    async def my_chart(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        stats = await db.db_get_user_stats(user.user_id)
+        if not stats or stats.get("total", 0) < 2:
+            await cb.message.answer("📊 Нужно минимум 2 сделки для графика."); return
+        # Build equity curve
+        records = await db.get_user_records(user.user_id, limit=50)
+        equity = [0.0]
+        for r in records:
+            equity.append(equity[-1] + float(r.get("rr", 0)))
+        fig, ax = plt.subplots(figsize=(8, 4))
+        color = "green" if equity[-1] >= 0 else "red"
+        ax.plot(equity, color=color, linewidth=2)
+        ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
+        ax.fill_between(range(len(equity)), equity, 0, alpha=0.15, color=color)
+        ax.set_title("Equity curve — " + str(len(records)) + " сделок", fontsize=13)
+        ax.set_xlabel("Сделки"); ax.set_ylabel("R")
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=120); buf.seek(0); plt.close(fig)
+        photo = BufferedInputFile(buf.read(), filename="equity.png")
+        await cb.message.answer_photo(photo, caption="📈 Equity curve", reply_markup=kb_back_photo())
+
+    @dp.callback_query(F.data == "back_photo_main")
+    async def back_photo_main(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
+        await cb.message.answer(main_text(user, trend), parse_mode="HTML", reply_markup=kb_main(user))
+
+    # ─── ПОМОЩЬ ───────────────────────────────────────
 
     @dp.callback_query(F.data == "help_show")
     async def help_show(cb: CallbackQuery):

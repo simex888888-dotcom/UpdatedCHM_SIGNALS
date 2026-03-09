@@ -8,7 +8,7 @@ import time
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.client.default import DefaultBotProperties
+
 import database
 import cache
 from config import Config
