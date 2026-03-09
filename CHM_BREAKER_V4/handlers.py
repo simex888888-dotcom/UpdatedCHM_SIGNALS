@@ -249,11 +249,9 @@ def pricing_text(config) -> str:
         "🤖 <b>CHM BOT — автоматический сканер твоей прибыли. Бот, который не даст проспать профит.</b>" + NL + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
         "🤖 <b>Только БОТ:</b>" + NL +
-        "  📅 1 месяц  — <b>" + config.BOT_PRICE_30 + "</b>" + NL +
         "  📅 3 месяца — <b>" + config.BOT_PRICE_90 + "</b>" + NL +
         "  📅 1 ГОД    — <b>" + config.BOT_PRICE_365 + "</b>" + NL + NL +
         "🤖📊 <b>БОТ + ИНДИКАТОР на TradingView:</b>" + NL +
-        "  📅 1 месяц  — <b>" + config.FULL_PRICE_30 + "</b>" + NL +
         "  📅 3 месяца — <b>" + config.FULL_PRICE_90 + "</b>" + NL +
         "  📅 1 ГОД    — <b>" + config.FULL_PRICE_365 + "</b>" + NL + NL +
         "💎 <b>Для лабы — дешевле.</b> Пишите @crypto_chm" + NL +
