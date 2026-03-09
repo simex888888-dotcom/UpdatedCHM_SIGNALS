@@ -84,7 +84,7 @@ async def main():
     log.info("⏳ Инициализация кэша...")
     cache.init_cache(max_symbols=config.CACHE_MAX_SYMBOLS)
 
-    bot     = Bot(token=config.TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode='HTML'))
+    bot     = Bot(token=config.TELEGRAM_TOKEN)
     dp      = Dispatcher(storage=MemoryStorage())
     um      = UserManager()
     scanner = MidScanner(config, bot, um)
