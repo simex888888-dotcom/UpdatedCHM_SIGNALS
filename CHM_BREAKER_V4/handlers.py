@@ -251,14 +251,11 @@ def pricing_text(config) -> str:
         "🤖 <b>Только БОТ:</b>" + NL +
         "  📅 3 месяца — <b>" + config.BOT_PRICE_90 + "</b>" + NL +
         "  📅 1 ГОД    — <b>" + config.BOT_PRICE_365 + "</b>" + NL + NL +
-        "🤖📊 <b>БОТ + ИНДИКАТОР на TradingView:</b>" + NL +
-        "  📅 3 месяца — <b>" + config.FULL_PRICE_90 + "</b>" + NL +
-        "  📅 1 ГОД    — <b>" + config.FULL_PRICE_365 + "</b>" + NL + NL +
-        "💎 <b>Для лабы — дешевле.</b> Пишите @crypto_chm" + NL +
-        "🎁 <b>Супер предложение</b> (бот + лаба) — @crypto_chm" + NL + NL +
-        "Выберите тариф 👇"
-    )
-
+        "💎 <b>Для лабы — дешевле.</b> Пишите @crypto_chm" + NL + NL +
+                "🎁 <b>Супер предложение</b> (бот + лаба) — @crypto_chm" + NL + NL +
+                "Выберите тариф 👇"
+            )
+        
 
 def payment_instruction_text(plan_name: str, amount: str, config) -> str:
     NL = "\n"
@@ -1378,16 +1375,10 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     # ─── ПОДПИСКА — ВЫБОР ТАРИФА (callback) ─────────────
 
     PLANS = {
-        "plan_bot_30":   ("🤖 Только БОТ — 1 месяц",   "70$"),
-        "plan_bot_90":   ("🤖 Только БОТ — 3 месяца",  "180$"),
-        "plan_bot_365":  ("🤖 Только БОТ — 1 ГОД",    "396$"),
-        "plan_full_30":  ("🤖📊 БОТ + ИНДИКАТОР — 1 месяц",  "90$"),
-        "plan_full_90":  ("🤖📊 БОТ + ИНДИКАТОР — 3 месяца", "276$"),
-        "plan_full_365": ("🤖📊 БОТ + ИНДИКАТОР — 1 ГОД",   "756$"),
-    }
-
-    @dp.callback_query(F.data.startswith("plan_"))
-    async def plan_selected(cb: CallbackQuery):
+        "plan_bot_90":   ("🤖 Только БОТ — 3 месяца",  "290$"),
+        "plan_bot_365":  ("🤖 Только БОТ — 1 ГОД",    "990$"),
+        }
+    
         await cb.answer()
         plan_key = cb.data
         if plan_key not in PLANS:
