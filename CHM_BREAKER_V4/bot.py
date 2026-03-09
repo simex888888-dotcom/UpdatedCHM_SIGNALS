@@ -5,7 +5,7 @@ bot.py — точка входа CHM BREAKER MID (50-500 пользовател�
 import asyncio
 import logging
 import time
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, DefaultBotProperties
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
@@ -84,7 +84,7 @@ async def main():
     log.info("⏳ Инициализация кэша...")
     cache.init_cache(max_symbols=config.CACHE_MAX_SYMBOLS)
 
-    bot     = Bot(token=config.TELEGRAM_TOKEN)
+    bot     = Bot(token=config.TELEGRAM_TOKEN, default=DefaultBotProperties(parse_mode='HTML'))
     dp      = Dispatcher(storage=MemoryStorage())
     um      = UserManager()
     scanner = MidScanner(config, bot, um)
