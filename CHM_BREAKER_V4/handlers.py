@@ -1373,31 +1373,31 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     # ─── ПОДПИСКА — ВЫБОР ТАРИФА (callback) ─────────────
 
 @dp.callback_query(F.data.in_({"plan_bot_90", "plan_bot_365"}))
-    async def select_plan(cb: CallbackQuery):
-            PLANS = {
-        "plan_bot_90":   ("🤖 Только БОТ — 3 месяца",  "290$"),
-        "plan_bot_365":  ("🤖 Только БОТ — 1 ГОД",    "990$"),
-        }
-    
-        await cb.answer()
-        plan_key = cb.data
-        if plan_key not in PLANS:
-            return
-        plan_name, amount = PLANS[plan_key]
-        NL = "\n"
-        text = (
-            "💳 <b>Оплата подписки</b>" + NL + NL +
-            "📦 Тариф: <b>" + plan_name + " — " + amount + "</b>" + NL + NL +
-            "━━━━━━━━━━━━━━━━━━━━" + NL +
-            "🔗 Сеть: <b>" + config.PAYMENT_NETWORK + "</b>" + NL + NL +
-            "📋 Адрес для перевода:" + NL +
-            "<code>" + config.PAYMENT_ADDRESS + "</code>" + NL + NL +
-            "━━━━━━━━━━━━━━━━━━━━" + NL +
-            "✅ После оплаты отправь скриншот + свой Telegram ID администратору:" + NL + NL +
-            "🆔 Твой ID: <code>" + str(cb.from_user.id) + "</code>"
-        )
-        from keyboards import kb_payment
-        await safe_edit(cb, text, kb_payment(plan_name, amount, config.PAYMENT_ADDRESS))
+async def select_plan(cb: CallbackQuery):
+    PLANS = {
+        "plan_bot_90":  ("🤖 Только БОТ — 3 месяца", "290$"),
+        "plan_bot_365": ("🤖 Только БОТ — 1 ГОД",    "990$"),
+    }
+
+    await cb.answer()
+    plan_key = cb.data
+    if plan_key not in PLANS:
+        return
+    plan_name, amount = PLANS[plan_key]
+    NL = "\n"
+    text = (
+        "💳 <b>Оплата подписки</b>" + NL + NL +
+        "📦 Тариф: <b>" + plan_name + " — " + amount + "</b>" + NL + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL +
+        "🔗 Сеть: <b>" + config.PAYMENT_NETWORK + "</b>" + NL + NL +
+        "📋 Адрес для перевода:" + NL +
+        "<code>" + config.PAYMENT_ADDRESS + "</code>" + NL + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL +
+        "✅ После оплаты отправь скриншот + свой Telegram ID администратору:" + NL + NL +
+        "🆔 Твой ID: <code>" + str(cb.from_user.id) + "</code>"
+    )
+    from keyboards import kb_payment
+    await safe_edit(cb, text, kb_payment(plan_name, amount, config.PAYMENT_ADDRESS))
 
     @dp.callback_query(F.data == "show_plans")
     async def show_plans(cb: CallbackQuery):
