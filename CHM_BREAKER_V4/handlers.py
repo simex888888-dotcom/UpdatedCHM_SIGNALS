@@ -3179,7 +3179,7 @@ async def select_plan(cb: CallbackQuery):
 
     # ─── РЕЗУЛЬТАТЫ СДЕЛОК ────────────────────────────
 
-    @dp.callback_query(F.data.startswith("res_"))
+    @dp.callback_query(F.data.regexp(r"^res_(win|loss|be)_"))
     async def res_handler(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         parts = cb.data.split("_")
