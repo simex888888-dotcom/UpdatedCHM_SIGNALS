@@ -5,11 +5,10 @@ bot.py — точка входа CHM BREAKER MID (50-500 пользовател�
 import asyncio
 import logging
 import time
-from aiogram import Bot, Dispatcher, DefaultBotProperties
+from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
-import database
+from aiogram.client.default import DefaultBotProperties
 import cache
 from config import Config
 from user_manager import UserManager
