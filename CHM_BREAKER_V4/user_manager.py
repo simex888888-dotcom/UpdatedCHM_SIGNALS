@@ -348,5 +348,15 @@ class UserManager:
         rows = await db.db_get_all_users()
         return [_from_db(r) for r in rows]
 
+    async def get_active_auto_trade_users(self) -> list[UserSettings]:
+        """Пользователи у которых включён авто-трейдинг и есть API-ключи."""
+        rows = await db.db_get_active_users()
+        result = []
+        for r in rows:
+            u = _from_db(r)
+            if getattr(u, "auto_trade", False) and getattr(u, "bybit_api_key", ""):
+                result.append(u)
+        return result
+
     async def stats_summary(self) -> dict:
         return await db.db_stats_summary()

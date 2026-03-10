@@ -176,6 +176,8 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN trade_leverage INTEGER DEFAULT 10",
             "ALTER TABLE users ADD COLUMN max_trades_limit INTEGER DEFAULT 5",
             "ALTER TABLE users ADD COLUMN watch_coin TEXT DEFAULT ''",
+            "ALTER TABLE trades ADD COLUMN be_set INTEGER DEFAULT 0",
+            "ALTER TABLE trades ADD COLUMN pos_idx INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try:
@@ -320,6 +322,28 @@ async def db_get_user_trades(user_id: int) -> list[dict]:
         ) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
+
+
+async def db_get_open_trades_for_be(user_id: int) -> list[dict]:
+    """Возвращает незакрытые сделки у которых BE ещё не выставлен."""
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM trades WHERE user_id=? AND result='' AND be_set=0",
+            (user_id,)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def db_set_trade_be(trade_id: str):
+    """Помечает что безубыток по сделке уже выставлен."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "UPDATE trades SET be_set=1 WHERE trade_id=?", (trade_id,)
+            )
+            await db.commit()
 
 
 async def db_count_open_trades(user_id: int, window_hours: int = 24) -> int:

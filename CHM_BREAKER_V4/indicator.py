@@ -1203,7 +1203,7 @@ class CHMIndicator:
         entry = c_now
         if signal == "LONG":
             zone_bottom = s_level - zone_buf
-            sl = zone_bottom - atr_now * 0.5
+            sl = zone_bottom - atr_now * 1.5   # 1.5 ATR ниже зоны — за структуру
             # Safeguard: не дальше cfg.MAX_RISK_PCT
             sl = max(sl, entry * (1.0 - cfg.MAX_RISK_PCT / 100))
             if sl >= entry:
@@ -1211,7 +1211,7 @@ class CHMIndicator:
                 return None
         else:
             zone_top = s_level + zone_buf
-            sl = zone_top + atr_now * 0.5
+            sl = zone_top + atr_now * 1.5      # 1.5 ATR выше зоны — за структуру
             sl = min(sl, entry * (1.0 + cfg.MAX_RISK_PCT / 100))
             if sl <= entry:
                 log.debug(f"{symbol}: SHORT SL={sl:.4f} <= entry={entry:.4f} — отмена")

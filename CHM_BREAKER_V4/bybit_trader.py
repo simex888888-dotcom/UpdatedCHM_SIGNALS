@@ -14,7 +14,7 @@ from typing import Optional
 log = logging.getLogger("CHM.Bybit")
 
 MIN_NOTIONAL = 5.0   # Минимальный notional (USDT) — меньше Bybit не даст
-MAX_LEVERAGE  = 20   # Ограничение плеча
+MAX_LEVERAGE  = 50   # Ограничение плеча
 
 
 # ── Конвертация символа ──────────────────────────────
@@ -142,9 +142,12 @@ def _place_trade_sync(
     tp1: float,
     risk_pct: float,
     leverage: int,
+    tp2: float = 0.0,
+    tp3: float = 0.0,
 ) -> dict:
     """
-    Синхронно открывает Market-ордер на Bybit с SL и TP1.
+    Синхронно открывает Market-ордер на Bybit с SL.
+    Если tp2/tp3 переданы — ставит 3 частичных TP (reduce-only limit orders).
     Возвращает {"ok": True/False, ...}
     """
     session    = _get_session(api_key, api_secret)
@@ -209,9 +212,7 @@ def _place_trade_sync(
             orderType="Market",
             qty=qty_str,
             stopLoss=str(round(sl, 8)),
-            takeProfit=str(round(tp1, 8)),
             slTriggerBy="MarkPrice",
-            tpTriggerBy="MarkPrice",
             positionIdx=position_idx,
         )
 
@@ -221,20 +222,51 @@ def _place_trade_sync(
         if resp.get("retCode") == 130125:
             log.info(f"{bb_symbol}: One-Way Mode failed, retrying with Hedge Mode (idx={hedge_idx})")
             resp = _do_place(hedge_idx)
+            # Определяем итоговый positionIdx
+            used_hedge = True
+        else:
+            used_hedge = False
 
         if resp.get("retCode", -1) == 0:
             order_id      = resp["result"].get("orderId", "")
             qty_f         = float(qty_str)
             notional_real = qty_f * entry
+            final_pos_idx = hedge_idx if used_hedge else 0
+
+            # ── 3 частичных TP (reduce-only limit orders) ────────────────
+            close_side = "Sell" if side == "Buy" else "Buy"
+            qty_tp     = qty_f / 3.0
+            qty_tp_str = _round_qty(qty_tp, qty_step)
+            tp_prices  = [tp1, tp2, tp3]
+
+            for tp_price in tp_prices:
+                if tp_price is None or tp_price <= 0:
+                    continue
+                try:
+                    session.place_order(
+                        category    = "linear",
+                        symbol      = bb_symbol,
+                        side        = close_side,
+                        orderType   = "Limit",
+                        qty         = qty_tp_str,
+                        price       = str(round(tp_price, 8)),
+                        reduceOnly  = True,
+                        timeInForce = "GTC",
+                        positionIdx = final_pos_idx,
+                    )
+                except Exception as e_tp:
+                    log.warning(f"TP order @{tp_price} {bb_symbol}: {e_tp}")
+
             return {
-                "ok":       True,
-                "order_id": order_id,
-                "qty":      qty_str,
-                "notional": notional_real,
-                "balance":  balance,
-                "symbol":   bb_symbol,
-                "side":     side,
-                "leverage": lev,
+                "ok":          True,
+                "order_id":    order_id,
+                "qty":         qty_str,
+                "notional":    notional_real,
+                "balance":     balance,
+                "symbol":      bb_symbol,
+                "side":        side,
+                "leverage":    lev,
+                "pos_idx":     final_pos_idx,
             }
         else:
             return {"ok": False, "error": resp.get("retMsg", "Неизвестная ошибка Bybit")}
@@ -252,10 +284,13 @@ async def place_trade(
     sl:         float,
     tp1:        float,
     risk_pct:   float,  # % от баланса
-    leverage:   int = 10,
+    leverage:   int   = 10,
+    tp2:        float = 0.0,
+    tp3:        float = 0.0,
 ) -> dict:
     """
     Асинхронно открывает позицию на Bybit.
+    Если tp2/tp3 переданы — ставит 3 частичных TP (reduce-only).
     Возвращает {"ok": True, "order_id": ..., "qty": ..., ...}
               или {"ok": False, "error": "..."}
     """
@@ -267,28 +302,98 @@ async def place_trade(
         symbol, direction,
         entry, sl, tp1,
         risk_pct, leverage,
+        tp2, tp3,
+    )
+
+
+# ── Безубыток ─────────────────────────────────────────
+
+def _set_breakeven_sync(api_key: str, api_secret: str,
+                        symbol: str, entry: float,
+                        direction: str, pos_idx: int = 0) -> dict:
+    """Синхронно переносит SL на цену входа (безубыток)."""
+    session   = _get_session(api_key, api_secret)
+    bb_symbol = _to_bybit_symbol(symbol)
+    try:
+        resp = session.set_trading_stop(
+            category    = "linear",
+            symbol      = bb_symbol,
+            stopLoss    = str(round(entry, 8)),
+            slTriggerBy = "MarkPrice",
+            positionIdx = pos_idx,
+        )
+        if resp.get("retCode", -1) == 0:
+            return {"ok": True}
+        return {"ok": False, "error": resp.get("retMsg", "BE error")}
+    except Exception as e:
+        log.error(f"set_breakeven {symbol}: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+async def set_breakeven(api_key: str, api_secret: str,
+                        symbol: str, entry: float,
+                        direction: str, pos_idx: int = 0) -> dict:
+    """Асинхронно переносит SL на безубыток."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, _set_breakeven_sync,
+        api_key, api_secret, symbol, entry, direction, pos_idx,
+    )
+
+
+# ── Проверка позиций (для мониторинга BE) ─────────────
+
+def _get_positions_sync(api_key: str, api_secret: str, symbol: str = "") -> list:
+    """Возвращает список открытых позиций (linear перпы)."""
+    session = _get_session(api_key, api_secret)
+    try:
+        kwargs = {"category": "linear", "settleCoin": "USDT"}
+        if symbol:
+            kwargs["symbol"] = _to_bybit_symbol(symbol)
+        resp = session.get_positions(**kwargs)
+        if resp.get("retCode", -1) == 0:
+            return resp["result"].get("list", [])
+    except Exception as e:
+        log.debug(f"get_positions: {e}")
+    return []
+
+
+async def get_positions(api_key: str, api_secret: str, symbol: str = "") -> list:
+    """Асинхронно возвращает список открытых позиций."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, _get_positions_sync, api_key, api_secret, symbol,
     )
 
 
 def format_trade_result(result: dict, direction: str, symbol: str,
                         entry: float, sl: float, tp1: float,
-                        risk_pct: float, leverage: int) -> str:
+                        risk_pct: float, leverage: int,
+                        tp2: float = 0.0, tp3: float = 0.0) -> str:
     """Форматирует результат открытия позиции для отправки в Telegram."""
     if result["ok"]:
-        bb_sym    = result.get("symbol", _to_bybit_symbol(symbol))
-        qty       = result.get("qty", "?")
-        notional  = result.get("notional", 0.0)
-        balance   = result.get("balance", 0.0)
-        order_id  = result.get("order_id", "?")
-        risk_amt  = balance * risk_pct / 100
-        dir_em    = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
+        bb_sym   = result.get("symbol", _to_bybit_symbol(symbol))
+        qty      = result.get("qty", "?")
+        notional = result.get("notional", 0.0)
+        balance  = result.get("balance", 0.0)
+        order_id = result.get("order_id", "?")
+        risk_amt = balance * risk_pct / 100
+        dir_em   = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
+
+        tp_lines = f"🎯 TP1: <code>{tp1}</code>  (1/3 позиции)\n"
+        if tp2:
+            tp_lines += f"🎯 TP2: <code>{tp2}</code>  (1/3 позиции)\n"
+        if tp3:
+            tp_lines += f"🏆 TP3: <code>{tp3}</code>  (1/3 позиции)\n"
+        be_note = "\n♻️ <i>После TP1 — стоп автоматически перенесётся в БУ</i>" if tp2 else ""
 
         return (
             f"✅ <b>СДЕЛКА ОТКРЫТА на Bybit</b>\n\n"
             f"💎 <b>{bb_sym}</b>   {dir_em}   x{leverage}\n\n"
-            f"💰 Вход:       <code>{entry}</code>\n"
-            f"🛑 Стоп-лосс:  <code>{sl}</code>\n"
-            f"🎯 Тейк-профит: <code>{tp1}</code>\n\n"
+            f"💰 Вход:      <code>{entry}</code>\n"
+            f"🛑 Стоп:      <code>{sl}</code>\n\n"
+            f"{tp_lines}"
+            f"{be_note}\n\n"
             f"📦 Объём:  <code>{qty}</code>  (~${notional:.2f})\n"
             f"⚠️ Риск:   <code>${risk_amt:.2f}</code> ({risk_pct}% от ${balance:.2f})\n\n"
             f"🆔 Order ID: <code>{order_id}</code>"
