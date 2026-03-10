@@ -9,10 +9,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Код бота
 COPY . .
 
-# Директория для постоянной БД (монтируется как volume)
-RUN mkdir -p /data
-
-# DB хранится в /data — переживает любой редеплой
-ENV DB_PATH=/data/chm_bot.db
+# По умолчанию БД хранится в рабочей директории /app.
+# На хостингах с persistent volume задай переменную окружения DB_PATH:
+#   DB_PATH=/persistent/chm_bot.db  (путь к постоянному диску хостинга)
+ENV DB_PATH=/app/chm_bot.db
 
 CMD ["python3", "bot.py"]

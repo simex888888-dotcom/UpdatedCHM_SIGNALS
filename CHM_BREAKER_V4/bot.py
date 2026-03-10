@@ -17,6 +17,7 @@ from config import Config
 from user_manager import UserManager
 from scanner_mid import MidScanner
 from handlers import register_handlers
+from pump_dump.pd_runner import PDRunner
 
 
 def _backup_db(db_path: str):
@@ -119,12 +120,13 @@ async def main():
     log.info("⏳ Инициализация кэша...")
     cache.init_cache(max_symbols=config.CACHE_MAX_SYMBOLS)
 
-    bot     = Bot(token=config.TELEGRAM_TOKEN)
-    dp      = Dispatcher(storage=MemoryStorage())
-    um      = UserManager()
-    scanner = MidScanner(config, bot, um)
+    bot      = Bot(token=config.TELEGRAM_TOKEN)
+    dp       = Dispatcher(storage=MemoryStorage())
+    um       = UserManager()
+    scanner  = MidScanner(config, bot, um)
+    pd_runner = PDRunner(bot, config.DB_PATH)
 
-    register_handlers(dp, bot, um, scanner, config)
+    register_handlers(dp, bot, um, scanner, config, pd_runner=pd_runner)
 
     # ─── Авто-восстановление подписок при старте ─────────────────────────────
     async def _auto_restore_subs():
@@ -198,6 +200,7 @@ async def main():
         await asyncio.gather(
             dp.start_polling(bot, allowed_updates=["message", "callback_query"]),
             scanner.run_forever(),
+            pd_runner.run_forever(),
         )
     finally:
         log.info("🛑 Завершение...")
