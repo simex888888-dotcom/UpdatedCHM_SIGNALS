@@ -3206,54 +3206,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             txt = "📊 " + str(signal.get("symbol", "")) + "\n" + txt
         await safe_edit(cb, txt, kb)
 
-    # ─── НАВИГАЦИЯ ────────────────────────────────────
-
-    @dp.callback_query(F.data == "back_main")
-    async def back_main(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        await cb.answer()
-        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
-        await safe_edit(cb, main_text(user, trend), kb_main(user))
-
-    @dp.callback_query(F.data == "my_stats")
-    async def my_stats(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        await cb.answer()
-        stats = await db.db_get_user_stats(user.user_id)
-        await safe_edit(cb, stats_text(user, stats), kb_back())
-
-    @dp.callback_query(F.data == "my_chart")
-    async def my_chart(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        await cb.answer()
-        stats = await db.db_get_user_stats(user.user_id)
-        if not stats or stats.get("total", 0) < 2:
-            await cb.message.answer("📊 Нужно минимум 2 сделки для графика."); return
-        # Build equity curve
-        records = await db.get_user_records(user.user_id, limit=50)
-        equity = [0.0]
-        for r in records:
-            equity.append(equity[-1] + float(r.get("rr", 0)))
-        fig, ax = plt.subplots(figsize=(8, 4))
-        color = "green" if equity[-1] >= 0 else "red"
-        ax.plot(equity, color=color, linewidth=2)
-        ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
-        ax.fill_between(range(len(equity)), equity, 0, alpha=0.15, color=color)
-        ax.set_title("Equity curve — " + str(len(records)) + " сделок", fontsize=13)
-        ax.set_xlabel("Сделки"); ax.set_ylabel("R")
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=120); buf.seek(0); plt.close(fig)
-        photo = BufferedInputFile(buf.read(), filename="equity.png")
-        await cb.message.answer_photo(photo, caption="📈 Equity curve", reply_markup=kb_back_photo())
-
-    @dp.callback_query(F.data == "back_photo_main")
-    async def back_photo_main(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        await cb.answer()
-        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
-        await cb.message.answer(main_text(user, trend), parse_mode="HTML", reply_markup=kb_main(user))
-
     # ─── ПОМОЩЬ ───────────────────────────────────────
 
     @dp.callback_query(F.data == "help_show")

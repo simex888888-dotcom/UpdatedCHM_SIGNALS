@@ -263,7 +263,8 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
                         user.user_id,
                         f"⛔ Авто-трейд отклонён: достигнут лимит открытых сделок "
                         f"({open_count}/{max_trades}).\n"
-                        f"Сигнал: {sig.symbol} {sig.direction}"
+                        f"Сигнал: {sig.symbol} {sig.direction}",
+                        protect_content=True,
                     )
                     auto_trade = False
 
@@ -281,12 +282,14 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
                             result, sig.direction, sig.symbol,
                             sig.entry, sig.sl, sig.tp1, risk_pct, leverage,
                         )
-                        await bot.send_message(user.user_id, trade_msg, parse_mode="HTML")
+                        await bot.send_message(user.user_id, trade_msg,
+                                               parse_mode="HTML", protect_content=True)
                     except Exception as e:
                         log.error(f"SMC auto_trade {sig.symbol}: {e}")
                         await bot.send_message(
                             user.user_id,
-                            f"⚠️ Авто-трейд: ошибка открытия {sig.symbol}: {e}"
+                            f"⚠️ Авто-трейд: ошибка открытия {sig.symbol}: {e}",
+                            protect_content=True,
                         )
                 else:
                     show_trade_btn = True
