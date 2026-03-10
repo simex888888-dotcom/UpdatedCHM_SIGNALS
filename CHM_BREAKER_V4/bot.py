@@ -4,6 +4,8 @@ bot.py — точка входа CHM BREAKER MID (50-500 пользовател�
 
 import asyncio
 import logging
+import os
+import shutil
 import time
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -15,6 +17,36 @@ from config import Config
 from user_manager import UserManager
 from scanner_mid import MidScanner
 from handlers import register_handlers
+
+
+def _backup_db(db_path: str):
+    """Создаёт резервную копию БД при каждом запуске бота.
+
+    Хранит последние 5 копий: chm_bot.db.bak1 … .bak5
+    Это защищает от потери данных при случайном удалении файла.
+    """
+    if not os.path.exists(db_path):
+        return
+    bak_dir  = os.path.dirname(db_path) or "."
+    bak_base = db_path + ".bak"
+    # Сдвигаем старые бэкапы: bak4→bak5, bak3→bak4 …
+    for n in range(4, 0, -1):
+        src = bak_base + str(n)
+        dst = bak_base + str(n + 1)
+        if os.path.exists(src):
+            try:
+                shutil.copy2(src, dst)
+            except Exception:
+                pass
+    # Сохраняем текущую БД как bak1
+    try:
+        shutil.copy2(db_path, bak_base + "1")
+        log_pre = logging.getLogger("CHM.Main")
+        log_pre.info(f"💾 DB backup → {bak_base}1")
+    except Exception as e:
+        log_pre = logging.getLogger("CHM.Main")
+        log_pre.warning(f"⚠️ DB backup failed: {e}")
+
 
 logging.basicConfig(
     level=logging.INFO,
@@ -77,6 +109,9 @@ async def notify_restart(bot: Bot, um: UserManager, admin_ids: list):
 
 async def main():
     config = Config()
+
+    # Резервная копия БД перед каждым запуском (5 ротаций)
+    _backup_db(config.DB_PATH)
 
     log.info("⏳ Инициализация SQLite...")
     await database.init_db(config.DB_PATH)

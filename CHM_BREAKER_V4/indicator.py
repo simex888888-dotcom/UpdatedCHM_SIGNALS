@@ -1240,8 +1240,9 @@ class CHMIndicator:
         if not is_major and not is_memcoin and risk_pct_raw < 0.8:
             log.debug(f"{symbol}: stop {risk_pct_raw:.2f}% < 0.8% (альт min) — пропуск")
             return None
-        if atr_now > 0 and risk < atr_now * 1.5:
-            log.debug(f"{symbol}: stop {risk:.5f} < 1.5×ATR({atr_now:.5f}) — пропуск")
+        # ATR-проверка: стоп должен быть хотя бы 0.3×ATR (базовый шум)
+        if atr_now > 0 and risk < atr_now * 0.3:
+            log.debug(f"{symbol}: stop {risk:.5f} < 0.3×ATR({atr_now:.5f}) — пропуск")
             return None
 
         # ══════════════════════════════════════════════════════════════════
@@ -1434,9 +1435,9 @@ class CHMIndicator:
         has_pattern  = bool(bull_pat if signal == "LONG" else bear_pat)
         is_fakeout   = "Fakeout" in s_type or "SFP" in s_type
         checklist = [
-            s_class <= 2 or (s_class == 3 and quality >= 4),  # уровень
+            True,                                                # уровень (фильтр quality в scanner_mid)
             approach_ok,                                         # подход
-            has_pattern or is_fakeout or vol_ratio > 1.5,       # реакция
+            has_pattern or is_fakeout or vol_ratio > 1.2,       # реакция: снижен порог объёма
             rr_actual >= cfg.MIN_RR,                             # R:R
             test_count <= cfg.MAX_LEVEL_TESTS - 1,              # тесты
         ]

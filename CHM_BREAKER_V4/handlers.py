@@ -1344,7 +1344,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         ]])
         if len(result_text) <= MAX:
             try:
-                await send(result_text, parse_mode="HTML", reply_markup=kb_back_analyze)
+                await send(result_text, parse_mode="HTML",
+                           reply_markup=kb_back_analyze, protect_content=True)
             except Exception as e:
                 log.error(f"_do_analyze send error: {e}")
                 await send(f"❌ Не удалось отправить анализ: {e}")
@@ -1362,7 +1363,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             for i, part in enumerate(parts):
                 try:
                     kb = kb_back_analyze if i == len(parts) - 1 else None
-                    await send(part, parse_mode="HTML", reply_markup=kb)
+                    await send(part, parse_mode="HTML", reply_markup=kb, protect_content=True)
                 except Exception:
                     await send(part)  # fallback без HTML если тег сломан
 
@@ -2325,7 +2326,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("short_set_buffer_", ""))
         await cb.answer("✅ " + str(v) + "%")
-        _update_short_field(user, "buffer_pct", v); await um.save(user)
+        _update_short_field(user, "zone_buffer", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
 
     @dp.callback_query(F.data.startswith("short_set_zone_pct_"))
@@ -2333,7 +2334,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("short_set_zone_pct_", ""))
         await cb.answer("✅ " + str(v) + "%")
-        _update_short_field(user, "zone_width_pct", v); await um.save(user)
+        _update_short_field(user, "zone_pct", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
 
     @dp.callback_query(F.data.startswith("short_set_dist_pct_"))
@@ -2349,7 +2350,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_max_tests_", ""))
         await cb.answer("✅ " + str(v))
-        _update_short_field(user, "max_tests", v); await um.save(user)
+        _update_short_field(user, "max_level_tests", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
 
     @dp.callback_query(F.data.startswith("short_set_min_rr_"))
@@ -2682,7 +2683,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("set_buffer_", ""))
         await cb.answer("✅ " + str(v) + "%")
-        _update_shared_field(user, "buffer_pct", v); await um.save(user)
+        _update_shared_field(user, "zone_buffer", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты</b>", kb_pivots(user))
 
     @dp.callback_query(F.data.startswith("set_zone_pct_"))
@@ -2690,7 +2691,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("set_zone_pct_", ""))
         await cb.answer("✅ " + str(v) + "%")
-        _update_shared_field(user, "zone_width_pct", v); await um.save(user)
+        _update_shared_field(user, "zone_pct", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты</b>", kb_pivots(user))
 
     @dp.callback_query(F.data.startswith("set_dist_pct_"))
@@ -2706,7 +2707,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_max_tests_", ""))
         await cb.answer("✅ " + str(v))
-        _update_shared_field(user, "max_tests", v); await um.save(user)
+        _update_shared_field(user, "max_level_tests", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты</b>", kb_pivots(user))
 
     @dp.callback_query(F.data.startswith("set_min_rr_"))

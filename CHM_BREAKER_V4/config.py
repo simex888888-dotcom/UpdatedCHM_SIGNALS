@@ -34,13 +34,26 @@ class Config:
     #  🗄  SQLITE — путь к БД (persistent volume)
     # ════════════════════════════════════════════════
 
-    # Для сохранения данных после редеплоя:
-    # Docker: монтировать /data как volume, задать DB_PATH=/data/chm_bot.db
-    # По умолчанию — рядом со скриптом (не зависит от рабочей директории)
-    DB_PATH = os.getenv(
-        "DB_PATH",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "chm_bot.db"),
+    # ─────────────────────────────────────────────────────────────────────
+    # ПОСТОЯННАЯ БАЗА ДАННЫХ
+    # ─────────────────────────────────────────────────────────────────────
+    # Приоритет:
+    #   1. Переменная окружения DB_PATH    (ручная конфигурация)
+    #   2. /data/chm_bot.db               (Docker volume — автодетект)
+    #   3. <папка_со_скриптом>/chm_bot.db (локальный запуск / dev)
+    #
+    # Docker (рекомендуется):
+    #   docker-compose up --build
+    #   → БД хранится в ./data/chm_bot.db на хост-машине.
+    #   → НЕ теряется при редеплое, пересборке образа, обновлении кода.
+    # ─────────────────────────────────────────────────────────────────────
+    _data_dir = "/data"
+    _default_db = (
+        os.path.join(_data_dir, "chm_bot.db")
+        if os.path.isdir(_data_dir)
+        else os.path.join(os.path.dirname(os.path.abspath(__file__)), "chm_bot.db")
     )
+    DB_PATH = os.getenv("DB_PATH", _default_db)
 
 
     # ════════════════════════════════════════════════
