@@ -2329,7 +2329,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_retest_", ""))
         await cb.answer("✅ " + str(v))
-        _update_short_field(user, "min_retests", v); await um.save(user)
+        _update_short_field(user, "max_retest_bars", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
 
     @dp.callback_query(F.data.startswith("short_set_buffer_"))
@@ -2399,7 +2399,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_htf_ema_", ""))
         await cb.answer("✅ HTF EMA " + str(v))
-        _update_short_field(user, "htf_ema", v); await um.save(user)
+        _update_short_field(user, "htf_ema_period", v); await um.save(user)
         await safe_edit(cb, "📉 <b>EMA ШОРТ</b>", kb_short_ema(user))
 
     @dp.callback_query(F.data == "menu_short_filters")
@@ -2686,7 +2686,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_retest_", ""))
         await cb.answer("✅ " + str(v))
-        _update_shared_field(user, "min_retests", v); await um.save(user)
+        _update_shared_field(user, "max_retest_bars", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты</b>", kb_pivots(user))
 
     @dp.callback_query(F.data.startswith("set_buffer_"))
@@ -2756,7 +2756,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_htf_ema_", ""))
         await cb.answer("✅ HTF EMA " + str(v))
-        _update_shared_field(user, "htf_ema", v); await um.save(user)
+        _update_shared_field(user, "htf_ema_period", v); await um.save(user)
         await safe_edit(cb, "📉 <b>EMA настройки</b>", kb_ema(user))
 
     @dp.callback_query(F.data == "menu_filters")
@@ -2955,6 +2955,22 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         user.notifications_enabled = not user.notifications_enabled
         await cb.answer("🔔 Уведомления " + ("✅" if user.notifications_enabled else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
+
+    @dp.callback_query(F.data == "toggle_notify_signal")
+    async def toggle_notify_signal(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.notify_signal = not user.notify_signal
+        await cb.answer("📊 Сигнал входа " + ("✅" if user.notify_signal else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
+
+    @dp.callback_query(F.data == "toggle_notify_breakout")
+    async def toggle_notify_breakout(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.notify_breakout = not user.notify_breakout
+        await cb.answer("🔓 Пробой уровня " + ("✅" if user.notify_breakout else "❌"))
         await um.save(user)
         await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
 
