@@ -175,6 +175,7 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN trade_risk_pct REAL DEFAULT 1.0",
             "ALTER TABLE users ADD COLUMN trade_leverage INTEGER DEFAULT 10",
             "ALTER TABLE users ADD COLUMN max_trades_limit INTEGER DEFAULT 5",
+            "ALTER TABLE users ADD COLUMN watch_coin TEXT DEFAULT ''",
         ]
         for sql in migrations:
             try:

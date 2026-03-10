@@ -173,6 +173,11 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
 
         # Отправляем каждому пользователю согласно его персональным фильтрам
         for user in smc_users:
+            # Фильтр выбранной монеты
+            watch = getattr(user, "watch_coin", "").strip().upper()
+            if watch and symbol.upper() != watch:
+                continue
+
             ucfg = user.get_smc_cfg()
 
             # Применяем пользовательский конфиг поверх базового

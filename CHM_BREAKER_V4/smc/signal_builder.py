@@ -133,6 +133,27 @@ def calculate_levels(analysis: dict, direction: str, cfg) -> Optional[dict]:
     if risk <= 0:
         return None
 
+    # ── Фильтр стопа (ATR + минимум по типу монеты) ───────────────────────
+    _MEMCOIN_KW = ("FLOKI","PEPE","SHIB","DOGE","WIF","BONK","NEIRO",
+                   "MEME","SATS","TURBO","CATS","ACT","BOME","BOOK")
+    _sym_up    = analysis.get("symbol", "").upper()
+    is_memcoin = any(k in _sym_up for k in _MEMCOIN_KW)
+    is_major   = "BTC" in _sym_up or "ETH" in _sym_up
+
+    cp = analysis.get("current_price", 0.0) or entry_mid
+    risk_pct_raw = risk / cp * 100 if cp > 0 else 0.0
+
+    if is_major and risk_pct_raw < 0.4:
+        return None
+    if is_memcoin and risk_pct_raw < 1.5:
+        return None
+    if not is_major and not is_memcoin and risk_pct_raw < 0.8:
+        return None
+
+    atr = analysis.get("atr", 0.0)
+    if atr > 0 and risk < atr * 1.5:
+        return None
+
     # TP1 = FVG zone или 1R
     # Используем FVG только если он ПОЛНОСТЬЮ за пределами зоны входа
     fvg_obj = fvg.get("bull_fvg") if direction == "LONG" else fvg.get("bear_fvg")
@@ -377,11 +398,29 @@ def build_smc_signal(symbol: str, analysis: dict, cfg,
         )
         grade = GRADES.get(score, f"⚡ {score}/5")
 
+        # ── Взвешенный R:R фильтр ─────────────────────────────────────────
+        rr_val = levels["rr"]
+        if rr_val < 1.2:
+            continue  # блок — слишком низкий R:R
+        adjusted_score = score
+        if rr_val < 1.8:
+            adjusted_score = max(0, score - 1)  # -1 подтверждение
+
+        # ── Мемкоин: максимум 3 подтверждения ────────────────────────────
+        _MEMCOIN_KW = ("FLOKI","PEPE","SHIB","DOGE","WIF","BONK","NEIRO",
+                       "MEME","SATS","TURBO","CATS","ACT","BOME","BOOK")
+        _sym_up    = symbol.upper()
+        is_memcoin = any(k in _sym_up for k in _MEMCOIN_KW)
+        if is_memcoin:
+            adjusted_score = min(adjusted_score, 3)
+
+        final_grade = GRADES.get(adjusted_score, f"⚡ {adjusted_score}/5")
+
         sig = SMCSignalResult(
             symbol        = symbol,
             direction     = direction,
-            score         = score,
-            grade         = grade,
+            score         = adjusted_score,
+            grade         = final_grade,
             entry_low     = levels["entry_low"],
             entry_high    = levels["entry_high"],
             entry         = levels["entry_mid"],

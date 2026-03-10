@@ -80,6 +80,14 @@ def kb_auto_trade(user: UserSettings) -> InlineKeyboardMarkup:
 
 # ── ГЛАВНОЕ МЕНЮ ─────────────────────────────────────
 
+def _watch_coin_label(user) -> str:
+    wc = getattr(user, "watch_coin", "").strip()
+    if wc:
+        base = wc.replace("-USDT-SWAP", "").replace("-USDT", "")
+        return f"🎯 Монета: {base} — сменить / сбросить"
+    return "🎯 Мониторить одну монету — все / выбрать"
+
+
 def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
     strategy = getattr(user, "strategy", "LEVELS")
     if strategy == "SMC":
@@ -95,6 +103,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
                 InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
             ],
+            _btn(_watch_coin_label(user),                                       "watch_coin_menu"),
             _btn("🔍 Анализ монеты — разовый сигнал по запросу",               "analyze_coin"),
             _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",             "auto_trade_menu"),
             _btn("❓ Справка — что делает каждая кнопка",                       "help_show"),
@@ -112,6 +121,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
             InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
         ],
+        _btn(_watch_coin_label(user),                                "watch_coin_menu"),
         _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
         _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",  "auto_trade_menu"),
         _btn("❓ Справка — что делает каждая кнопка", "help_show"),

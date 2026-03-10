@@ -1222,6 +1222,29 @@ class CHMIndicator:
             return None
 
         # ══════════════════════════════════════════════════════════════════
+        # ФИЛЬТР СТОПА (ATR + минимум по типу монеты)
+        # ══════════════════════════════════════════════════════════════════
+        _MEMCOIN_KW = ("FLOKI","PEPE","SHIB","DOGE","WIF","BONK","NEIRO",
+                       "MEME","SATS","TURBO","CATS","ACT","BOME","BOOK")
+        _sym_up   = symbol.upper()
+        is_memcoin = any(k in _sym_up for k in _MEMCOIN_KW)
+        is_major   = "BTC" in _sym_up or "ETH" in _sym_up
+
+        risk_pct_raw = risk / entry * 100
+        if is_major and risk_pct_raw < 0.4:
+            log.debug(f"{symbol}: stop {risk_pct_raw:.2f}% < 0.4% (BTC/ETH min) — пропуск")
+            return None
+        if is_memcoin and risk_pct_raw < 1.5:
+            log.debug(f"{symbol}: stop {risk_pct_raw:.2f}% < 1.5% (мемкоин min) — пропуск")
+            return None
+        if not is_major and not is_memcoin and risk_pct_raw < 0.8:
+            log.debug(f"{symbol}: stop {risk_pct_raw:.2f}% < 0.8% (альт min) — пропуск")
+            return None
+        if atr_now > 0 and risk < atr_now * 1.5:
+            log.debug(f"{symbol}: stop {risk:.5f} < 1.5×ATR({atr_now:.5f}) — пропуск")
+            return None
+
+        # ══════════════════════════════════════════════════════════════════
         # ЦЕЛИ (строгий порядок TP)
         # ══════════════════════════════════════════════════════════════════
         tp1_from_level = self._find_tp1_level(signal, entry, sup_zones, res_zones)
@@ -1391,8 +1414,21 @@ class CHMIndicator:
             quality -= 2
             reasons.append(f"⚠️ {session} — низкая ликвидность")
 
+        # Взвешенный R:R фильтр
+        if rr_score < 1.2:
+            log.debug(f"{symbol}: rr_score={rr_score:.2f} < 1.2 — блок")
+            return None
+        if rr_score < 1.8:
+            quality -= 1
+            reasons.append(f"⚠️ Взвешенный R:R: {rr_score:.2f} (ниже 1.8)")
+
         # Зажим в [0, 10]
         quality = max(0, min(10, quality))
+
+        # Мемкоин: максимум ⭐⭐⭐
+        if is_memcoin and quality > 3:
+            quality = 3
+            reasons.append("⚠️ Мемкоин: ограничение ⭐⭐⭐ (повышенный риск)")
 
         # ── Финальный чеклист ─────────────────────────────────────────────
         has_pattern  = bool(bull_pat if signal == "LONG" else bear_pat)

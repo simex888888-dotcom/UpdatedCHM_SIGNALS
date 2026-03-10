@@ -113,6 +113,10 @@ class AnalyzeState(StatesGroup):
     waiting_symbol = State()
 
 
+class WatchCoinState(StatesGroup):
+    waiting_coin = State()
+
+
 class SetupBybitState(StatesGroup):
     api_key    = State()
     api_secret = State()
@@ -1335,9 +1339,12 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             pass
         # Telegram limit: 4096 chars. Split if needed.
         MAX = 4000
+        kb_back_analyze = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_main"),
+        ]])
         if len(result_text) <= MAX:
             try:
-                await send(result_text, parse_mode="HTML")
+                await send(result_text, parse_mode="HTML", reply_markup=kb_back_analyze)
             except Exception as e:
                 log.error(f"_do_analyze send error: {e}")
                 await send(f"❌ Не удалось отправить анализ: {e}")
@@ -1352,9 +1359,10 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                     current = (current + "\n" + line) if current else line
             if current:
                 parts.append(current)
-            for part in parts:
+            for i, part in enumerate(parts):
                 try:
-                    await send(part, parse_mode="HTML")
+                    kb = kb_back_analyze if i == len(parts) - 1 else None
+                    await send(part, parse_mode="HTML", reply_markup=kb)
                 except Exception:
                     await send(part)  # fallback без HTML если тег сломан
 
@@ -1397,6 +1405,72 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             "🔍 <b>Анализ монеты по запросу</b>\n\n"
             "Введите тикер монеты (например: <code>BTC</code>, <code>SOL</code>, <code>PEPE</code>)\n\n"
             "<i>Анализ выполняется по вашим текущим настройкам (режим ОБА).</i>",
+        )
+
+    # ─── ФИЛЬТР МОНЕТЫ (watch_coin) ───────────────────
+
+    @dp.callback_query(F.data == "watch_coin_menu")
+    async def watch_coin_menu_cb(cb: CallbackQuery, state: FSMContext):
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id, cb.from_user.username or "")
+        has, _ = user.check_access()
+        if not has:
+            await safe_edit(cb, pricing_text(config), kb_subscribe(config))
+            return
+        wc = getattr(user, "watch_coin", "").strip()
+        if wc:
+            base = wc.replace("-USDT-SWAP", "").replace("-USDT", "")
+            text = (
+                f"🎯 <b>Фильтр монеты</b>\n\n"
+                f"Сейчас отслеживается: <b>{base}</b>\n\n"
+                f"Сигналы сканера поступают <b>только по этой монете</b>.\n\n"
+                f"Введите новый тикер чтобы изменить, или нажмите «Сбросить» чтобы вернуть все монеты."
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Сбросить (все монеты)", callback_data="watch_coin_clear")],
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+            ])
+        else:
+            text = (
+                "🎯 <b>Фильтр монеты</b>\n\n"
+                "Сейчас отслеживаются <b>все монеты</b>.\n\n"
+                "Введите тикер монеты чтобы получать сигналы <b>только по ней</b>.\n"
+                "Пример: <code>BTC</code>, <code>ETH</code>, <code>SOL</code>, <code>PEPE</code>"
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+            ])
+        await state.set_state(WatchCoinState.waiting_coin)
+        await safe_edit(cb, text, kb)
+
+    @dp.callback_query(F.data == "watch_coin_clear")
+    async def watch_coin_clear_cb(cb: CallbackQuery, state: FSMContext):
+        await cb.answer("✅ Фильтр сброшен — все монеты")
+        await state.clear()
+        user = await um.get_or_create(cb.from_user.id, cb.from_user.username or "")
+        user.watch_coin = ""
+        await um.save(user)
+        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
+        await safe_edit(cb, main_text(user, trend), kb_main(user))
+
+    @dp.message(WatchCoinState.waiting_coin)
+    async def watch_coin_input(msg: Message, state: FSMContext):
+        await state.clear()
+        user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
+        raw = (msg.text or "").strip()
+        if not raw:
+            await msg.answer("⚠️ Тикер не введён.", parse_mode="HTML")
+            return
+        # Нормализуем к OKX формату
+        sym = _normalize_symbol(raw)
+        user.watch_coin = sym
+        await um.save(user)
+        base = sym.replace("-USDT-SWAP", "").replace("-USDT", "")
+        await msg.answer(
+            f"✅ Фильтр установлен: <b>{base}</b>\n\n"
+            f"Сигналы будут поступать только по монете <b>{base}</b>.\n"
+            f"Чтобы сбросить — откройте «🎯 Мониторить одну монету» в главном меню.",
+            parse_mode="HTML",
         )
 
     # ─── РЕЗУЛЬТАТЫ СДЕЛОК ────────────────────────────
