@@ -456,14 +456,9 @@ def kb_notify(user: UserSettings) -> InlineKeyboardMarkup:
 def kb_subscribe(config=None) -> InlineKeyboardMarkup:
     """Меню выбора тарифа при старте — без триала."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        _noop("── 🤖 Только БОТ ───────────────────────────"),
-        _btn("📅 1 месяц  — 70$",  "plan_bot_30"),
-        _btn("📅 3 месяца — 150$", "plan_bot_90"),
-        _btn("📅 1 ГОД    — 330$", "plan_bot_365"),
-        _noop("── 🤖+📊 БОТ + ИНДИКАТОР TradingView ────────"),
-        _btn("📅 1 месяц  — 90$",  "plan_full_30"),
-        _btn("📅 3 месяца — 230$", "plan_full_90"),
-        _btn("📅 1 ГОД    — 630$", "plan_full_365"),
+        _noop("── 🤖 CHM BREAKER BOT ──────────────────────"),
+        _btn("📅 3 месяца — 290$", "plan_bot_90"),
+        _btn("📅 1 ГОД    — 990$", "plan_bot_365"),
         _noop("── 🎁 Специальные предложения ─────────────────"),
         [InlineKeyboardButton(
             text="💎 Бот + Лаба — написать @crypto_chm",

@@ -248,14 +248,9 @@ def pricing_text(config) -> str:
     return (
         "🤖 <b>CHM BOT — автоматический сканер твоей прибыли. Бот, который не даст проспать профит.</b>" + NL + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
-        "🤖 <b>Только БОТ:</b>" + NL +
-        "  📅 1 месяц  — <b>" + config.BOT_PRICE_30 + "</b>" + NL +
+        "🤖 <b>CHM BREAKER BOT:</b>" + NL +
         "  📅 3 месяца — <b>" + config.BOT_PRICE_90 + "</b>" + NL +
         "  📅 1 ГОД    — <b>" + config.BOT_PRICE_365 + "</b>" + NL + NL +
-        "🤖📊 <b>БОТ + ИНДИКАТОР на TradingView:</b>" + NL +
-        "  📅 1 месяц  — <b>" + config.FULL_PRICE_30 + "</b>" + NL +
-        "  📅 3 месяца — <b>" + config.FULL_PRICE_90 + "</b>" + NL +
-        "  📅 1 ГОД    — <b>" + config.FULL_PRICE_365 + "</b>" + NL + NL +
         "💎 <b>Для лабы — дешевле.</b> Пишите @crypto_chm" + NL +
         "🎁 <b>Супер предложение</b> (бот + лаба) — @crypto_chm" + NL + NL +
         "Выберите тариф 👇"
@@ -1241,12 +1236,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     # ─── ПОДПИСКА — ВЫБОР ТАРИФА (callback) ─────────────
 
     PLANS = {
-        "plan_bot_30":   ("🤖 Только БОТ — 1 месяц",   "70$"),
-        "plan_bot_90":   ("🤖 Только БОТ — 3 месяца",  "150$"),
-        "plan_bot_365":  ("🤖 Только БОТ — 1 ГОД",    "330$"),
-        "plan_full_30":  ("🤖📊 БОТ + ИНДИКАТОР — 1 месяц",  "90$"),
-        "plan_full_90":  ("🤖📊 БОТ + ИНДИКАТОР — 3 месяца", "230$"),
-        "plan_full_365": ("🤖📊 БОТ + ИНДИКАТОР — 1 ГОД",   "630$"),
+        "plan_bot_90":   ("🤖 CHM BOT — 3 месяца",  "290$"),
+        "plan_bot_365":  ("🤖 CHM BOT — 1 ГОД",     "990$"),
     }
 
     @dp.callback_query(F.data.startswith("plan_"))
