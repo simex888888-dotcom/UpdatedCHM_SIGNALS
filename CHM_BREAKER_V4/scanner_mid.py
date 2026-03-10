@@ -364,7 +364,12 @@ class MidScanner:
         if eth_df is None:
             eth_df = await self._fetch("ETH-USDT-SWAP", job.tf)
 
+        # Фильтр выбранной монеты
+        watch = getattr(user, "watch_coin", "").strip().upper()
+
         for sym, df in candles.items():
+            if watch and sym.upper() != watch:
+                continue
             df_htf = await self._fetch(sym, "1D") if cfg.use_htf else None
             try:
                 sig = ind.analyze(sym, df, df_htf)
@@ -535,14 +540,10 @@ class MidScanner:
             text = (
                 "⏰ <b>Подписка истекла!</b>\n\n"
                 "🤖 <b>CHM BOT — автоматический сканер твоей прибыли. Бот, который не даст проспать профит.</b>\n\n"
-                "🤖 Только БОТ:\n"
-                "  📅 1 месяц  — <b>" + cfg.BOT_PRICE_30 + "</b>\n"
+                "🤖 <b>CHM BREAKER BOT:</b>\n"
                 "  📅 3 месяца — <b>" + cfg.BOT_PRICE_90 + "</b>\n"
                 "  📅 1 ГОД    — <b>" + cfg.BOT_PRICE_365 + "</b>\n\n"
-                "🤖📊 БОТ + ИНДИКАТОР:\n"
-                "  📅 1 месяц  — <b>" + cfg.FULL_PRICE_30 + "</b>\n"
-                "  📅 3 месяца — <b>" + cfg.FULL_PRICE_90 + "</b>\n"
-                "  📅 1 ГОД    — <b>" + cfg.FULL_PRICE_365 + "</b>\n\n"
+                "💎 <b>Бот + Лаба</b> — написать @crypto_chm\n\n"
                 "Напишите администратору для продления 👇"
             )
             await self.bot.send_message(

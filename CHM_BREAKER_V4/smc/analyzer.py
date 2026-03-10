@@ -63,13 +63,15 @@ class SMCAnalyzer:
         """
         cfg = self.cfg
         result: dict = {
-            "symbol":    symbol,
-            "structure": {},
-            "liquidity": {},
-            "ob":        {},
-            "fvg":       {},
-            "pd_zone":   {},
-            "error":     None,
+            "symbol":        symbol,
+            "structure":     {},
+            "liquidity":     {},
+            "ob":            {},
+            "fvg":           {},
+            "pd_zone":       {},
+            "error":         None,
+            "atr":           0.0,
+            "current_price": 0.0,
         }
         try:
             # ── Шаг 1: Market Structure (HTF) ─────────────────────────────
@@ -117,11 +119,22 @@ class SMCAnalyzer:
                        "bull_found": False, "bear_found": False}
             result["fvg"] = fvg
 
+            # ── ATR (MTF) ──────────────────────────────────────────────────
+            try:
+                h = df_mtf["high"]; l = df_mtf["low"]
+                pc = df_mtf["close"].shift(1)
+                tr = pd.concat([(h - l), (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1)
+                atr_s = tr.ewm(span=14, adjust=False).mean()
+                result["atr"] = float(atr_s.iloc[-1]) if len(atr_s) > 0 else 0.0
+            except Exception:
+                result["atr"] = 0.0
+
             # ── Шаг 5: Premium / Discount ─────────────────────────────────
             last_sh = structure.get("last_swing_high")
             last_sl = structure.get("last_swing_low")
             if last_sh and last_sl and cfg.PD_ENABLED:
                 current_price = float(df_mtf["close"].iloc[-1])
+                result["current_price"] = current_price
                 pd_zone = get_premium_discount(
                     last_sh["price"], last_sl["price"],
                     current_price, cfg.PD_BUFFER_PCT,
