@@ -30,6 +30,7 @@ from user_manager import UserManager, UserSettings, TradeCfg
 from fetcher import OKXFetcher
 from indicator import CHMIndicator, SignalResult
 from keyboards import kb_contact_admin
+from watermark import wm_inject
 
 
 def _compute_correlation(df1, df2, periods: int = 30) -> float:
@@ -483,7 +484,7 @@ class MidScanner:
         try:
             await self.bot.send_message(
                 user.user_id,
-                signal_text(sig, cfg),
+                wm_inject(signal_text(sig, cfg), user.user_id),
                 parse_mode="HTML",
                 reply_markup=signal_compact_keyboard(
                     trade_id, sig.symbol, show_trade_btn=show_trade_btn

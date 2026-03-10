@@ -45,6 +45,7 @@ from keyboards import (
     kb_auto_trade,
 )
 from scanner_mid import signal_compact_keyboard, trade_records_keyboard
+from watermark import wm_decode
 
 log = logging.getLogger("CHM.Handlers")
 
@@ -3625,6 +3626,30 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             "Стратегия: <b>" + (user.strategy or "не выбрана") + "</b>",
             parse_mode="HTML",
         )
+
+    @dp.message(Command("decode_wm"))
+    async def cmd_decode_wm(msg: Message):
+        """Декодирует невидимый водяной знак из скопированного сигнала.
+        Использование: /decode_wm — затем переслать или вставить текст сигнала как reply."""
+        if not is_admin(msg.from_user.id): return
+        # Берём текст из reply или из самого сообщения (после команды)
+        source = msg.reply_to_message.text if msg.reply_to_message else msg.text
+        if not source:
+            await msg.answer("❌ Перешли сообщение с сигналом как reply на эту команду, или вставь текст после /decode_wm"); return
+        uid = wm_decode(source)
+        if uid is None:
+            await msg.answer("❌ Водяной знак не найден — текст без watermark или повреждён"); return
+        user = await um.get(uid)
+        if user:
+            await msg.answer(
+                "🔍 <b>Водяной знак декодирован</b>\n\n"
+                "👤 @" + str(user.username or "—") + " (<code>" + str(uid) + "</code>)\n"
+                "Подписка: <b>" + user.sub_status.upper() + "</b>\n"
+                "Сигналов получено: <b>" + str(user.signals_received) + "</b>",
+                parse_mode="HTML",
+            )
+        else:
+            await msg.answer("🔍 User ID из водяного знака: <code>" + str(uid) + "</code>\n(пользователь не найден в БД)", parse_mode="HTML")
 
     @dp.message(Command("broadcast"))
     async def cmd_broadcast(msg: Message):
