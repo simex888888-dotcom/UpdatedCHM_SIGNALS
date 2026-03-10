@@ -41,7 +41,7 @@ class SMCConfig:
     # Signal
     MIN_CONFIRMATIONS:   int   = 3
     MIN_RR:              float = 2.0
-    SL_BUFFER_PCT:       float = 0.15
+    SL_BUFFER_PCT:       float = 0.5
     TP1_RATIO:           float = 0.33
     TP2_RATIO:           float = 0.50
     TP3_RATIO:           float = 0.17

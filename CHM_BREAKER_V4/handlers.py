@@ -1534,6 +1534,40 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         trend = scanner.get_trend()
         await safe_edit(cb, main_text(user, trend), kb_main(user))
 
+    @dp.callback_query(F.data == "quick_start")
+    async def quick_start(cb: CallbackQuery):
+        await cb.answer()
+        user     = await um.get_or_create(cb.from_user.id)
+        has, _   = user.check_access()
+        if not has:
+            await safe_edit(cb, pricing_text(config), kb_subscribe(config))
+            return
+        strategy = getattr(user, "strategy", "LEVELS")
+        if strategy == "SMC":
+            both_on = user.smc_long_active and user.smc_short_active
+            if both_on:
+                user.smc_long_active  = False
+                user.smc_short_active = False
+                msg = "⏹ SMC сканеры остановлены."
+            else:
+                user.smc_long_active  = True
+                user.smc_short_active = True
+                msg = "🚀 SMC ЛОНГ + ШОРТ сканеры запущены!"
+        else:
+            both_on = user.long_active and user.short_active
+            if both_on:
+                user.long_active  = False
+                user.short_active = False
+                msg = "⏹ Сканеры остановлены."
+            else:
+                user.long_active  = True
+                user.short_active = True
+                msg = "🚀 ЛОНГ + ШОРТ сканеры запущены!"
+        await um.save(user)
+        await cb.answer(msg, show_alert=True)
+        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
+        await safe_edit(cb, main_text(user, trend), kb_main(user))
+
     @dp.callback_query(F.data == "show_strategy")
     async def show_strategy(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
@@ -2420,7 +2454,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_rsi_ob_", ""))
         await cb.answer("✅ RSI OB " + str(v))
-        _update_short_field(user, "rsi_overbought", v); await um.save(user)
+        _update_short_field(user, "rsi_ob", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры ШОРТ</b>", kb_short_filters(user))
 
     @dp.callback_query(F.data.startswith("short_set_rsi_os_"))
@@ -2428,7 +2462,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_rsi_os_", ""))
         await cb.answer("✅ RSI OS " + str(v))
-        _update_short_field(user, "rsi_oversold", v); await um.save(user)
+        _update_short_field(user, "rsi_os", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры ШОРТ</b>", kb_short_filters(user))
 
     @dp.callback_query(F.data.startswith("short_set_vol_mult_"))
@@ -2436,7 +2470,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("short_set_vol_mult_", ""))
         await cb.answer("✅ x" + str(v))
-        _update_short_field(user, "volume_mult", v); await um.save(user)
+        _update_short_field(user, "vol_mult", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры ШОРТ</b>", kb_short_filters(user))
 
     @dp.callback_query(F.data == "menu_short_quality")
@@ -2777,7 +2811,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_rsi_ob_", ""))
         await cb.answer("✅ RSI OB " + str(v))
-        _update_shared_field(user, "rsi_overbought", v); await um.save(user)
+        _update_shared_field(user, "rsi_ob", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры</b>", kb_filters(user))
 
     @dp.callback_query(F.data.startswith("set_rsi_os_"))
@@ -2785,7 +2819,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_rsi_os_", ""))
         await cb.answer("✅ RSI OS " + str(v))
-        _update_shared_field(user, "rsi_oversold", v); await um.save(user)
+        _update_shared_field(user, "rsi_os", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры</b>", kb_filters(user))
 
     @dp.callback_query(F.data.startswith("set_vol_mult_"))
@@ -2793,7 +2827,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("set_vol_mult_", ""))
         await cb.answer("✅ x" + str(v))
-        _update_shared_field(user, "volume_mult", v); await um.save(user)
+        _update_shared_field(user, "vol_mult", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры</b>", kb_filters(user))
 
     @dp.callback_query(F.data == "menu_quality")
@@ -3432,6 +3466,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 float(trade["tp1"]),
                 getattr(user, "trade_risk_pct",  1.0),
                 getattr(user, "trade_leverage",  10),
+                tp2=float(trade.get("tp2") or 0),
+                tp3=float(trade.get("tp3") or 0),
             )
             text = bybit_trader.format_trade_result(
                 result,
@@ -3442,6 +3478,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 float(trade["tp1"]),
                 getattr(user, "trade_risk_pct", 1.0),
                 getattr(user, "trade_leverage", 10),
+                tp2=float(trade.get("tp2") or 0),
+                tp3=float(trade.get("tp3") or 0),
             )
         except Exception as e:
             log.error(f"exec_trade {trade_id}: {e}")

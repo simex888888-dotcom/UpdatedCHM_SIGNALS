@@ -452,7 +452,7 @@ class MidScanner:
 
         if auto_trade and api_key and api_secret:
             if auto_trade_mode == "auto":
-                # Открываем сразу
+                # Открываем сразу (3 TP + BE мониторинг)
                 try:
                     import bybit_trader
                     result = await bybit_trader.place_trade(
@@ -460,10 +460,12 @@ class MidScanner:
                         sig.symbol, sig.direction,
                         sig.entry, sig.sl, tp1,
                         risk_pct, leverage,
+                        tp2=tp2, tp3=tp3,
                     )
                     trade_msg = bybit_trader.format_trade_result(
                         result, sig.direction, sig.symbol,
                         sig.entry, sig.sl, tp1, risk_pct, leverage,
+                        tp2=tp2, tp3=tp3,
                     )
                     await self.bot.send_message(
                         user.user_id, trade_msg, parse_mode="HTML"
@@ -693,6 +695,79 @@ class MidScanner:
                 log.error("Ошибка цикла: " + str(e), exc_info=True)
             await asyncio.sleep(self.cfg.SCAN_LOOP_SLEEP)
 
+    # ── Мониторинг безубытка (BE) ─────────────────────────
+
+    async def _be_monitor_loop(self):
+        """Каждые 60 сек проверяет открытые авто-сделки и переносит SL в БУ после TP1."""
+        await asyncio.sleep(90)   # начальная задержка при старте бота
+        while True:
+            try:
+                await self._check_breakevens()
+            except Exception as e:
+                log.debug(f"BE monitor error: {e}")
+            await asyncio.sleep(60)
+
+    async def _check_breakevens(self):
+        import bybit_trader
+        users = await self.um.get_active_auto_trade_users()
+        for user in users:
+            api_key    = getattr(user, "bybit_api_key",    "")
+            api_secret = getattr(user, "bybit_api_secret", "")
+            if not api_key or not api_secret:
+                continue
+            trades = await db.db_get_open_trades_for_be(user.user_id)
+            if not trades:
+                continue
+            # Получаем открытые позиции с Bybit (mark price)
+            try:
+                positions = await bybit_trader.get_positions(api_key, api_secret)
+            except Exception:
+                continue
+            pos_map = {p["symbol"]: p for p in positions if float(p.get("size", 0)) > 0}
+
+            for trade in trades:
+                bb_sym = bybit_trader._to_bybit_symbol(trade["symbol"])
+                pos    = pos_map.get(bb_sym)
+                if not pos:
+                    continue   # позиция закрыта — не трогаем
+                mark_price = float(pos.get("markPrice", 0))
+                if mark_price <= 0:
+                    continue
+                tp1_price = float(trade.get("tp1", 0))
+                entry     = float(trade.get("entry", 0))
+                direction = trade.get("direction", "LONG")
+                if tp1_price <= 0 or entry <= 0:
+                    continue
+
+                tp1_reached = (
+                    (direction == "LONG"  and mark_price >= tp1_price) or
+                    (direction == "SHORT" and mark_price <= tp1_price)
+                )
+                if not tp1_reached:
+                    continue
+
+                # Переносим SL в БУ
+                pos_idx = int(trade.get("pos_idx", 0))
+                result  = await bybit_trader.set_breakeven(
+                    api_key, api_secret,
+                    trade["symbol"], entry, direction, pos_idx,
+                )
+                if result.get("ok"):
+                    await db.db_set_trade_be(trade["trade_id"])
+                    sym_label = trade["symbol"].replace("-USDT-SWAP", "").replace("-USDT", "")
+                    try:
+                        await self.bot.send_message(
+                            user.user_id,
+                            f"♻️ <b>Безубыток выставлен</b>\n\n"
+                            f"💎 {sym_label}  |  TP1 достигнут\n"
+                            f"🛑 Стоп перенесён на вход: <code>{entry}</code>",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+                else:
+                    log.warning(f"BE set failed {bb_sym}: {result.get('error')}")
+
     async def run_forever(self):
         log.info(
             "🚀 MidScanner v4 | Воркеров: " + str(self.cfg.SCAN_WORKERS) +
@@ -701,6 +776,7 @@ class MidScanner:
         await asyncio.gather(
             self._scan_loop(),
             self._sub_check_loop(),
+            self._be_monitor_loop(),
         )
 
     def get_perf(self) -> dict:
