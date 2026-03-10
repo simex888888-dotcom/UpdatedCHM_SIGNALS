@@ -119,6 +119,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
             _btn(_watch_coin_label(user),                                          "watch_coin_menu"),
             _btn("🔍 Анализ монеты — разовый сигнал по запросу",                  "analyze_coin"),
             _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",                "auto_trade_menu"),
+            _btn("🎰 Памп/Дамп детектор (BingX)",                              "pd_menu"),
             _btn("❓ Справка — что делает каждая кнопка",                          "help_show"),
         ])
     # ── LEVELS (default) ──
@@ -138,6 +139,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
         _btn(_watch_coin_label(user),                                      "watch_coin_menu"),
         _btn("🔍 Анализ монеты — разовый сигнал по запросу",               "analyze_coin"),
         _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",             "auto_trade_menu"),
+        _btn("🎰 Памп/Дамп детектор (BingX)",                              "pd_menu"),
         _btn("❓ Справка — что делает каждая кнопка",                       "help_show"),
     ])
 

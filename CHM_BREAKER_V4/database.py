@@ -138,6 +138,45 @@ CREATE TABLE IF NOT EXISTS trial_ids (
     user_id  INTEGER PRIMARY KEY,
     used_at  REAL    NOT NULL
 );
+
+-- ═══════════════════════════════════════════════════════════════
+--  ПАМП/ДАМП ДЕТЕКТОР (BingX)
+-- ═══════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS pd_users (
+    user_id       INTEGER PRIMARY KEY,
+    pd_subscribed INTEGER DEFAULT 0,
+    pd_threshold  INTEGER DEFAULT 70
+);
+
+CREATE TABLE IF NOT EXISTS pd_signals (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol        TEXT    NOT NULL,
+    direction     TEXT    NOT NULL,   -- PUMP | DUMP
+    score         REAL    NOT NULL,
+    layers_json   TEXT    DEFAULT '{}',
+    features_json TEXT    DEFAULT '[]',
+    price_signal  REAL    DEFAULT 0,
+    ts            REAL    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pd_outcomes (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id     INTEGER NOT NULL,
+    price_signal  REAL    DEFAULT 0,
+    price_15m     REAL    DEFAULT 0,
+    change_pct    REAL    DEFAULT 0,
+    correct       INTEGER DEFAULT 0,
+    ts            REAL    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS pd_train_data (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    signal_id     INTEGER NOT NULL,
+    features_json TEXT    DEFAULT '[]',
+    actual_label  INTEGER,   -- 0=neutral,1=pump,2=dump
+    ts            REAL    NOT NULL
+);
 """
 
 
@@ -453,3 +492,142 @@ async def update_signal_tp(signal_id, *, tp1=None, tp2=None, tp3=None):
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(f"UPDATE trades SET {set_clause} WHERE trade_id=?", vals)
             await db.commit()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ПАМП/ДАМП ДЕТЕКТОР
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def db_pd_get_user(user_id: int) -> Optional[dict]:
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM pd_users WHERE user_id=?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+    return dict(row) if row else None
+
+
+async def db_pd_upsert_user(user_id: int, subscribed: bool = None, threshold: int = None):
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "INSERT INTO pd_users(user_id) VALUES(?) ON CONFLICT(user_id) DO NOTHING",
+                (user_id,)
+            )
+            if subscribed is not None:
+                await db.execute(
+                    "UPDATE pd_users SET pd_subscribed=? WHERE user_id=?",
+                    (int(subscribed), user_id)
+                )
+            if threshold is not None:
+                await db.execute(
+                    "UPDATE pd_users SET pd_threshold=? WHERE user_id=?",
+                    (threshold, user_id)
+                )
+            await db.commit()
+
+
+async def db_pd_subscribers(min_threshold: int = 0) -> list[int]:
+    """Возвращает user_id всех подписанных с threshold <= score."""
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            "SELECT user_id FROM pd_users WHERE pd_subscribed=1 AND pd_threshold<=?",
+            (min_threshold,)
+        ) as cur:
+            rows = await cur.fetchall()
+    return [r[0] for r in rows]
+
+
+async def db_pd_save_signal(
+    symbol: str, direction: str, score: float,
+    layers_json: str, features_json: str, price: float
+) -> int:
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            cur = await db.execute(
+                "INSERT INTO pd_signals(symbol,direction,score,layers_json,features_json,price_signal,ts)"
+                " VALUES(?,?,?,?,?,?,?)",
+                (symbol, direction, score, layers_json, features_json, price, time.time())
+            )
+            await db.commit()
+            return cur.lastrowid
+
+
+async def db_pd_save_outcome(
+    signal_id: int, price_signal: float,
+    price_15m: float, change_pct: float, correct: bool
+):
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "INSERT INTO pd_outcomes(signal_id,price_signal,price_15m,change_pct,correct,ts)"
+                " VALUES(?,?,?,?,?,?)",
+                (signal_id, price_signal, price_15m, change_pct, int(correct), time.time())
+            )
+            await db.commit()
+
+
+async def db_pd_save_train(signal_id: int, label: int):
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            # Берём features из pd_signals
+            async with db.execute(
+                "SELECT features_json FROM pd_signals WHERE id=?", (signal_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            if not row:
+                return
+            await db.execute(
+                "INSERT INTO pd_train_data(signal_id,features_json,actual_label,ts)"
+                " VALUES(?,?,?,?)",
+                (signal_id, row[0], label, time.time())
+            )
+            await db.commit()
+
+
+async def db_pd_pending_outcomes() -> list[dict]:
+    """Сигналы старше 15 мин без исхода (для fallback трекинга)."""
+    cutoff = time.time() - 900
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT s.id, s.symbol, s.direction, s.price_signal "
+            "FROM pd_signals s "
+            "LEFT JOIN pd_outcomes o ON o.signal_id=s.id "
+            "WHERE s.ts < ? AND o.id IS NULL",
+            (cutoff,)
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def db_pd_stats() -> dict:
+    """Статистика точности памп/дамп сигналов."""
+    now  = time.time()
+    day  = now - 86400
+    week = now - 604800
+
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            "SELECT COUNT(*), SUM(correct) FROM pd_outcomes WHERE ts >= ?", (day,)
+        ) as cur:
+            day_row = await cur.fetchone()
+        async with db.execute(
+            "SELECT COUNT(*), SUM(correct) FROM pd_outcomes WHERE ts >= ?", (week,)
+        ) as cur:
+            week_row = await cur.fetchone()
+
+    def _prec(total, correct):
+        if not total:
+            return 0.0
+        return (correct or 0) / total * 100
+
+    return {
+        "day_total":   day_row[0]  or 0,
+        "day_correct": day_row[1]  or 0,
+        "day_prec":    _prec(day_row[0],  day_row[1]),
+        "week_total":  week_row[0] or 0,
+        "week_correct":week_row[1] or 0,
+        "week_prec":   _prec(week_row[0], week_row[1]),
+    }

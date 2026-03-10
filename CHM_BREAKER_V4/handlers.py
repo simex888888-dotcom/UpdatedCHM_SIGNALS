@@ -1167,7 +1167,14 @@ def _smc_recommendation(analysis: dict, df_1h=None) -> str:
 
 # ─── Основная функция регистрации хендлеров ──────────
 
-def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config):
+def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config,
+                       pd_runner=None):
+    """
+    pd_runner — экземпляр PDRunner (опционально).
+    Передаётся из bot.py после создания.
+    """
+    from pump_dump.pd_handlers import register_pd_handlers
+    register_pd_handlers(dp, bot, lambda: pd_runner)
 
     is_admin = lambda uid: uid in config.ADMIN_IDS
 
