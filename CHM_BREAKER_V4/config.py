@@ -86,15 +86,9 @@ class Config:
     PAYMENT_ADDRESS = "0xb5116aa7d7a20d7c45a8a5ff10bc1d86437df985"
     PAYMENT_NETWORK = "BEP20 (BSC)"
 
-    # Только БОТ
-    BOT_PRICE_30    = "70$"
-    BOT_PRICE_90    = "150$"
-    BOT_PRICE_365   = "330$"
-
-    # БОТ + ИНДИКАТОР на TradingView
-    FULL_PRICE_30   = "90$"
-    FULL_PRICE_90   = "230$"
-    FULL_PRICE_365  = "630$"
+    # Тарифы подписки
+    BOT_PRICE_90    = "290$"
+    BOT_PRICE_365   = "990$"
 
     # Контакт администратора
     ADMIN_CONTACT   = "@crypto_chm"
