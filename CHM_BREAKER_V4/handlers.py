@@ -348,13 +348,24 @@ def _update_short_field(user: UserSettings, field: str, value):
     user.short_cfg = cfg.to_json()
 
 def _update_shared_field(user: UserSettings, field: str, value):
-    """Обновляет поле в обеих конфигах (long + short)."""
+    """Обновляет поле в flat-атрибутах UserSettings (читаются shared_cfg())
+    И в обоих JSON-конфигах (читаются get_long_cfg/get_short_cfg через merged_with).
+    Раньше писалось только в JSON → shared_cfg() никогда не видел изменений → ◉ не двигался."""
+    # Обновляем flat поле UserSettings (источник для shared_cfg и клавиатур)
+    if hasattr(user, field):
+        setattr(user, field, value)
+    # Обновляем JSON-оверрайды (источник для get_long_cfg / get_short_cfg)
     _update_long_field(user, field, value)
     _update_short_field(user, field, value)
 
 def _apply_shared_cfg(user: UserSettings, cfg: TradeCfg):
-    """Применяет TradeCfg к обеим конфигам."""
-    user.long_cfg = cfg.to_json()
+    """Применяет TradeCfg к flat-полям UserSettings и к обоим JSON-конфигам."""
+    from dataclasses import asdict, fields as dc_fields
+    cfg_dict = asdict(cfg)
+    for f in dc_fields(TradeCfg):
+        if hasattr(user, f.name):
+            setattr(user, f.name, cfg_dict[f.name])
+    user.long_cfg  = cfg.to_json()
     user.short_cfg = cfg.to_json()
 
 
