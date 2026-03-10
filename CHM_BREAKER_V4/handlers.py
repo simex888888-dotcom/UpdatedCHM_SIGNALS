@@ -45,6 +45,7 @@ from keyboards import (
     kb_auto_trade,
 )
 from scanner_mid import signal_compact_keyboard, trade_records_keyboard
+from watermark import wm_decode
 
 log = logging.getLogger("CHM.Handlers")
 
@@ -348,13 +349,24 @@ def _update_short_field(user: UserSettings, field: str, value):
     user.short_cfg = cfg.to_json()
 
 def _update_shared_field(user: UserSettings, field: str, value):
-    """Обновляет поле в обеих конфигах (long + short)."""
+    """Обновляет поле в flat-атрибутах UserSettings (читаются shared_cfg())
+    И в обоих JSON-конфигах (читаются get_long_cfg/get_short_cfg через merged_with).
+    Раньше писалось только в JSON → shared_cfg() никогда не видел изменений → ◉ не двигался."""
+    # Обновляем flat поле UserSettings (источник для shared_cfg и клавиатур)
+    if hasattr(user, field):
+        setattr(user, field, value)
+    # Обновляем JSON-оверрайды (источник для get_long_cfg / get_short_cfg)
     _update_long_field(user, field, value)
     _update_short_field(user, field, value)
 
 def _apply_shared_cfg(user: UserSettings, cfg: TradeCfg):
-    """Применяет TradeCfg к обеим конфигам."""
-    user.long_cfg = cfg.to_json()
+    """Применяет TradeCfg к flat-полям UserSettings и к обоим JSON-конфигам."""
+    from dataclasses import asdict, fields as dc_fields
+    cfg_dict = asdict(cfg)
+    for f in dc_fields(TradeCfg):
+        if hasattr(user, f.name):
+            setattr(user, f.name, cfg_dict[f.name])
+    user.long_cfg  = cfg.to_json()
     user.short_cfg = cfg.to_json()
 
 
@@ -2318,7 +2330,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_retest_", ""))
         await cb.answer("✅ " + str(v))
-        _update_short_field(user, "min_retests", v); await um.save(user)
+        _update_short_field(user, "max_retest_bars", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
 
     @dp.callback_query(F.data.startswith("short_set_buffer_"))
@@ -2388,7 +2400,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_htf_ema_", ""))
         await cb.answer("✅ HTF EMA " + str(v))
-        _update_short_field(user, "htf_ema", v); await um.save(user)
+        _update_short_field(user, "htf_ema_period", v); await um.save(user)
         await safe_edit(cb, "📉 <b>EMA ШОРТ</b>", kb_short_ema(user))
 
     @dp.callback_query(F.data == "menu_short_filters")
@@ -2675,7 +2687,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_retest_", ""))
         await cb.answer("✅ " + str(v))
-        _update_shared_field(user, "min_retests", v); await um.save(user)
+        _update_shared_field(user, "max_retest_bars", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты</b>", kb_pivots(user))
 
     @dp.callback_query(F.data.startswith("set_buffer_"))
@@ -2745,7 +2757,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_htf_ema_", ""))
         await cb.answer("✅ HTF EMA " + str(v))
-        _update_shared_field(user, "htf_ema", v); await um.save(user)
+        _update_shared_field(user, "htf_ema_period", v); await um.save(user)
         await safe_edit(cb, "📉 <b>EMA настройки</b>", kb_ema(user))
 
     @dp.callback_query(F.data == "menu_filters")
@@ -2944,6 +2956,22 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         user.notifications_enabled = not user.notifications_enabled
         await cb.answer("🔔 Уведомления " + ("✅" if user.notifications_enabled else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
+
+    @dp.callback_query(F.data == "toggle_notify_signal")
+    async def toggle_notify_signal(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.notify_signal = not user.notify_signal
+        await cb.answer("📊 Сигнал входа " + ("✅" if user.notify_signal else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
+
+    @dp.callback_query(F.data == "toggle_notify_breakout")
+    async def toggle_notify_breakout(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.notify_breakout = not user.notify_breakout
+        await cb.answer("🔓 Пробой уровня " + ("✅" if user.notify_breakout else "❌"))
         await um.save(user)
         await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
 
@@ -3598,6 +3626,30 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             "Стратегия: <b>" + (user.strategy or "не выбрана") + "</b>",
             parse_mode="HTML",
         )
+
+    @dp.message(Command("decode_wm"))
+    async def cmd_decode_wm(msg: Message):
+        """Декодирует невидимый водяной знак из скопированного сигнала.
+        Использование: /decode_wm — затем переслать или вставить текст сигнала как reply."""
+        if not is_admin(msg.from_user.id): return
+        # Берём текст из reply или из самого сообщения (после команды)
+        source = msg.reply_to_message.text if msg.reply_to_message else msg.text
+        if not source:
+            await msg.answer("❌ Перешли сообщение с сигналом как reply на эту команду, или вставь текст после /decode_wm"); return
+        uid = wm_decode(source)
+        if uid is None:
+            await msg.answer("❌ Водяной знак не найден — текст без watermark или повреждён"); return
+        user = await um.get(uid)
+        if user:
+            await msg.answer(
+                "🔍 <b>Водяной знак декодирован</b>\n\n"
+                "👤 @" + str(user.username or "—") + " (<code>" + str(uid) + "</code>)\n"
+                "Подписка: <b>" + user.sub_status.upper() + "</b>\n"
+                "Сигналов получено: <b>" + str(user.signals_received) + "</b>",
+                parse_mode="HTML",
+            )
+        else:
+            await msg.answer("🔍 User ID из водяного знака: <code>" + str(uid) + "</code>\n(пользователь не найден в БД)", parse_mode="HTML")
 
     @dp.message(Command("broadcast"))
     async def cmd_broadcast(msg: Message):

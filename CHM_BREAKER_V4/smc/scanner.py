@@ -20,6 +20,7 @@ from .signal_builder import build_smc_signal, SMCSignalResult
 # database лежит в родительском каталоге (CHM_BREAKER_V4/)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import database as db
+from watermark import wm_inject
 
 log = logging.getLogger("CHM.SMC.Scanner")
 
@@ -290,7 +291,7 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
                 else:
                     show_trade_btn = True
 
-            text = _signal_text_smc(sig)
+            text = wm_inject(_signal_text_smc(sig), user.user_id)
             try:
                 await bot.send_message(
                     user.user_id, text,
