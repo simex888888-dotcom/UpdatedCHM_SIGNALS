@@ -246,14 +246,24 @@ def _place_trade_sync(
             notional_real = qty_f * entry
             final_pos_idx = hedge_idx if used_hedge else 0
 
-            # ── 3 частичных TP (reduce-only limit orders) ────────────────
+            # ── 3 частичных TP: 50% / 25% / 25% ─────────────────────────
             close_side = "Sell" if side == "Buy" else "Buy"
-            qty_tp     = qty_f / 3.0
-            qty_tp_str = _round_qty(qty_tp, qty_step)
-            tp_prices  = [tp1, tp2, tp3]
+            # TP1 берёт всё что не вошло в TP2+TP3 (учёт ошибок округления)
+            qty_tp2    = _round_qty(qty_f * 0.25, qty_step)
+            qty_tp3    = _round_qty(qty_f * 0.25, qty_step)
+            # Остаток (50%+ погрешность округления) — в TP1
+            qty_tp1_f  = qty_f - float(qty_tp2) - float(qty_tp3)
+            qty_tp1    = _round_qty(max(qty_tp1_f, float(qty_tp2)), qty_step)
 
-            for tp_price in tp_prices:
-                if tp_price is None or tp_price <= 0:
+            tp_orders = [
+                (tp1, qty_tp1,  "50%"),
+                (tp2, qty_tp2,  "25%"),
+                (tp3, qty_tp3,  "25%"),
+            ]
+            for tp_price, qty_tp_str, _pct in tp_orders:
+                if not tp_price or tp_price <= 0:
+                    continue
+                if float(qty_tp_str) <= 0:
                     continue
                 try:
                     session.place_order(
@@ -379,6 +389,30 @@ async def get_positions(api_key: str, api_secret: str, symbol: str = "") -> list
     )
 
 
+# ── Отмена всех открытых ордеров по символу ──────────────
+
+def _cancel_all_orders_sync(api_key: str, api_secret: str, symbol: str) -> dict:
+    """Синхронно отменяет все открытые лимитные TP-ордера по символу."""
+    session   = _get_session(api_key, api_secret)
+    bb_symbol = _to_bybit_symbol(symbol)
+    try:
+        resp = session.cancel_all_orders(category="linear", symbol=bb_symbol)
+        if resp.get("retCode", -1) == 0:
+            return {"ok": True, "cancelled": len(resp.get("result", {}).get("list", []))}
+        return {"ok": False, "error": resp.get("retMsg", "cancel error")}
+    except Exception as e:
+        log.debug(f"cancel_all_orders {symbol}: {e}")
+        return {"ok": False, "error": str(e)}
+
+
+async def cancel_all_orders(api_key: str, api_secret: str, symbol: str) -> dict:
+    """Асинхронно отменяет все открытые ордера по символу (чистка после закрытия позиции)."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, _cancel_all_orders_sync, api_key, api_secret, symbol,
+    )
+
+
 # ── Закрытые позиции (для определения результата сделки) ──────────────────────
 
 def _get_closed_pnl_sync(api_key: str, api_secret: str, symbol: str) -> list:
@@ -416,11 +450,11 @@ def format_trade_result(result: dict, direction: str, symbol: str,
         risk_amt = balance * risk_pct / 100
         dir_em   = "🟢 LONG" if direction == "LONG" else "🔴 SHORT"
 
-        tp_lines = f"🎯 TP1: <code>{tp1}</code>  (1/3 позиции)\n"
+        tp_lines = f"🎯 TP1: <code>{tp1}</code>  (50% позиции)\n"
         if tp2:
-            tp_lines += f"🎯 TP2: <code>{tp2}</code>  (1/3 позиции)\n"
+            tp_lines += f"🎯 TP2: <code>{tp2}</code>  (25% позиции)\n"
         if tp3:
-            tp_lines += f"🏆 TP3: <code>{tp3}</code>  (1/3 позиции)\n"
+            tp_lines += f"🏆 TP3: <code>{tp3}</code>  (25% позиции)\n"
         be_note = "\n♻️ <i>После TP1 — стоп автоматически перенесётся в БУ</i>" if tp2 else ""
 
         return (
