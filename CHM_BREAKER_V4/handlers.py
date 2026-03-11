@@ -3908,9 +3908,10 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     def _subs_backup_path() -> str:
         import os
-        return os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "subs_backup.txt"
-        )
+        # Сохраняем рядом с БД (persistent /data/ на bothost.ru и VPS)
+        # а не рядом со скриптом, который затирается при редеплое.
+        db_dir = os.path.dirname(os.path.abspath(config.DB_PATH))
+        return os.path.join(db_dir, "subs_backup.txt")
 
     async def _save_subs_backup():
         """Сохраняет активных пользователей в файл рядом со скриптом."""
