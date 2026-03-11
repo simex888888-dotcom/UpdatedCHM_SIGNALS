@@ -17,6 +17,8 @@ import database
 import cache
 import turso_sync
 import cache_gc
+import wallet_service
+import poly_scheduler
 from config import Config
 from user_manager import UserManager
 from scanner_mid import MidScanner
@@ -163,6 +165,7 @@ async def main():
     poly = PolymarketService()
     register_poly_handlers(dp, bot, um, config, poly)
     log.info(f"📊 Polymarket: {'торговля включена ✅' if poly.is_trading_enabled() else 'только просмотр (POLY_PRIVATE_KEY не задан)'}")
+    log.info(f"👛 Кастодиальные кошельки: {'✅ активны' if wallet_service.is_configured() else '❌ WALLET_ENCRYPTION_KEY не задан'}")
 
     # ─── Авто-восстановление подписок при старте ─────────────────────────────
     async def _auto_restore_subs():
@@ -317,6 +320,8 @@ async def main():
             turso_sync.turso_sync_loop(config.DB_PATH),
             _subs_backup_loop(),
             cache_gc.gc_loop(),
+            poly_scheduler.digest_loop(bot, poly, um),
+            poly_scheduler.alerts_loop(bot, poly),
         )
     finally:
         log.info("🛑 Завершение...")

@@ -311,7 +311,7 @@ class PolymarketService:
             return []
 
     async def place_bet(self, token_id: str, amount_usdc: float) -> dict:
-        """Размещает рыночный ордер. Возвращает dict ответа от API."""
+        """Размещает рыночный ордер от имени бота (admin-кошелёк)."""
         if not self._configured:
             raise RuntimeError("Торговля не настроена (POLY_PRIVATE_KEY не задан)")
 
@@ -319,6 +319,36 @@ class PolymarketService:
             from py_clob_client.client import ClobClient  # noqa: F401 (import check)
             from py_clob_client.clob_types import MarketOrderArgs, OrderType
             c = self._make_client()
+            order = c.create_market_order(
+                MarketOrderArgs(token_id=token_id, amount=amount_usdc)
+            )
+            return c.post_order(order, OrderType.FOK)
+
+        return await asyncio.to_thread(_fn)
+
+    async def place_bet_for_user(
+        self, private_key: str, token_id: str, amount_usdc: float
+    ) -> dict:
+        """
+        Размещает рыночный ордер от имени пользователя.
+        private_key — расшифрованный приватный ключ (0x...).
+        Ключ используется только внутри to_thread и не логируется.
+        """
+        def _fn():
+            from py_clob_client.client import ClobClient
+            from py_clob_client.clob_types import MarketOrderArgs, OrderType
+            # Создаём клиент с ключом пользователя
+            c = ClobClient(
+                host=CLOB_BASE,
+                chain_id=CHAIN_ID,
+                key=private_key,
+                signature_type=0,
+            )
+            # Деривируем или создаём API credentials из приватного ключа
+            try:
+                c.set_api_creds(c.create_or_derive_api_creds())
+            except Exception as e:
+                raise RuntimeError(f"Не удалось создать API credentials: {e}")
             order = c.create_market_order(
                 MarketOrderArgs(token_id=token_id, amount=amount_usdc)
             )
