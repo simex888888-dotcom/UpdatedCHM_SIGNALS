@@ -21,6 +21,8 @@ from user_manager import UserManager
 from scanner_mid import MidScanner
 from handlers import register_handlers
 from pump_dump.pd_runner import PDRunner
+from polymarket_service import PolymarketService
+from poly_handlers import register_poly_handlers
 
 
 def _code_hash() -> str:
@@ -156,6 +158,10 @@ async def main():
     pd_runner = PDRunner(bot, config.DB_PATH)
 
     register_handlers(dp, bot, um, scanner, config, pd_runner=pd_runner)
+
+    poly = PolymarketService()
+    register_poly_handlers(dp, bot, um, config, poly)
+    log.info(f"📊 Polymarket: {'торговля включена ✅' if poly.is_trading_enabled() else 'только просмотр (POLY_PRIVATE_KEY не задан)'}")
 
     # ─── Авто-восстановление подписок при старте ─────────────────────────────
     async def _auto_restore_subs():
@@ -314,6 +320,7 @@ async def main():
         log.info("🛑 Завершение...")
         await scanner.fetcher.close()
         await bot.session.close()
+        await poly.close()
         # ─── Финальное сохранение перед выходом ──────────────────────────────
         await _save_subs_backup_once()
         await turso_sync.turso_push(config.DB_PATH)
