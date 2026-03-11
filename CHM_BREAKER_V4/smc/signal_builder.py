@@ -143,15 +143,15 @@ def calculate_levels(analysis: dict, direction: str, cfg) -> Optional[dict]:
     cp = analysis.get("current_price", 0.0) or entry_mid
     risk_pct_raw = risk / cp * 100 if cp > 0 else 0.0
 
-    if is_major and risk_pct_raw < 0.4:
+    if is_major and risk_pct_raw < 0.15:      # было 0.4
         return None
-    if is_memcoin and risk_pct_raw < 1.5:
+    if is_memcoin and risk_pct_raw < 0.8:    # было 1.5
         return None
-    if not is_major and not is_memcoin and risk_pct_raw < 0.8:
+    if not is_major and not is_memcoin and risk_pct_raw < 0.4:  # было 0.8
         return None
 
     atr = analysis.get("atr", 0.0)
-    if atr > 0 and risk < atr * 1.5:
+    if atr > 0 and risk < atr * 0.8:         # было 1.5
         return None
 
     # TP1 = FVG zone или 1R
@@ -400,11 +400,11 @@ def build_smc_signal(symbol: str, analysis: dict, cfg,
 
         # ── Взвешенный R:R фильтр ─────────────────────────────────────────
         rr_val = levels["rr"]
-        if rr_val < 1.2:
-            continue  # блок — слишком низкий R:R
+        if rr_val < 0.8:
+            continue  # блок — слишком низкий R:R (было 1.2)
         adjusted_score = score
-        if rr_val < 1.8:
-            adjusted_score = max(0, score - 1)  # -1 подтверждение
+        if rr_val < 1.2:
+            adjusted_score = max(0, score - 1)  # -1 подтверждение (было < 1.8)
 
         # ── Мемкоин: максимум 3 подтверждения ────────────────────────────
         _MEMCOIN_KW = ("FLOKI","PEPE","SHIB","DOGE","WIF","BONK","NEIRO",

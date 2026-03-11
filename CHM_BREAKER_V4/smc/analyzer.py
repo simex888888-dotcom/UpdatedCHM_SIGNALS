@@ -22,25 +22,25 @@ class SMCConfig:
     BOS_CONFIRMATION:   bool  = True
     CHOCH_ENABLED:      bool  = True
     # Liquidity
-    EQUAL_THRESHOLD_PCT: float = 0.05
-    SWEEP_WICK_RATIO:    float = 0.6
-    SWEEP_CLOSE_REQUIRED: bool = True
+    EQUAL_THRESHOLD_PCT: float = 0.1   # было 0.05 — шире кластеризация уровней
+    SWEEP_WICK_RATIO:    float = 0.3   # было 0.6 — реальные фитили редко ≥60%
+    SWEEP_CLOSE_REQUIRED: bool = False  # было True — не требуем закрытия обратно
     # Order Block
-    OB_MIN_IMPULSE_PCT:  float = 0.3
-    OB_MAX_AGE_CANDLES:  int   = 50
-    OB_MITIGATED_INVALID: bool = True
+    OB_MIN_IMPULSE_PCT:  float = 0.1   # было 0.3 — менее строгий импульс
+    OB_MAX_AGE_CANDLES:  int   = 80    # было 50 — ищем OB глубже
+    OB_MITIGATED_INVALID: bool = False  # было True — не убиваем OB при пробое
     OB_USE_BREAKER:      bool  = True
     # FVG
     FVG_ENABLED:         bool  = True
-    FVG_MIN_GAP_PCT:     float = 0.1
+    FVG_MIN_GAP_PCT:     float = 0.05  # было 0.1 — ловим более мелкие FVG
     FVG_INVERSED:        bool  = True
     FVG_PARTIAL_INVALID: bool  = False
     # Premium/Discount
     PD_ENABLED:          bool  = True
-    PD_BUFFER_PCT:       float = 2.0
+    PD_BUFFER_PCT:       float = 1.0   # было 2.0 — меньше мёртвая зона Equilibrium
     # Signal
-    MIN_CONFIRMATIONS:   int   = 3
-    MIN_RR:              float = 2.0
+    MIN_CONFIRMATIONS:   int   = 2     # было 3 — достаточно 2/5 подтверждений
+    MIN_RR:              float = 1.5   # было 2.0 — разумный минимум
     SL_BUFFER_PCT:       float = 0.5
     TP1_RATIO:           float = 0.33
     TP2_RATIO:           float = 0.50

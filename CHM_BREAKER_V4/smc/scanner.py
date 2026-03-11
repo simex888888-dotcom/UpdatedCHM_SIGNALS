@@ -33,7 +33,7 @@ _SMC_TF_MAP = {
 
 # Антидубликат: hash → timestamp
 _sent_signals: dict[str, float] = {}
-_DEDUP_HOURS = 4  # часов между одинаковыми сигналами
+_DEDUP_HOURS = 2  # часов между одинаковыми сигналами (было 4)
 
 
 def _fp(v: float) -> str:
@@ -158,7 +158,8 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
             df_htf_data = await fetcher.get_candles(symbol, tf_htf, limit=200)
             df_mtf_data = await fetcher.get_candles(symbol, tf_mtf, limit=200)
             df_ltf_data = await fetcher.get_candles(symbol, tf_ltf, limit=200)
-        except Exception:
+        except Exception as e:
+            log.warning(f"SMC {symbol}: ошибка загрузки свечей: {e}")
             continue
 
         if df_htf_data is None or df_mtf_data is None:
@@ -169,7 +170,7 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
         try:
             analysis = analyzer.analyze(symbol, df_htf_data, df_mtf_data, df_ltf_data)
         except Exception as e:
-            log.debug(f"SMC {symbol} analyze: {e}")
+            log.warning(f"SMC {symbol}: ошибка анализа: {e}")
             continue
 
         # Отправляем каждому пользователю согласно его персональным фильтрам
@@ -181,22 +182,25 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
 
             ucfg = user.get_smc_cfg()
 
-            # Применяем пользовательский конфиг поверх базового
+            # Применяем пользовательский конфиг поверх базового.
+            # Для «минимальных» порогов берём наименее строгое значение,
+            # чтобы старые сохранённые настройки не заблокировали сигналы.
             cfg_obj = SMCConfig()
-            cfg_obj.MIN_CONFIRMATIONS   = ucfg.min_confirmations
-            cfg_obj.MIN_RR              = ucfg.min_rr
+            cfg_obj.MIN_CONFIRMATIONS   = min(ucfg.min_confirmations, SMCConfig.MIN_CONFIRMATIONS)
+            cfg_obj.MIN_RR              = min(ucfg.min_rr,             SMCConfig.MIN_RR)
             cfg_obj.SL_BUFFER_PCT       = ucfg.sl_buffer_pct
             cfg_obj.FVG_ENABLED         = ucfg.fvg_enabled
             cfg_obj.CHOCH_ENABLED       = ucfg.choch_enabled
             cfg_obj.OB_USE_BREAKER      = ucfg.ob_use_breaker
-            cfg_obj.OB_MAX_AGE_CANDLES  = ucfg.ob_max_age
-            cfg_obj.SWEEP_CLOSE_REQUIRED = ucfg.sweep_close_req
+            cfg_obj.OB_MAX_AGE_CANDLES  = max(ucfg.ob_max_age, SMCConfig.OB_MAX_AGE_CANDLES)
+            # SWEEP_CLOSE_REQUIRED: False если хотя бы один из конфигов False
+            cfg_obj.SWEEP_CLOSE_REQUIRED = ucfg.sweep_close_req and SMCConfig.SWEEP_CLOSE_REQUIRED
 
             try:
                 sig = build_smc_signal(symbol, analysis, cfg_obj,
                                        tf_htf=tf_htf, tf_mtf=tf_mtf, tf_ltf=tf_ltf)
             except Exception as e:
-                log.debug(f"SMC {symbol} build {user.user_id}: {e}")
+                log.warning(f"SMC {symbol} build {user.user_id}: {e}")
                 continue
 
             if sig is None:
