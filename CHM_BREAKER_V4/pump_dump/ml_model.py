@@ -190,7 +190,7 @@ def build_feature_vector(an, ob, hs, ind) -> list[float]:
         # Контекст
         float(datetime.now(timezone.utc).hour),
         float(abs(an.price_change_3m) * 100),       # приближение volatility_24h
-        float(ob.spread_pct),
+        float(int(an.volume_double_cond)),           # Баг 3 фикс: был ob.spread_pct (дубль индекса 6)
     ]
 
 

@@ -241,17 +241,22 @@ def register_pd_handlers(dp: Dispatcher, bot: Bot, runner_getter):
             key=lambda x: abs(x[1]), reverse=True
         )[:10]
         if not rows:
-            await cb.answer("⏳ Данные ещё загружаются, подождите")
+            text = "⏳ <b>Данные ещё загружаются</b>\n\nПодождите ~10 секунд и попробуйте снова."
+            try:
+                await cb.message.edit_text(text, parse_mode="HTML", reply_markup=_kb_back_pd())
+            except Exception:
+                pass
+            await cb.answer()
             return
         lines = ["💸 <b>Топ-10 по аномальному Funding Rate</b>" + NL]
         for sym, rate in rows:
             emoji = "🔴" if rate > 0.0005 else ("🟢" if rate < -0.0005 else "⚪")
             lines.append(f"{emoji} <b>{sym}</b>  {rate*100:+.4f}%")
+        text = NL.join(lines)
         try:
-            await cb.message.edit_text(NL.join(lines), parse_mode="HTML",
-                                       reply_markup=_kb_back_pd())
+            await cb.message.edit_text(text, parse_mode="HTML", reply_markup=_kb_back_pd())
         except Exception:
-            pass
+            await cb.message.answer(text, parse_mode="HTML", reply_markup=_kb_back_pd())
         await cb.answer()
 
     # ── Статус системы ────────────────────────────────────────────────────────
