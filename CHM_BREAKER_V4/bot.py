@@ -3,6 +3,7 @@ bot.py — точка входа CHM BREAKER MID (50-500 пользовател�
 """
 
 import asyncio
+import hashlib
 import logging
 import os
 import shutil
@@ -20,6 +21,24 @@ from user_manager import UserManager
 from scanner_mid import MidScanner
 from handlers import register_handlers
 from pump_dump.pd_runner import PDRunner
+
+
+def _code_hash() -> str:
+    """MD5 по ключевым .py файлам бота. Меняется только при обновлении кода."""
+    base = os.path.dirname(os.path.abspath(__file__))
+    files = sorted([
+        "bot.py", "handlers.py", "scanner_mid.py",
+        "keyboards.py", "database.py", "config.py",
+    ])
+    h = hashlib.md5()
+    for fname in files:
+        path = os.path.join(base, fname)
+        try:
+            with open(path, "rb") as f:
+                h.update(f.read())
+        except OSError:
+            pass
+    return h.hexdigest()
 
 
 def _backup_db(db_path: str):
@@ -191,12 +210,18 @@ async def main():
         except Exception as e:
             log.error(f"Авторестор ошибка: {e}")
 
-    # Рассылка при запуске — после того как aiogram установит соединение с Telegram
+    # Рассылка при запуске — только если код изменился с последнего запуска
     @dp.startup()
     async def on_startup():
         await _auto_restore_subs()
-        log.info("🔄 Рассылка уведомлений о перезапуске...")
-        await notify_restart(bot, um, config.ADMIN_IDS)
+        current_hash = _code_hash()
+        saved_hash   = await database.db_kv_get("bot_code_hash")
+        if current_hash != saved_hash:
+            log.info(f"🔄 Обнаружено обновление кода ({saved_hash} → {current_hash}), рассылка...")
+            await notify_restart(bot, um, config.ADMIN_IDS)
+            await database.db_kv_set("bot_code_hash", current_hash)
+        else:
+            log.info("♻️ Рестарт без изменений кода — рассылка пропущена.")
 
     log.info("🚀 CHM BREAKER MID запускается...")
     log.info(f"   SQLite:      {config.DB_PATH}")
