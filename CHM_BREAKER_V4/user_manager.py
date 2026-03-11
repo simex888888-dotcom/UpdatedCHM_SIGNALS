@@ -74,11 +74,18 @@ class TradeCfg:
 
     def merged_with(self, override: "TradeCfg") -> "TradeCfg":
         """Применяем override поверх self (только непустые значения)."""
+        import math
+        def _differs(a, b) -> bool:
+            """Сравнивает значения с учётом float-точности."""
+            if isinstance(a, float) and isinstance(b, float):
+                return not math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-9)
+            return a != b
+
         base  = asdict(self)
         odict = asdict(override)
         defs  = asdict(TradeCfg())          # дефолтные значения
         # берём из override только то что отличается от дефолта
-        merged = {k: (odict[k] if odict[k] != defs[k] else base[k]) for k in base}
+        merged = {k: (odict[k] if _differs(odict[k], defs[k]) else base[k]) for k in base}
         return TradeCfg(**merged)
 
 

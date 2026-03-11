@@ -125,6 +125,10 @@ class PromoState(StatesGroup):
     waiting_code = State()
 
 
+class BroadcastState(StatesGroup):
+    confirm = State()
+
+
 class SetupBybitState(StatesGroup):
     api_key    = State()
     api_secret = State()
@@ -1197,9 +1201,23 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         except Exception:
             pass
         from smc.scanner import run_smc_scanner
-        asyncio.create_task(
-            run_smc_scanner(bot, um, _fetcher_for_smc)
-        )
+
+        async def _smc_task_with_restart():
+            """Запускает SMC-сканер и перезапускает при падении."""
+            _restart_delay = 30
+            while True:
+                try:
+                    await run_smc_scanner(bot, um, _fetcher_for_smc)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    log.error(
+                        f"SMC scanner упал, перезапуск через {_restart_delay}с: {e}",
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(_restart_delay)
+
+        asyncio.create_task(_smc_task_with_restart())
 
     dp.startup.register(_on_startup_inner)
 
@@ -1378,10 +1396,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         )
         await cb.message.answer(text, parse_mode="HTML")
 
-    @dp.callback_query(F.data == "strategy_")
-    async def _noop_strategy(cb: CallbackQuery):
-        pass
-
     @dp.callback_query(F.data.startswith("strategy_"))
     async def cb_strategy(cb: CallbackQuery):
         choice = cb.data.replace("strategy_", "")   # "levels" | "smc"
@@ -1419,6 +1433,11 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await send(f"⏳ Подожди {_ANALYZE_COOLDOWN_SEC} секунд между запросами.", parse_mode="HTML")
             return
         _analyze_cooldown[uid] = now
+        # Периодически очищаем устаревшие записи, чтобы словарь не рос бесконечно
+        if len(_analyze_cooldown) > 2000:
+            _cutoff = now - 3600
+            for _k in [_k for _k, _v in _analyze_cooldown.items() if _v < _cutoff]:
+                _analyze_cooldown.pop(_k, None)
 
         wait_msg = await send(
             "⏳ <b>Глубокий анализ " + symbol + "...</b>\n\nЗагружаю свечи 1H/4H/1D...",
@@ -3722,21 +3741,45 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await msg.answer("🔍 User ID из водяного знака: <code>" + str(uid) + "</code>\n(пользователь не найден в БД)", parse_mode="HTML")
 
     @dp.message(Command("broadcast"))
-    async def cmd_broadcast(msg: Message):
+    async def cmd_broadcast(msg: Message, state: FSMContext):
         if not is_admin(msg.from_user.id): return
         text = msg.text.replace("/broadcast", "", 1).strip()
-        if not text: await msg.answer("Использование: /broadcast [текст]"); return
+        if not text:
+            await msg.answer("Использование: /broadcast [текст]"); return
         users  = await um.all_users()
-        sent = failed = 0
-        for u in users:
-            if u.sub_status in ("trial", "active"):
-                try:
-                    await bot.send_message(u.user_id, "📢 " + text)
-                    sent += 1
-                    await asyncio.sleep(0.04)
-                except Exception:
-                    failed += 1
-        await msg.answer("📢 Рассылка: ✅ " + str(sent) + "  ❌ " + str(failed))
+        target = [u for u in users if u.sub_status in ("trial", "active")]
+        await state.update_data(broadcast_text=text)
+        await state.set_state(BroadcastState.confirm)
+        await msg.answer(
+            f"📢 <b>Подтверждение рассылки</b>\n\n"
+            f"Получателей: <b>{len(target)}</b> активных пользователей\n\n"
+            f"Текст сообщения:\n<i>{text}</i>\n\n"
+            f"Напишите <code>CONFIRM</code> для отправки или /cancel для отмены.",
+            parse_mode="HTML",
+        )
+
+    @dp.message(BroadcastState.confirm)
+    async def broadcast_confirm(msg: Message, state: FSMContext):
+        if not is_admin(msg.from_user.id):
+            await state.clear(); return
+        if msg.text and msg.text.strip().upper() == "CONFIRM":
+            data = await state.get_data()
+            text = data.get("broadcast_text", "")
+            await state.clear()
+            users = await um.all_users()
+            sent = failed = 0
+            for u in users:
+                if u.sub_status in ("trial", "active"):
+                    try:
+                        await bot.send_message(u.user_id, "📢 " + text)
+                        sent += 1
+                        await asyncio.sleep(0.04)
+                    except Exception:
+                        failed += 1
+            await msg.answer(f"📢 Рассылка завершена: ✅ {sent}  ❌ {failed}")
+        else:
+            await state.clear()
+            await msg.answer("❌ Рассылка отменена.")
 
     # ─── ПРОЧЕЕ ───────────────────────────────────────
 

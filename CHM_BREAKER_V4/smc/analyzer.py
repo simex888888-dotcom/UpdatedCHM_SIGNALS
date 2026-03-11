@@ -86,8 +86,8 @@ class SMCAnalyzer:
             # ── Шаг 2: Liquidity Sweeps (HTF) ─────────────────────────────
             liquidity = find_liquidity_sweeps(
                 df_htf,
-                structure["swing_highs"],
-                structure["swing_lows"],
+                structure.get("swing_highs", []),
+                structure.get("swing_lows",  []),
                 threshold_pct    = cfg.EQUAL_THRESHOLD_PCT,
                 close_required   = cfg.SWEEP_CLOSE_REQUIRED,
                 wick_ratio       = cfg.SWEEP_WICK_RATIO,
@@ -95,9 +95,12 @@ class SMCAnalyzer:
             result["liquidity"] = liquidity
 
             # ── Шаг 3: Order Blocks (MTF) ─────────────────────────────────
+            _bos_safe = structure.get("bos", {
+                "detected": False, "direction": "", "price": 0.0
+            })
             ob = get_order_blocks(
                 df_mtf,
-                structure["bos"],
+                _bos_safe,
                 min_impulse_pct    = cfg.OB_MIN_IMPULSE_PCT,
                 max_age_candles    = cfg.OB_MAX_AGE_CANDLES,
                 mitigated_invalid  = cfg.OB_MITIGATED_INVALID,
@@ -144,9 +147,9 @@ class SMCAnalyzer:
             result["pd_zone"] = pd_zone
 
             log.debug(
-                f"{symbol}: trend={structure['trend']} "
-                f"bos={structure['bos']['detected']} "
-                f"pd={pd_zone['zone']}"
+                f"{symbol}: trend={structure.get('trend', '?')} "
+                f"bos={structure.get('bos', {}).get('detected', False)} "
+                f"pd={pd_zone.get('zone', '?')}"
             )
         except Exception as e:
             log.error(f"{symbol}: SMC analyze error: {e}")
