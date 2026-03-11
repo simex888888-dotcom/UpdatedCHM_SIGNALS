@@ -165,7 +165,7 @@ class PDRunner:
                       (direction == "DUMP" and change <= -0.03)
             await db.db_pd_save_outcome(sig_id, price_at, current, change * 100, correct)
             # Сохраняем в обучающую выборку
-            await db.db_pd_save_train(sig_id, 1 if direction == "PUMP" else 2 if correct else 0)
+            await db.db_pd_save_train(sig_id, (1 if direction == "PUMP" else 2) if correct else 0)
         except Exception as e:
             log.debug(f"PD outcome {symbol}: {e}")
 
