@@ -82,8 +82,10 @@ class HiddenSignalsCache:
 
     async def _fetch_funding(self, symbols: list[str]):
         url = f"{BINGX_REST_FUTURES}/quote/fundingRate"
-        async with aiohttp.ClientSession() as s:
-            for sym in symbols:
+        sem = asyncio.Semaphore(20)
+
+        async def _one(s, sym):
+            async with sem:
                 try:
                     async with s.get(url, params={"symbol": sym},
                                      timeout=aiohttp.ClientTimeout(total=5)) as r:
@@ -92,12 +94,16 @@ class HiddenSignalsCache:
                     self._funding[sym].append((rate, time.time()))
                 except Exception:
                     pass
-                await asyncio.sleep(0.05)
+
+        async with aiohttp.ClientSession() as s:
+            await asyncio.gather(*[_one(s, sym) for sym in symbols], return_exceptions=True)
 
     async def _fetch_oi(self, symbols: list[str]):
         url = f"{BINGX_REST_FUTURES}/quote/openInterest"
-        async with aiohttp.ClientSession() as s:
-            for sym in symbols:
+        sem = asyncio.Semaphore(20)
+
+        async def _one(s, sym):
+            async with sem:
                 try:
                     async with s.get(url, params={"symbol": sym},
                                      timeout=aiohttp.ClientTimeout(total=5)) as r:
@@ -106,13 +112,16 @@ class HiddenSignalsCache:
                     self._oi_history[sym].append((oi, time.time()))
                 except Exception:
                     pass
-                await asyncio.sleep(0.05)
+
+        async with aiohttp.ClientSession() as s:
+            await asyncio.gather(*[_one(s, sym) for sym in symbols], return_exceptions=True)
 
     async def _fetch_ls_ratio(self, symbols: list[str]):
-        # BingX: GET /openApi/swap/v2/quote/globalLongShortPositionRatio
         url = f"{BINGX_REST_FUTURES}/quote/globalLongShortPositionRatio"
-        async with aiohttp.ClientSession() as s:
-            for sym in symbols:
+        sem = asyncio.Semaphore(20)
+
+        async def _one(s, sym):
+            async with sem:
                 try:
                     async with s.get(url, params={"symbol": sym, "period": "5m", "limit": 1},
                                      timeout=aiohttp.ClientTimeout(total=5)) as r:
@@ -123,7 +132,9 @@ class HiddenSignalsCache:
                         self._ls_ratio[sym] = ratio
                 except Exception:
                     pass
-                await asyncio.sleep(0.05)
+
+        async with aiohttp.ClientSession() as s:
+            await asyncio.gather(*[_one(s, sym) for sym in symbols], return_exceptions=True)
 
     def get_funding(self, sym: str) -> tuple[float, float]:
         """Возвращает (current_rate, prev_rate)."""

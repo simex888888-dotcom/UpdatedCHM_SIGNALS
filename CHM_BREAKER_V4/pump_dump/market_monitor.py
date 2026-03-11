@@ -85,7 +85,15 @@ class MarketMonitor:
         backoff = 1
         while self._running:
             try:
-                await self._fetch_historical_candles()
+                # Загружаем историю только если буфер пустой (первый старт).
+                # При реконнекте данные в памяти сохраняются — не тратим 30+ сек.
+                needs_history = not any(
+                    len(v) >= 10 for v in self._candles.values()
+                )
+                if needs_history:
+                    await self._fetch_historical_candles()
+                else:
+                    log.info("♻️  PD Monitor: реконнект — исторические свечи уже в памяти, пропускаем загрузку")
                 if not _prewarm_done:
                     await self._push_initial_events()
                     _prewarm_done = True

@@ -14,9 +14,13 @@ signal_aggregator.py — агрегатор сигналов.
 """
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Optional, Literal
+
+log = logging.getLogger("CHM.PD.Aggregator")
+_debug_counter = 0   # счётчик событий для периодического debug-лога
 
 from pump_dump.pd_config import (
     LAYER_WEIGHTS, MIN_SIGNAL_SCORE, MIN_ACTIVE_LAYERS,
@@ -62,6 +66,10 @@ def aggregate(
     """
     Запускает все слои, считает score, возвращает SignalPayload или None.
     """
+    global _debug_counter
+    _debug_counter += 1
+    do_debug = (_debug_counter % 500 == 0)  # каждые 500 событий логируем статистику
+
     # ── Anti-spam ─────────────────────────────────────────────────────────────
     now = time.time()
     last = _last_signal_ts.get(symbol, 0)
@@ -87,8 +95,17 @@ def aggregate(
     ml_ready = get_model().is_ready()
     min_layers = MIN_ACTIVE_LAYERS
     if ml_ready and "ml" not in active:
-        # ML не подтверждает — снижаем score на 15 пунктов
         raw_score = max(0.0, raw_score - 15.0)
+
+    if do_debug:
+        log.info(
+            f"📊 PD диагностика (событие #{_debug_counter}) {symbol}: "
+            f"score={raw_score:.1f}% layers={len(active)}/{MIN_ACTIVE_LAYERS} "
+            f"dir={direction} votes={votes} "
+            f"vol_dc={an.volume_double_cond} vol_z={an.volume_zscore:.1f} "
+            f"price_spike={an.price_spike} cvd={an.cvd_signal} "
+            f"ob_imbal={ob.imbalance_signal} funding={hs.funding_signal}"
+        )
 
     if len(active) < min_layers:
         return None
