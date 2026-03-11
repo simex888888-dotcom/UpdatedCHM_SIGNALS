@@ -541,13 +541,18 @@ class MidScanner:
             await self.um.save(user)
             cfg = self.cfg
             text = (
-                "⏰ <b>Подписка истекла!</b>\n\n"
-                "🤖 <b>CHM BOT — автоматический сканер твоей прибыли. Бот, который не даст проспать профит.</b>\n\n"
-                "🤖 <b>CHM BREAKER BOT:</b>\n"
-                "  📅 3 месяца — <b>" + cfg.BOT_PRICE_90 + "</b>\n"
-                "  📅 1 ГОД    — <b>" + cfg.BOT_PRICE_365 + "</b>\n\n"
-                "💎 <b>Бот + Лаба</b> — написать @crypto_chm\n\n"
-                "Напишите администратору для продления 👇"
+                "🚫 <b>Подписка истекла!</b>\n\n"
+                "📦 <b>Тариф:</b>\n"
+                "🤖 CHM BOT — 3 месяца — <b>" + cfg.BOT_PRICE_90 + "</b>\n"
+                "🤖 CHM BOT — 12 месяцев — <b>" + cfg.BOT_PRICE_365 + "</b>\n\n"
+                "💳 <b>Оплата подписки</b>\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🔗 <b>Сеть:</b> BEP20 (BSC)\n\n"
+                "📋 <b>Адрес для перевода:</b>\n"
+                "<code>0xb5116aa7d7a20d7c45a8a5ff10bc1d86437df985</code>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "✅ После оплаты отправь скриншот + свой Telegram ID администратору:\n\n"
+                "🆔 <b>Твой ID:</b> <code>" + str(user.user_id) + "</code>"
             )
             await self.bot.send_message(
                 user.user_id, text,
