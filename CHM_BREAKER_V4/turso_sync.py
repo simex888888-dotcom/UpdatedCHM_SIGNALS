@@ -113,7 +113,9 @@ async def turso_pull(db_path: str) -> bool:
     Вызывать ПОСЛЕ database.init_db() — таблицы уже должны существовать.
     """
     if not _is_configured():
-        log.debug("Turso не настроен — пропускаем pull")
+        log.warning("⚠️  Turso не настроен (TURSO_URL/TURSO_TOKEN не заданы) — облачное восстановление отключено. "
+                    "Подписки сохраняются ТОЛЬКО в локальном SQLite + subs_backup.txt. "
+                    "При редеплое (пересборке контейнера) данные могут быть потеряны!")
         return False
 
     log.info("⬇️  Turso: загружаем БД из облака...")

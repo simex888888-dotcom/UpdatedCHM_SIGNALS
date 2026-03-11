@@ -167,11 +167,19 @@ async def main():
         или полностью заполненная — лишних перезаписей не будет).
         """
         import os, time as _time
-        # Читаем из той же папки, куда handlers.py пишет (рядом с БД)
-        db_dir = os.path.dirname(os.path.abspath(config.DB_PATH))
+        # Ищем subs_backup.txt: сначала рядом с БД, потом рядом со скриптом
+        db_dir     = os.path.dirname(os.path.abspath(config.DB_PATH))
+        script_dir = os.path.dirname(os.path.abspath(__file__))
         path = os.path.join(db_dir, "subs_backup.txt")
         if not os.path.exists(path):
-            return
+            # Фоллбэк: попробовать рядом со скриптом (помогает при смене DB_PATH)
+            alt_path = os.path.join(script_dir, "subs_backup.txt")
+            if os.path.exists(alt_path):
+                log.info(f"🔄 subs_backup.txt найден в {alt_path} (fallback)")
+                path = alt_path
+            else:
+                log.warning(f"⚠️  subs_backup.txt не найден ({path}) — подписки не восстановлены из backup!")
+                return
         restored = 0
         skipped  = 0
         now = _time.time()
@@ -255,10 +263,15 @@ async def main():
                         lines.append(
                             f"{u.user_id}\t{u.username or ''}\t{u.sub_status}\t{u.sub_expires:.0f}"
                         )
+                content = "\n".join(lines)
                 db_dir = os.path.dirname(os.path.abspath(config.DB_PATH))
-                path = os.path.join(db_dir, "subs_backup.txt")
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("\n".join(lines))
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                for save_dir in {db_dir, script_dir}:
+                    try:
+                        with open(os.path.join(save_dir, "subs_backup.txt"), "w", encoding="utf-8") as f:
+                            f.write(content)
+                    except Exception:
+                        pass
                 log.debug(f"💾 subs_backup.txt обновлён ({len(lines)-1} подписок)")
             except Exception as exc:
                 log.warning(f"subs_backup_loop error: {exc}")
@@ -276,10 +289,15 @@ async def main():
                     lines.append(
                         f"{u.user_id}\t{u.username or ''}\t{u.sub_status}\t{u.sub_expires:.0f}"
                     )
+            content = "\n".join(lines)
             db_dir = os.path.dirname(os.path.abspath(config.DB_PATH))
-            path = os.path.join(db_dir, "subs_backup.txt")
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines))
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            for save_dir in {db_dir, script_dir}:
+                try:
+                    with open(os.path.join(save_dir, "subs_backup.txt"), "w", encoding="utf-8") as f:
+                        f.write(content)
+                except Exception:
+                    pass
             log.info(f"💾 subs_backup.txt финальное сохранение ({len(lines)-1} подписок)")
         except Exception as exc:
             log.warning(f"subs_backup final save error: {exc}")
