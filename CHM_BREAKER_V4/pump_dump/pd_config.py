@@ -5,10 +5,8 @@ import os
 # ── BingX API ────────────────────────────────────────────────────────────────
 BINGX_WS_URL       = "wss://open-api-ws.bingx.com/market"
 BINGX_REST_FUTURES = "https://open-api.bingx.com/openApi/swap/v2"
-# Задайте переменные окружения BINGX_API_KEY и BINGX_SECRET_KEY
-# Пример: export BINGX_API_KEY="ваш_ключ"
-BINGX_API_KEY      = os.getenv("BINGX_API_KEY",    "")
-BINGX_SECRET_KEY   = os.getenv("BINGX_SECRET_KEY", "")
+BINGX_API_KEY      = os.getenv("BINGX_API_KEY",    "p1hIr0pmP9gVqO3rHeWVPjIjcdkeRlHAuFTjob5kkV9bc5ZkXxS20a0OrnPHpMkgXQoCETk49IpAfrfK52JA")
+BINGX_SECRET_KEY   = os.getenv("BINGX_SECRET_KEY", "cw7ZMgUeAKiKXjOH5Dl862AnjdXTCXYKnTh3zJxSLXA1DZOKSKtvATzK2OIHF3fxEEuulNtk27cv2KRreg")
 
 # ── Мониторинг ────────────────────────────────────────────────────────────────
 TOP_COINS_COUNT     = 50          # топ монет по объёму (50 для стабильности WS)
@@ -21,9 +19,9 @@ OI_FETCH_EVERY      = 60          # интервал опроса Open Interest 
 
 # ── Детектор аномалий (двойное кондиционирование) ────────────────────────────
 EWMA_SPAN           = 50          # span для EWMA baseline
-ZSCORE_THRESHOLD    = 3.5         # Z-score порог аномалии объёма
-DOUBLE_COND_MEAN_M  = 1.30        # объём > mean_ewma * 1.30
-DOUBLE_COND_MAX_M   = 0.60        # объём > rolling_max * 0.60
+ZSCORE_THRESHOLD    = 2.0         # Z-score порог аномалии объёма (было 3.5 — слишком редко)
+DOUBLE_COND_MEAN_M  = 1.15        # объём > mean_ewma * 1.15 (было 1.30)
+DOUBLE_COND_MAX_M   = 0.45        # объём > rolling_max * 0.45 (было 0.60)
 
 # ── Ценовой спайк (оба условия обязательны) ──────────────────────────────────
 PRICE_SPIKE_1M      = 0.02        # >= 2% за 1 свечу
@@ -46,9 +44,9 @@ LONG_SHORT_PUMP     = 0.40        # L/S ratio < 0.4 → short squeeze
 LONG_SHORT_DUMP     = 3.50        # L/S ratio > 3.5 → long squeeze
 
 # ── Агрегатор сигналов ────────────────────────────────────────────────────────
-MIN_SIGNAL_SCORE    = 70          # минимальный % для отправки алерта
-MIN_ACTIVE_LAYERS   = 4           # минимум 4 из 8 слоёв активны
-ANTI_SPAM_MINUTES   = 20          # не повторять сигнал по монете N минут
+MIN_SIGNAL_SCORE    = 50          # минимальный % для отправки алерта (было 70 — с 4 слоями max=60%, недостижимо)
+MIN_ACTIVE_LAYERS   = 3           # минимум 3 из 8 слоёв активны (было 4)
+ANTI_SPAM_MINUTES   = 15          # не повторять сигнал по монете N минут (было 20)
 MAX_ATR_PCT         = 5.0         # не сигналить если памп уже идёт
 
 # ── Веса слоёв ────────────────────────────────────────────────────────────────

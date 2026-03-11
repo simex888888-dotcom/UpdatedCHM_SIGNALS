@@ -82,13 +82,13 @@ def aggregate(
 
     active, inactive, raw_score = _score_layers(direction, an, ob, hs, ind, ml)
 
-    # ML обязателен если модель готова
+    # ML — дополнительный слой, не обязательный блокировщик.
+    # Если модель готова и говорит против — штрафуем score, но не блокируем полностью.
     ml_ready = get_model().is_ready()
     min_layers = MIN_ACTIVE_LAYERS
     if ml_ready and "ml" not in active:
-        return None         # ML говорит нет — отклоняем
-    if not ml_ready:
-        min_layers = 3      # без ML модели достаточно 3 из 7
+        # ML не подтверждает — снижаем score на 15 пунктов
+        raw_score = max(0.0, raw_score - 15.0)
 
     if len(active) < min_layers:
         return None

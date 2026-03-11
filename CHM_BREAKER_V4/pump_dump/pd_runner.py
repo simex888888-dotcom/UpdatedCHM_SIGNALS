@@ -67,7 +67,7 @@ class PDRunner:
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
-                log.debug(f"PDRunner process: {e}")
+                log.warning(f"PDRunner process: {e}", exc_info=True)
 
     async def _process_event(self, event: MarketEvent):
         sym = event.symbol
