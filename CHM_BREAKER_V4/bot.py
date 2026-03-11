@@ -21,6 +21,8 @@ from user_manager import UserManager
 from scanner_mid import MidScanner
 from handlers import register_handlers
 from pump_dump.pd_runner import PDRunner
+from polymarket_service import PolymarketService
+from poly_handlers import register_poly_handlers
 
 
 def _code_hash() -> str:
@@ -157,6 +159,10 @@ async def main():
 
     register_handlers(dp, bot, um, scanner, config, pd_runner=pd_runner)
 
+    poly = PolymarketService()
+    register_poly_handlers(dp, bot, um, config, poly)
+    log.info(f"📊 Polymarket: {'торговля включена ✅' if poly.is_trading_enabled() else 'только просмотр (POLY_PRIVATE_KEY не задан)'}")
+
     # ─── Авто-восстановление подписок при старте ─────────────────────────────
     async def _auto_restore_subs():
         """Восстанавливает подписки из subs_backup.txt при каждом старте.
@@ -167,11 +173,19 @@ async def main():
         или полностью заполненная — лишних перезаписей не будет).
         """
         import os, time as _time
-        # Читаем из той же папки, куда handlers.py пишет (рядом с БД)
-        db_dir = os.path.dirname(os.path.abspath(config.DB_PATH))
+        # Ищем subs_backup.txt: сначала рядом с БД, потом рядом со скриптом
+        db_dir     = os.path.dirname(os.path.abspath(config.DB_PATH))
+        script_dir = os.path.dirname(os.path.abspath(__file__))
         path = os.path.join(db_dir, "subs_backup.txt")
         if not os.path.exists(path):
-            return
+            # Фоллбэк: попробовать рядом со скриптом (помогает при смене DB_PATH)
+            alt_path = os.path.join(script_dir, "subs_backup.txt")
+            if os.path.exists(alt_path):
+                log.info(f"🔄 subs_backup.txt найден в {alt_path} (fallback)")
+                path = alt_path
+            else:
+                log.warning(f"⚠️  subs_backup.txt не найден ({path}) — подписки не восстановлены из backup!")
+                return
         restored = 0
         skipped  = 0
         now = _time.time()
@@ -236,18 +250,79 @@ async def main():
     log.info(f"   API conc.:   {config.API_CONCURRENCY}")
     log.info(f"   Кэш монет:   {config.CACHE_MAX_SYMBOLS} символов")
 
+    async def _subs_backup_loop():
+        """Периодически сохраняет subs_backup.txt рядом с БД (каждые 10 мин).
+
+        Файл используется _auto_restore_subs() при следующем старте —
+        это дополнительная защита на случай если Turso недоступен.
+        """
+        INTERVAL = 600  # 10 минут
+        await asyncio.sleep(30)  # первый цикл через 30 с после старта
+        while True:
+            try:
+                users = await um.all_users()
+                import datetime
+                lines = [f"# Backup: {datetime.datetime.utcnow().isoformat()}"]
+                now = time.time()
+                for u in users:
+                    if u.sub_status in ("active", "trial") and u.sub_expires > now:
+                        lines.append(
+                            f"{u.user_id}\t{u.username or ''}\t{u.sub_status}\t{u.sub_expires:.0f}"
+                        )
+                content = "\n".join(lines)
+                db_dir = os.path.dirname(os.path.abspath(config.DB_PATH))
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                for save_dir in {db_dir, script_dir}:
+                    try:
+                        with open(os.path.join(save_dir, "subs_backup.txt"), "w", encoding="utf-8") as f:
+                            f.write(content)
+                    except Exception:
+                        pass
+                log.debug(f"💾 subs_backup.txt обновлён ({len(lines)-1} подписок)")
+            except Exception as exc:
+                log.warning(f"subs_backup_loop error: {exc}")
+            await asyncio.sleep(INTERVAL)
+
+    async def _save_subs_backup_once():
+        """Однократное сохранение subs_backup.txt (используется при завершении)."""
+        try:
+            users = await um.all_users()
+            import datetime
+            lines = [f"# Backup: {datetime.datetime.utcnow().isoformat()}"]
+            now = time.time()
+            for u in users:
+                if u.sub_status in ("active", "trial") and u.sub_expires > now:
+                    lines.append(
+                        f"{u.user_id}\t{u.username or ''}\t{u.sub_status}\t{u.sub_expires:.0f}"
+                    )
+            content = "\n".join(lines)
+            db_dir = os.path.dirname(os.path.abspath(config.DB_PATH))
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            for save_dir in {db_dir, script_dir}:
+                try:
+                    with open(os.path.join(save_dir, "subs_backup.txt"), "w", encoding="utf-8") as f:
+                        f.write(content)
+                except Exception:
+                    pass
+            log.info(f"💾 subs_backup.txt финальное сохранение ({len(lines)-1} подписок)")
+        except Exception as exc:
+            log.warning(f"subs_backup final save error: {exc}")
+
     try:
         await asyncio.gather(
             dp.start_polling(bot, allowed_updates=["message", "callback_query"]),
             scanner.run_forever(),
             pd_runner.run_forever(),
             turso_sync.turso_sync_loop(config.DB_PATH),
+            _subs_backup_loop(),
         )
     finally:
         log.info("🛑 Завершение...")
         await scanner.fetcher.close()
         await bot.session.close()
-        # ─── Turso: финальный пуш перед выходом ──────────────────────────────
+        await poly.close()
+        # ─── Финальное сохранение перед выходом ──────────────────────────────
+        await _save_subs_backup_once()
         await turso_sync.turso_push(config.DB_PATH)
 
 

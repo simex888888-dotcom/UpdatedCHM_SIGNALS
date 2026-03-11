@@ -161,6 +161,24 @@ class Config:
     ]
     COINS_CACHE_HOURS = 6
 
+    # ════════════════════════════════════════════════
+    #  🎲 POLYMARKET
+    # ════════════════════════════════════════════════
+    #
+    # Просмотр маркетов и AI-анализ — бесплатно, ключи не нужны.
+    # Для торговли нужен Polygon-кошелёк с USDC и ключи Polymarket:
+    #   1. Создать кошелёк Polygon (MetaMask и др.)
+    #   2. Пополнить USDC на Polygon сети
+    #   3. Зайти на polymarket.com → Account → Export API Key
+    #   4. Прописать переменные окружения ниже
+    #
+    # Внимание: торговля доступна только ADMIN_IDS (единый кошелёк бота)
+    # ─────────────────────────────────────────────────────────────────────
+    POLY_PRIVATE_KEY    = os.getenv("POLY_PRIVATE_KEY", "")      # 0x...
+    POLY_FUNDER_ADDRESS = os.getenv("POLY_FUNDER_ADDRESS", "")   # 0x...
+    POLY_API_KEY        = os.getenv("POLY_API_KEY", "")
+    POLY_API_SECRET     = os.getenv("POLY_API_SECRET", "")
+    POLY_API_PASSPHRASE = os.getenv("POLY_API_PASSPHRASE", "")
 
     # ════════════════════════════════════════════════
     #  📋 ДЕФОЛТНЫЕ НАСТРОЙКИ НОВОГО ПОЛЬЗОВАТЕЛЯ

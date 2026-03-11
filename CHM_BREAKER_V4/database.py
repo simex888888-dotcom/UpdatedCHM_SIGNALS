@@ -220,6 +220,32 @@ CREATE TABLE IF NOT EXISTS kv (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+-- ═══════════════════════════════════════════════════════════════
+--  POLYMARKET
+-- ═══════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS poly_settings (
+    user_id     INTEGER PRIMARY KEY,
+    default_bet REAL    DEFAULT 5.0,
+    created_at  REAL    DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS poly_bets (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id       INTEGER NOT NULL,
+    market_id     TEXT    DEFAULT '',
+    question      TEXT    DEFAULT '',
+    side          TEXT    DEFAULT '',
+    amount_usdc   REAL    DEFAULT 0,
+    shares        REAL    DEFAULT 0,
+    price         REAL    DEFAULT 0,
+    order_id      TEXT    DEFAULT '',
+    status        TEXT    DEFAULT 'filled',
+    created_at    REAL    DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_poly_bets_user ON poly_bets(user_id);
 """
 
 
@@ -263,6 +289,17 @@ async def init_db(path: str):
             # Снижаем порог существующих пользователей с дефолтного 70 → 50
             # чтобы они начали получать сигналы (MIN_SIGNAL_SCORE теперь 40%)
             "UPDATE pd_users SET pd_threshold=50 WHERE pd_threshold=70",
+            # Polymarket таблицы (для существующих БД без миграции через SCHEMA)
+            """CREATE TABLE IF NOT EXISTS poly_settings (
+                user_id INTEGER PRIMARY KEY, default_bet REAL DEFAULT 5.0, created_at REAL DEFAULT 0
+            )""",
+            """CREATE TABLE IF NOT EXISTS poly_bets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
+                market_id TEXT DEFAULT '', question TEXT DEFAULT '', side TEXT DEFAULT '',
+                amount_usdc REAL DEFAULT 0, shares REAL DEFAULT 0, price REAL DEFAULT 0,
+                order_id TEXT DEFAULT '', status TEXT DEFAULT 'filled', created_at REAL DEFAULT 0
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_poly_bets_user ON poly_bets(user_id)",
         ]
         for sql in migrations:
             try:
@@ -918,3 +955,55 @@ async def db_kv_set(key: str, value: str):
             "INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value)
         )
         await db.commit()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  POLYMARKET
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def poly_get_settings(user_id: int) -> dict:
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM poly_settings WHERE user_id=?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else {"user_id": user_id, "default_bet": 5.0}
+
+
+async def poly_save_settings(user_id: int, default_bet: float):
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "INSERT INTO poly_settings(user_id, default_bet, created_at) VALUES(?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET default_bet=excluded.default_bet",
+                (user_id, default_bet, time.time()),
+            )
+            await db.commit()
+
+
+async def poly_save_bet(
+    user_id: int, market_id: str, question: str, side: str,
+    amount: float, shares: float, price: float, order_id: str,
+) -> int:
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            cur = await db.execute(
+                "INSERT INTO poly_bets"
+                "(user_id, market_id, question, side, amount_usdc, shares, price, order_id, created_at)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (user_id, market_id, question, side, amount, shares, price, order_id, time.time()),
+            )
+            await db.commit()
+            return cur.lastrowid
+
+
+async def poly_get_bets(user_id: int, limit: int = 10) -> list[dict]:
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM poly_bets WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+            (user_id, limit),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
