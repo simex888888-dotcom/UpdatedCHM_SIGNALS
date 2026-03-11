@@ -441,7 +441,8 @@ class MidScanner:
         if auto_trade and api_key and api_secret:
             max_trades = getattr(user, "max_trades_limit", 5)
             open_count = await db.db_count_open_trades(user.user_id)
-            if open_count >= max_trades:
+            # max_trades=0 означает «без лимита»
+            if max_trades > 0 and open_count >= max_trades:
                 await self.bot.send_message(
                     user.user_id,
                     f"⛔ Авто-трейд отклонён: достигнут лимит открытых сделок "

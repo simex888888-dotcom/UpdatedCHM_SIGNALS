@@ -72,7 +72,8 @@ def kb_auto_trade(user: UserSettings) -> InlineKeyboardMarkup:
           for l in [3, 5, 10, 15, 20, 25, 50]],
         _noop("── Лимит открытых сделок ───────────────────────────"),
         *[_btn(("◉ " if max_tr == n else "○ ") + f"{n} сделок", f"set_at_maxtr_{n}")
-          for n in [1, 2, 3, 5, 10, 15, 20]],
+          for n in [1, 2, 3, 5, 10, 15, 20, 30, 50]],
+        _btn(f"✏️ Своё значение (сейчас: {max_tr})", "set_at_maxtr_custom"),
         _noop("── API ключи ────────────────────────────────────────"),
         _btn(key_label,              "setup_bybit_api"),
         _btn("🧪 Проверить соединение", "test_bybit_api") if has_key else _noop("── Введи ключи для проверки ──"),

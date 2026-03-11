@@ -134,6 +134,10 @@ class SetupBybitState(StatesGroup):
     api_secret = State()
 
 
+class MaxTradesState(StatesGroup):
+    waiting = State()
+
+
 # ── Тексты ───────────────────────────────────────────
 
 def main_text(user: UserSettings, trend: dict) -> str:
@@ -3398,15 +3402,47 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_maxtr_"))
-    async def set_at_maxtr(cb: CallbackQuery):
+    async def set_at_maxtr(cb: CallbackQuery, state: FSMContext):
+        val = cb.data.split("_")[-1]
+        if val == "custom":
+            await cb.answer()
+            await state.set_state(MaxTradesState.waiting)
+            await cb.message.answer(
+                "✏️ <b>Введи лимит открытых сделок</b>\n\n"
+                "Например: <code>25</code>, <code>100</code>, <code>0</code> (без лимита)\n\n"
+                "Допустимые значения: от 0 до 9999",
+                parse_mode="HTML",
+            )
+            return
         user = await um.get_or_create(cb.from_user.id)
         try:
-            user.max_trades_limit = int(cb.data.split("_")[-1])
+            user.max_trades_limit = int(val)
         except ValueError:
             await cb.answer("Ошибка"); return
         await um.save(user)
         await cb.answer(f"Лимит сделок: {user.max_trades_limit}")
         await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+
+    @dp.message(MaxTradesState.waiting)
+    async def set_at_maxtr_custom_input(msg: Message, state: FSMContext):
+        await state.clear()
+        try:
+            val = int(msg.text.strip())
+        except (ValueError, AttributeError):
+            await msg.answer("❌ Введи целое число, например <code>25</code>", parse_mode="HTML")
+            return
+        if val < 0 or val > 9999:
+            await msg.answer("❌ Значение должно быть от 0 до 9999")
+            return
+        user = await um.get_or_create(msg.from_user.id)
+        user.max_trades_limit = val
+        await um.save(user)
+        label = "без лимита" if val == 0 else f"{val} сделок"
+        await msg.answer(
+            f"✅ Лимит открытых сделок: <b>{label}</b>",
+            parse_mode="HTML",
+            reply_markup=kb_auto_trade(user),
+        )
 
     @dp.callback_query(F.data == "setup_bybit_api")
     async def setup_bybit_api(cb: CallbackQuery, state: FSMContext):
