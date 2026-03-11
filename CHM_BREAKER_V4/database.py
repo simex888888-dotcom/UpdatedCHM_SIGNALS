@@ -140,6 +140,43 @@ CREATE TABLE IF NOT EXISTS trial_ids (
 );
 
 -- ═══════════════════════════════════════════════════════════════
+--  ПРОМОКОДЫ
+-- ═══════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS promo_codes (
+    code           TEXT    PRIMARY KEY,
+    created_by     INTEGER NOT NULL,
+    created_at     REAL    NOT NULL,
+    duration_hours INTEGER DEFAULT 2
+);
+
+-- Один промокод на пользователя (повторное использование запрещено)
+CREATE TABLE IF NOT EXISTS promo_uses (
+    user_id  INTEGER PRIMARY KEY,
+    code     TEXT    NOT NULL,
+    used_at  REAL    NOT NULL
+);
+
+-- ═══════════════════════════════════════════════════════════════
+--  РЕФЕРАЛЬНАЯ ПРОГРАММА
+-- ═══════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS referrals (
+    referred_id  INTEGER PRIMARY KEY,   -- кто пришёл по ссылке
+    referrer_id  INTEGER NOT NULL,      -- кто пригласил
+    joined_at    REAL    NOT NULL,
+    converted    INTEGER DEFAULT 0,     -- 1 = купил подписку
+    converted_at REAL
+);
+
+-- История выданных наград (каждые 5 конверсий = +30 дней)
+CREATE TABLE IF NOT EXISTS ref_rewards (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    given_at   REAL    NOT NULL
+);
+
+-- ═══════════════════════════════════════════════════════════════
 --  ПАМП/ДАМП ДЕТЕКТОР (BingX)
 -- ═══════════════════════════════════════════════════════════════
 
@@ -630,4 +667,183 @@ async def db_pd_stats() -> dict:
         "week_total":  week_row[0] or 0,
         "week_correct":week_row[1] or 0,
         "week_prec":   _prec(week_row[0], week_row[1]),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ПРОМОКОДЫ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def db_promo_create(code: str, created_by: int, duration_hours: int = 2):
+    code = code.strip().upper()
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO promo_codes(code, created_by, created_at, duration_hours)"
+                " VALUES(?, ?, ?, ?)",
+                (code, created_by, time.time(), duration_hours)
+            )
+            await db.commit()
+
+
+async def db_promo_delete(code: str) -> bool:
+    """Удаляет промокод. Возвращает True если он существовал."""
+    code = code.strip().upper()
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            cur = await db.execute(
+                "DELETE FROM promo_codes WHERE code=?", (code,)
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+
+async def db_promo_list() -> list:
+    """Список всех активных промокодов."""
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT code, created_by, duration_hours, created_at FROM promo_codes ORDER BY created_at DESC"
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def db_promo_validate_and_use(user_id: int, code: str) -> tuple:
+    """
+    Проверяет промокод и применяет его.
+    Возвращает (success: bool, message: str, duration_hours: int).
+    """
+    code = code.strip().upper()
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            # Код существует?
+            async with db.execute(
+                "SELECT duration_hours FROM promo_codes WHERE code=?", (code,)
+            ) as cur:
+                promo_row = await cur.fetchone()
+            if not promo_row:
+                return False, "❌ Промокод не найден или уже удалён", 0
+            # Пользователь уже использовал промокод?
+            async with db.execute(
+                "SELECT user_id FROM promo_uses WHERE user_id=?", (user_id,)
+            ) as cur:
+                used_row = await cur.fetchone()
+            if used_row:
+                return False, "❌ Вы уже использовали промокод ранее", 0
+            hours = promo_row[0]
+            await db.execute(
+                "INSERT INTO promo_uses(user_id, code, used_at) VALUES(?, ?, ?)",
+                (user_id, code, time.time())
+            )
+            await db.commit()
+    return True, f"✅ Промокод активирован! Доступ на {hours} ч.", hours
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  РЕФЕРАЛЬНАЯ ПРОГРАММА
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def db_ref_set(referred_id: int, referrer_id: int) -> bool:
+    """
+    Записывает реферала. Возвращает True если запись новая
+    (чтобы не перезаписывать, если пользователь уже был приглашён кем-то).
+    """
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            async with db.execute(
+                "SELECT referred_id FROM referrals WHERE referred_id=?", (referred_id,)
+            ) as cur:
+                exists = await cur.fetchone()
+            if exists:
+                return False
+            await db.execute(
+                "INSERT INTO referrals(referred_id, referrer_id, joined_at) VALUES(?,?,?)",
+                (referred_id, referrer_id, time.time())
+            )
+            await db.commit()
+    return True
+
+
+async def db_ref_on_purchase(referred_id: int) -> Optional[tuple]:
+    """
+    Вызывается когда пользователь получает подписку (/give).
+    Помечает реферал как конвертированный.
+    Возвращает (referrer_id, total_conversions) или None если реферала нет.
+    """
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            async with db.execute(
+                "SELECT referrer_id, converted FROM referrals WHERE referred_id=?",
+                (referred_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            if not row or row[1]:  # нет реферала или уже отмечен
+                return None
+            referrer_id = row[0]
+            await db.execute(
+                "UPDATE referrals SET converted=1, converted_at=? WHERE referred_id=?",
+                (time.time(), referred_id)
+            )
+            await db.commit()
+            async with db.execute(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND converted=1",
+                (referrer_id,)
+            ) as cur:
+                cnt_row = await cur.fetchone()
+            total = cnt_row[0] if cnt_row else 0
+    return referrer_id, total
+
+
+async def db_ref_check_and_claim_reward(referrer_id: int) -> bool:
+    """
+    Проверяет, положена ли реферу награда (каждые 5 конверсий = +30 дней).
+    Если да — записывает награду и возвращает True.
+    """
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            async with db.execute(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND converted=1",
+                (referrer_id,)
+            ) as cur:
+                row = await cur.fetchone()
+            conv_count = row[0] if row else 0
+            async with db.execute(
+                "SELECT COUNT(*) FROM ref_rewards WHERE user_id=?", (referrer_id,)
+            ) as cur:
+                row2 = await cur.fetchone()
+            rew_count = row2[0] if row2 else 0
+            if conv_count // 5 > rew_count:
+                await db.execute(
+                    "INSERT INTO ref_rewards(user_id, given_at) VALUES(?, ?)",
+                    (referrer_id, time.time())
+                )
+                await db.commit()
+                return True
+    return False
+
+
+async def db_ref_stats(user_id: int) -> dict:
+    """Статистика реферальной программы для пользователя."""
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            "SELECT COUNT(*), SUM(converted) FROM referrals WHERE referrer_id=?",
+            (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+        async with db.execute(
+            "SELECT COUNT(*) FROM ref_rewards WHERE user_id=?", (user_id,)
+        ) as cur:
+            rew_row = await cur.fetchone()
+    total     = row[0] or 0
+    converted = row[1] or 0
+    rewards   = rew_row[0] or 0
+    # Сколько ещё нужно до следующей награды
+    next_at   = ((rewards + 1) * 5)
+    until_next = max(0, next_at - converted)
+    return {
+        "total":      total,
+        "converted":  converted,
+        "rewards":    rewards,
+        "until_next": until_next,
     }
