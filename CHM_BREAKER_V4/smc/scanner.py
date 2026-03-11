@@ -272,10 +272,17 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
                             sig.symbol, sig.direction,
                             sig.entry, sig.sl, sig.tp1,
                             risk_pct, leverage,
+                            tp2=sig.tp2, tp3=sig.tp3,
                         )
+                        # Сохраняем pos_idx чтобы BE-монитор корректно переносил стоп
+                        if result.get("ok") and "pos_idx" in result:
+                            await db.db_update_trade_pos_idx(
+                                trade_id, result["pos_idx"]
+                            )
                         trade_msg = bybit_trader.format_trade_result(
                             result, sig.direction, sig.symbol,
                             sig.entry, sig.sl, sig.tp1, risk_pct, leverage,
+                            tp2=sig.tp2, tp3=sig.tp3,
                         )
                         await bot.send_message(user.user_id, trade_msg,
                                                parse_mode="HTML", protect_content=True)

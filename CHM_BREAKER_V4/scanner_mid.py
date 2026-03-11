@@ -708,6 +708,36 @@ class MidScanner:
                 log.debug(f"BE monitor error: {e}")
             await asyncio.sleep(60)
 
+    @staticmethod
+    def _trade_result_from_exit(trade: dict, exit_price: float) -> tuple[str, float]:
+        """Определяет результат сделки (TP1/TP2/TP3/SL) по цене выхода."""
+        direction = trade.get("direction", "LONG")
+        entry     = float(trade.get("entry", 0))
+        sl        = float(trade.get("sl",    0))
+        tp1       = float(trade.get("tp1",   0))
+        tp2       = float(trade.get("tp2",   0))
+        tp3       = float(trade.get("tp3",   0))
+        risk      = abs(entry - sl)
+        if risk <= 0 or entry <= 0:
+            return "CLOSED", 0.0
+        tol = 0.012   # 1.2% допуск (учитывает проскальзывание и маркет-прайс)
+        if direction == "LONG":
+            if tp3 > 0 and exit_price >= tp3 * (1 - tol):
+                return "TP3", round((tp3 - entry) / risk, 2)
+            if tp2 > 0 and exit_price >= tp2 * (1 - tol):
+                return "TP2", round((tp2 - entry) / risk, 2)
+            if tp1 > 0 and exit_price >= tp1 * (1 - tol):
+                return "TP1", round((tp1 - entry) / risk, 2)
+            return "SL",  round((entry - exit_price) / risk, 2)
+        else:
+            if tp3 > 0 and exit_price <= tp3 * (1 + tol):
+                return "TP3", round((entry - tp3) / risk, 2)
+            if tp2 > 0 and exit_price <= tp2 * (1 + tol):
+                return "TP2", round((entry - tp2) / risk, 2)
+            if tp1 > 0 and exit_price <= tp1 * (1 + tol):
+                return "TP1", round((entry - tp1) / risk, 2)
+            return "SL",  round((exit_price - entry) / risk, 2)
+
     async def _check_breakevens(self):
         import bybit_trader
         users = await self.um.get_active_auto_trade_users()
@@ -716,10 +746,10 @@ class MidScanner:
             api_secret = getattr(user, "bybit_api_secret", "")
             if not api_key or not api_secret:
                 continue
-            trades = await db.db_get_open_trades_for_be(user.user_id)
+            # Все незакрытые сделки (не только be_set=0)
+            trades = await db.db_get_all_open_trades(user.user_id)
             if not trades:
                 continue
-            # Получаем открытые позиции с Bybit (mark price)
             try:
                 positions = await bybit_trader.get_positions(api_key, api_secret)
             except Exception:
@@ -727,16 +757,73 @@ class MidScanner:
             pos_map = {p["symbol"]: p for p in positions if float(p.get("size", 0)) > 0}
 
             for trade in trades:
-                bb_sym = bybit_trader._to_bybit_symbol(trade["symbol"])
-                pos    = pos_map.get(bb_sym)
+                bb_sym    = bybit_trader._to_bybit_symbol(trade["symbol"])
+                pos       = pos_map.get(bb_sym)
+                direction = trade.get("direction", "LONG")
+                entry     = float(trade.get("entry", 0))
+
                 if not pos:
-                    continue   # позиция закрыта — не трогаем
+                    # Позиция закрыта — дождёмся минуты после открытия чтобы избежать
+                    # ложного срабатывания сразу после создания сделки
+                    if time.time() - float(trade.get("created_at", 0)) < 60:
+                        continue
+                    # Запрашиваем историю закрытых позиций по символу
+                    try:
+                        closed = await bybit_trader.get_closed_pnl(
+                            api_key, api_secret, trade["symbol"]
+                        )
+                    except Exception:
+                        closed = []
+
+                    # Ищем запись, которая соответствует нашей сделке:
+                    # side совпадает, закрыта позже создания
+                    expected_side = "Buy" if direction == "LONG" else "Sell"
+                    created_ms    = float(trade.get("created_at", 0)) * 1000
+                    matched_exit  = None
+                    for rec in closed:
+                        if rec.get("side") != expected_side:
+                            continue
+                        if float(rec.get("updatedTime", 0)) < created_ms:
+                            continue
+                        matched_exit = float(rec.get("avgExitPrice", 0))
+                        break
+
+                    if matched_exit and matched_exit > 0:
+                        result_str, result_rr = self._trade_result_from_exit(
+                            trade, matched_exit
+                        )
+                    else:
+                        result_str, result_rr = "CLOSED", 0.0
+
+                    await db.db_set_trade_result(
+                        trade["trade_id"], result_str, result_rr
+                    )
+                    sym_label = trade["symbol"].replace("-USDT-SWAP", "").replace("-USDT", "")
+                    emoji = "✅" if result_str.startswith("TP") else ("🛑" if result_str == "SL" else "📋")
+                    rr_text = f"  R:R {result_rr:+.2f}" if result_rr != 0 else ""
+                    try:
+                        await self.bot.send_message(
+                            user.user_id,
+                            f"{emoji} <b>Сделка закрыта: {result_str}</b>{rr_text}\n\n"
+                            f"💎 {sym_label}  |  {direction}\n"
+                            f"💰 Вход: <code>{entry}</code>\n"
+                            f"📤 Выход: <code>{matched_exit or '—'}</code>",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+                    log.info(f"Trade closed: {bb_sym} {direction} → {result_str}{rr_text} "
+                             f"(uid={user.user_id})")
+                    continue
+
+                # ── Позиция ещё открыта: проверяем безубыток ──────────────
+                if trade.get("be_set", 0):
+                    continue   # BE уже выставлен
+
                 mark_price = float(pos.get("markPrice", 0))
                 if mark_price <= 0:
                     continue
                 tp1_price = float(trade.get("tp1", 0))
-                entry     = float(trade.get("entry", 0))
-                direction = trade.get("direction", "LONG")
                 if tp1_price <= 0 or entry <= 0:
                     continue
 
@@ -747,7 +834,6 @@ class MidScanner:
                 if not tp1_reached:
                     continue
 
-                # Переносим SL в БУ
                 pos_idx = int(trade.get("pos_idx", 0))
                 result  = await bybit_trader.set_breakeven(
                     api_key, api_secret,
