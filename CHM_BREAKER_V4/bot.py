@@ -138,11 +138,13 @@ async def main():
     # Резервная копия БД перед каждым запуском (5 ротаций)
     _backup_db(config.DB_PATH)
 
-    # ─── Turso: восстанавливаем БД из облака (если настроено) ────────────────
-    await turso_sync.turso_pull(config.DB_PATH)
-
+    # init_db сначала — создаёт таблицы (нужны для turso_pull)
     log.info("⏳ Инициализация SQLite...")
     await database.init_db(config.DB_PATH)
+
+    # ─── Turso: восстанавливаем данные из облака (ПОСЛЕ init_db) ─────────────
+    # HTTP API читает данные из Turso и пишет в уже созданные таблицы.
+    await turso_sync.turso_pull(config.DB_PATH)
 
     log.info("⏳ Инициализация кэша...")
     cache.init_cache(max_symbols=config.CACHE_MAX_SYMBOLS)
