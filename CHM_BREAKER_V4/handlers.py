@@ -148,7 +148,7 @@ def main_text(user: UserSettings, trend: dict) -> str:
     if strategy == "SMC":
         long_s  = "🟢 ЛОНГ" if getattr(user, "smc_long_active",  False) else "⚫ лонг"
         short_s = "🟢 ШОРТ" if getattr(user, "smc_short_active", False) else "⚫ шорт"
-        both_s  = "🟢 ОБА"  if (user.active and user.scan_mode == "smc_both") else "⚫ оба"
+        both_s  = "🟢 ОБА"  if (getattr(user, "smc_long_active", False) and getattr(user, "smc_short_active", False)) else "⚫ оба"
         cfg     = user.get_smc_cfg()
         return (
             "⚡ <b>CHM BREAKER BOT — 🧠 Smart Money</b>" + NL + NL +

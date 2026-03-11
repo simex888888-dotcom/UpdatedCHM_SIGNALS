@@ -106,7 +106,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
     if strategy == "SMC":
         long_s  = "🟢" if getattr(user, "smc_long_active",  False) else "⚫"
         short_s = "🟢" if getattr(user, "smc_short_active", False) else "⚫"
-        both_s  = "🟢" if (user.active and user.scan_mode == "smc_both") else "⚫"
+        both_s  = "🟢" if (getattr(user, "smc_long_active", False) and getattr(user, "smc_short_active", False)) else "⚫"
         return InlineKeyboardMarkup(inline_keyboard=[
             _btn(_quick_start_label(user),                                         "quick_start"),
             _btn(long_s  + " 📈 SMC ЛОНГ — только лонговые сигналы",             "mode_smc_long"),
@@ -662,7 +662,7 @@ def kb_smc_mode_short(user: UserSettings) -> InlineKeyboardMarkup:
 
 def kb_smc_mode_both(user: UserSettings) -> InlineKeyboardMarkup:
     cfg    = user.get_smc_cfg()
-    active = user.active and user.scan_mode == "smc_both"
+    active = getattr(user, "smc_long_active", False) and getattr(user, "smc_short_active", False)
     status = "🟢 SMC ОБА ВКЛЮЧЁН — нажми чтобы остановить" if active \
            else "🔴 SMC ОБА ВЫКЛЮЧЕН — нажми чтобы запустить"
     tf_label = {"15m":"15 мин","1H":"1 час ⭐","4H":"4 часа"}.get(cfg.tf_key, cfg.tf_key)
