@@ -6,3 +6,4 @@ numpy==1.26.3
 certifi==2024.2.2
 matplotlib
 pybit>=5.14.0
+libsql-experimental
