@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import sqlite3
+from functools import partial
 
 import aiohttp
 
@@ -130,21 +131,25 @@ async def turso_pull(db_path: str) -> bool:
             log.info("⬇️  Turso: облако пустое, начинаем с чистой БД")
             return False
 
-        with sqlite3.connect(db_path) as conn:
-            for table, rows in zip(SYNC_TABLES, results):
-                if not rows:
-                    continue
-                cols = list(rows[0].keys())
-                col_names = ", ".join(cols)
-                placeholders = ", ".join(["?" for _ in cols])
-                conn.execute(f"DELETE FROM {table}")
-                for row in rows:
-                    vals = [row[c] for c in cols]
-                    conn.execute(
-                        f"INSERT OR REPLACE INTO {table} ({col_names}) VALUES ({placeholders})",
-                        vals,
-                    )
-            conn.commit()
+        def _write_locally():
+            with sqlite3.connect(db_path, timeout=30) as conn:
+                for table, rows in zip(SYNC_TABLES, results):
+                    if not rows:
+                        continue
+                    cols = list(rows[0].keys())
+                    col_names = ", ".join(cols)
+                    placeholders = ", ".join(["?" for _ in cols])
+                    conn.execute(f"DELETE FROM {table}")
+                    for row in rows:
+                        vals = [row[c] for c in cols]
+                        conn.execute(
+                            f"INSERT OR REPLACE INTO {table} ({col_names}) VALUES ({placeholders})",
+                            vals,
+                        )
+                conn.commit()
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _write_locally)
 
         log.info(f"✅ Turso: восстановлено {total} строк из облака")
         return True
@@ -162,16 +167,20 @@ async def turso_push(db_path: str) -> bool:
         return False
 
     try:
-        # Читаем локальный SQLite
-        tables_data: dict[str, list[dict]] = {}
-        with sqlite3.connect(db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            for table in SYNC_TABLES:
-                try:
-                    rows = [dict(r) for r in conn.execute(f"SELECT * FROM {table}")]
-                    tables_data[table] = rows
-                except Exception:
-                    tables_data[table] = []
+        # Читаем локальный SQLite в executor чтобы не блокировать event loop
+        def _read_locally():
+            data: dict[str, list[dict]] = {}
+            with sqlite3.connect(db_path, timeout=30) as conn:
+                conn.row_factory = sqlite3.Row
+                for table in SYNC_TABLES:
+                    try:
+                        data[table] = [dict(r) for r in conn.execute(f"SELECT * FROM {table}")]
+                    except Exception:
+                        data[table] = []
+            return data
+
+        loop = asyncio.get_event_loop()
+        tables_data: dict[str, list[dict]] = await loop.run_in_executor(None, _read_locally)
 
         total = sum(len(v) for v in tables_data.values())
 
