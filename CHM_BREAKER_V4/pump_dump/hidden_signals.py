@@ -57,7 +57,7 @@ class HiddenSignalsCache:
     """Кэш REST-данных (funding, OI, L/S) с периодическим обновлением."""
 
     def __init__(self):
-        self._funding:    dict[str, list] = defaultdict(list)  # [rate, ts]
+        self._funding:    dict[str, deque] = defaultdict(lambda: deque(maxlen=2))  # deque[(rate, ts)]
         self._oi_history: dict[str, deque] = defaultdict(lambda: deque(maxlen=15))
         self._ls_ratio:   dict[str, float] = {}
         self._last_funding_fetch: float = 0
@@ -89,7 +89,7 @@ class HiddenSignalsCache:
                                      timeout=aiohttp.ClientTimeout(total=5)) as r:
                         data = await r.json()
                     rate = float(data.get("data", {}).get("fundingRate", 0))
-                    self._funding[sym] = [rate, time.time()]
+                    self._funding[sym].append((rate, time.time()))
                 except Exception:
                     pass
                 await asyncio.sleep(0.05)
@@ -127,10 +127,12 @@ class HiddenSignalsCache:
 
     def get_funding(self, sym: str) -> tuple[float, float]:
         """Возвращает (current_rate, prev_rate)."""
-        hist = self._funding.get(sym, [])
+        hist = self._funding.get(sym)
         if not hist:
             return 0.0, 0.0
-        return hist[0], hist[0]  # упрощённо: используем последний
+        current_rate = hist[-1][0]
+        prev_rate    = hist[0][0]  # первая запись (предыдущая если их 2, иначе та же)
+        return current_rate, prev_rate
 
     def get_oi_change_10m(self, sym: str) -> float:
         """Изменение OI за последние 10 записей (%)."""
