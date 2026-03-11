@@ -82,6 +82,7 @@ class MarketMonitor:
         while self._running:
             try:
                 await self._fetch_historical_candles()
+                await self._push_initial_events()
                 await self._ws_loop()
                 backoff = 1
             except Exception as exc:
@@ -131,6 +132,19 @@ class MarketMonitor:
                 await asyncio.sleep(0.5)
         loaded = sum(1 for s in self._symbols if len(self._candles[s]) >= 10)
         log.info(f"📊 PD Monitor: исторические свечи загружены для {loaded}/{len(self._symbols)} монет")
+
+    async def _push_initial_events(self):
+        """Прогрев: сразу публикуем события из исторических данных.
+
+        Без этого _current_scores пуст до получения первого WS-события (до 60с),
+        и пользователь видит «Анализ ещё не завершён».
+        """
+        pushed = 0
+        for sym in self._symbols:
+            if len(self._candles[sym]) >= 30:
+                await self._push_event(sym)
+                pushed += 1
+        log.info(f"🔥 PD Monitor: прогрев завершён, отправлено {pushed} начальных событий")
 
     async def _load_history_one(self, session, url, symbol):
         try:
