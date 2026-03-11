@@ -16,6 +16,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import database
 import cache
 import turso_sync
+import cache_gc
 from config import Config
 from user_manager import UserManager
 from scanner_mid import MidScanner
@@ -315,6 +316,7 @@ async def main():
             pd_runner.run_forever(),
             turso_sync.turso_sync_loop(config.DB_PATH),
             _subs_backup_loop(),
+            cache_gc.gc_loop(),
         )
     finally:
         log.info("🛑 Завершение...")
