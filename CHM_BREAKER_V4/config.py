@@ -23,9 +23,7 @@ class Config:
     #  🔑 TELEGRAM
     # ════════════════════════════════════════════════
 
-    # Задайте в переменной окружения TELEGRAM_TOKEN
-    # Пример: export TELEGRAM_TOKEN="123456:ABCdef..."
-    TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+    TELEGRAM_TOKEN = ("8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k")
 
     # Твой Telegram ID — станешь администратором
     # Узнать: написать @userinfobot
