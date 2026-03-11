@@ -22,6 +22,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
 
 import database as db
+import turso_sync as _turso
 from user_manager import UserManager, UserSettings, TradeCfg, SMCUserCfg
 from keyboards import (
     kb_main, kb_back, kb_back_photo, kb_settings, kb_notify, kb_subscribe,
@@ -1372,6 +1373,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.sub_expires = _time.time() + hours * 3600
         user.sub_status  = "active"
         await um.save(user)
+        asyncio.create_task(_turso.turso_push(config.DB_PATH))
         await msg.answer(
             f"✅ <b>Промокод принят!</b>\n\n"
             f"Вам открыт тестовый доступ на <b>{hours} часа</b>.\n"
@@ -3676,7 +3678,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await msg.answer("❌ Пользователь " + str(tid) + " не найден"); return
         user.grant_access(days)
         await um.save(user)
-        await _save_subs_backup()   # автосохранение на диск
+        await _save_subs_backup()                         # автосохранение на диск
+        asyncio.create_task(_turso.turso_push(config.DB_PATH))  # немедленный пуш в Turso
         await msg.answer("✅ Доступ выдан @" + str(user.username or tid) + " на " + str(days) + " дней")
         try:
             await bot.send_message(
@@ -3714,6 +3717,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.sub_status = "expired"; user.sub_expires = 0
         user.active = False; user.long_active = False; user.short_active = False
         await um.save(user)
+        asyncio.create_task(_turso.turso_push(config.DB_PATH))
         await msg.answer("✅ Доступ отозван у @" + str(user.username or tid))
 
     @dp.message(Command("ban"))
@@ -3728,6 +3732,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.sub_status = "banned"; user.active = False
         user.long_active = False; user.short_active = False
         await um.save(user)
+        asyncio.create_task(_turso.turso_push(config.DB_PATH))
         await msg.answer("🚫 @" + str(user.username or tid) + " заблокирован")
 
     @dp.message(Command("unban"))

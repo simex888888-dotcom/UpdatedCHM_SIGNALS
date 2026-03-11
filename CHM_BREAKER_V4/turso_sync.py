@@ -50,6 +50,11 @@ def _do_sync(db_path: str) -> bool:
         conn = libsql.connect(db_path, sync_url=TURSO_URL, auth_token=TURSO_TOKEN)
         conn.sync()
         conn.close()
+        # WAL checkpoint: убеждаемся что данные из WAL записаны в основной файл
+        # и стандартный sqlite3 / aiosqlite видит актуальную БД.
+        import sqlite3
+        with sqlite3.connect(db_path) as ck:
+            ck.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         return True
     except Exception as exc:
         log.warning(f"Turso sync error: {exc}")
@@ -92,12 +97,19 @@ async def turso_sync_loop(db_path: str):
     """
     Фоновая задача: пушит БД в Turso каждые SYNC_INTERVAL секунд.
     Запускать через asyncio.gather() вместе с остальными задачами бота.
+
+    ВАЖНО: первый пуш происходит через 15 секунд после старта (не через
+    SYNC_INTERVAL), чтобы гарантировать сохранение данных даже если контейнер
+    будет убит раньше чем через SYNC_INTERVAL (bothost.ru убивает через SIGKILL).
     """
     if not _is_configured():
         log.info("Turso sync loop отключён (TURSO_URL/TURSO_TOKEN не заданы)")
         return
 
-    log.info(f"☁️  Turso sync loop запущен (интервал {SYNC_INTERVAL}с)")
+    log.info(f"☁️  Turso sync loop запущен (интервал {SYNC_INTERVAL}с, первый пуш через 15с)")
+    # Первый пуш — сразу после инициализации бота, не ждём SYNC_INTERVAL
+    await asyncio.sleep(15)
+    await turso_push(db_path)
     while True:
         await asyncio.sleep(SYNC_INTERVAL)
         await turso_push(db_path)
