@@ -84,7 +84,7 @@ def _pd_main_text(subscribed: bool, threshold: int) -> str:
         f"Порог уверенности: <b>{threshold}%</b>\n\n"
         "Система мониторит топ-50 монет на BingX и предупреждает\n"
         "о вероятном памп/дамп событии <b>ДО его начала</b>.\n\n"
-        "Каждый сигнал подтверждается минимум 4 независимыми слоями:\n"
+        "Каждый сигнал подтверждается минимум 3 независимыми слоями:\n"
         "📦 Объём  •  🌊 CVD  •  📖 Стакан  •  💸 Funding\n"
         "📉 OI  •  🤖 ML модель  •  📊 Цена  •  ↔️ Спред"
     )
@@ -237,7 +237,7 @@ def register_pd_handlers(dp: Dispatcher, bot: Bot, runner_getter):
         from pump_dump.hidden_signals import _cache
         NL   = "\n"
         rows = sorted(
-            [(sym, v[0]) for sym, v in _cache._funding.items() if v],
+            [(sym, v[-1][0]) for sym, v in _cache._funding.items() if v],
             key=lambda x: abs(x[1]), reverse=True
         )[:10]
         if not rows:
