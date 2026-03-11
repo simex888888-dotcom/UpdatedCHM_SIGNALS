@@ -14,6 +14,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 import database
 import cache
+import turso_sync
 from config import Config
 from user_manager import UserManager
 from scanner_mid import MidScanner
@@ -118,6 +119,9 @@ async def main():
     # Резервная копия БД перед каждым запуском (5 ротаций)
     _backup_db(config.DB_PATH)
 
+    # ─── Turso: восстанавливаем БД из облака (если настроено) ────────────────
+    await turso_sync.turso_pull(config.DB_PATH)
+
     log.info("⏳ Инициализация SQLite...")
     await database.init_db(config.DB_PATH)
 
@@ -205,11 +209,14 @@ async def main():
             dp.start_polling(bot, allowed_updates=["message", "callback_query"]),
             scanner.run_forever(),
             pd_runner.run_forever(),
+            turso_sync.turso_sync_loop(config.DB_PATH),
         )
     finally:
         log.info("🛑 Завершение...")
         await scanner.fetcher.close()
         await bot.session.close()
+        # ─── Turso: финальный пуш перед выходом ──────────────────────────────
+        await turso_sync.turso_push(config.DB_PATH)
 
 
 if __name__ == "__main__":
