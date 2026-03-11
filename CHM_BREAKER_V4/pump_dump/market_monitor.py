@@ -170,8 +170,12 @@ class MarketMonitor:
                         if msg.type == aiohttp.WSMsgType.BINARY:
                             await self._handle_raw(msg.data)
                         elif msg.type == aiohttp.WSMsgType.TEXT:
-                            if msg.data == "Ping":
+                            text = msg.data
+                            if text in ("Ping", "ping"):
                                 await ws.send_str("Pong")
+                            elif text.startswith("{"):
+                                # BingX иногда шлёт plaintext JSON вместо gzip
+                                await self._handle_text(text)
                         elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
                             break
                 finally:
@@ -200,9 +204,24 @@ class MarketMonitor:
 
     async def _handle_raw(self, raw: bytes):
         try:
-            data = json.loads(gzip.decompress(raw))
+            try:
+                text = gzip.decompress(raw).decode("utf-8")
+            except Exception:
+                # Не gzip — пробуем как plaintext
+                text = raw.decode("utf-8", errors="ignore")
+            data = json.loads(text)
         except Exception:
             return
+        await self._dispatch(data)
+
+    async def _handle_text(self, text: str):
+        try:
+            data = json.loads(text)
+        except Exception:
+            return
+        await self._dispatch(data)
+
+    async def _dispatch(self, data: dict):
         dtype = data.get("dataType", "")
         if not dtype:
             return
@@ -237,8 +256,11 @@ class MarketMonitor:
         """Обновляем свечу. Если свеча закрылась — пушим событие в очередь."""
         if not data:
             return
+        # BingX использует 't' (open time) как идентификатор периода.
+        # 'T' может быть close time в некоторых версиях API — берём оба.
+        ts_raw = data.get("t") or data.get("T") or 0
         candle = Candle(
-            ts=int(data.get("T", 0)),
+            ts=int(ts_raw),
             open=float(data.get("o", 0)),
             high=float(data.get("h", 0)),
             low=float(data.get("l", 0)),
