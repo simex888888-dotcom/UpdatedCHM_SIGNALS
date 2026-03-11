@@ -800,6 +800,18 @@ class MidScanner:
                     else:
                         result_str, result_rr = "CLOSED", 0.0
 
+                    # Отменяем оставшиеся TP-ордера (reduce-only могут висеть после SL)
+                    try:
+                        cancel_res = await bybit_trader.cancel_all_orders(
+                            api_key, api_secret, trade["symbol"]
+                        )
+                        if cancel_res.get("ok"):
+                            n = cancel_res.get("cancelled", 0)
+                            if n:
+                                log.info(f"Cancelled {n} open orders for {bb_sym} after close")
+                    except Exception as e_cancel:
+                        log.debug(f"cancel_all_orders {bb_sym}: {e_cancel}")
+
                     await db.db_set_trade_result(
                         trade["trade_id"], result_str, result_rr
                     )
