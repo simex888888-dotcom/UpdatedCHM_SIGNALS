@@ -215,7 +215,12 @@ CREATE TABLE IF NOT EXISTS pd_train_data (
     actual_label  INTEGER,   -- 0=neutral,1=pump,2=dump
     ts            REAL    NOT NULL
 );
-"""
+
+CREATE TABLE IF NOT EXISTS kv (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 
 
 async def init_db(path: str):
@@ -896,3 +901,20 @@ async def db_ref_stats(user_id: int) -> dict:
         "rewards":    rewards,
         "until_next": until_next,
     }
+
+
+# ── KV-хранилище (общие настройки бота) ──────────────────────────────────
+
+async def db_kv_get(key: str) -> Optional[str]:
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute("SELECT value FROM kv WHERE key=?", (key,)) as cur:
+            row = await cur.fetchone()
+            return row[0] if row else None
+
+
+async def db_kv_set(key: str, value: str):
+    async with aiosqlite.connect(_db_path) as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value)
+        )
+        await db.commit()
