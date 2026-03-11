@@ -13,6 +13,7 @@ MIN_VOLUME_24H_USDT = 50_000      # минимальный 24h объём — ф
 CANDLE_BUFFER       = 200         # свечей в буфере на монету
 WS_RECONNECT_MAX    = 60          # максимальная задержка реконнекта (сек)
 HEARTBEAT_INTERVAL  = 5           # интервал pong (сек)
+WS_SYMBOLS_PER_CONN = 300         # монет на одно WS-соединение (300×3=900 подписок < лимит BingX 1024)
 FUNDING_FETCH_EVERY = 300         # интервал опроса funding rate (сек)
 OI_FETCH_EVERY      = 60          # интервал опроса Open Interest (сек)
 
