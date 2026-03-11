@@ -236,18 +236,68 @@ async def main():
     log.info(f"   API conc.:   {config.API_CONCURRENCY}")
     log.info(f"   Кэш монет:   {config.CACHE_MAX_SYMBOLS} символов")
 
+    async def _subs_backup_loop():
+        """Периодически сохраняет subs_backup.txt рядом с БД (каждые 10 мин).
+
+        Файл используется _auto_restore_subs() при следующем старте —
+        это дополнительная защита на случай если Turso недоступен.
+        """
+        INTERVAL = 600  # 10 минут
+        await asyncio.sleep(30)  # первый цикл через 30 с после старта
+        while True:
+            try:
+                users = await um.all_users()
+                import datetime
+                lines = [f"# Backup: {datetime.datetime.utcnow().isoformat()}"]
+                now = time.time()
+                for u in users:
+                    if u.sub_status in ("active", "trial") and u.sub_expires > now:
+                        lines.append(
+                            f"{u.user_id}\t{u.username or ''}\t{u.sub_status}\t{u.sub_expires:.0f}"
+                        )
+                db_dir = os.path.dirname(os.path.abspath(config.DB_PATH))
+                path = os.path.join(db_dir, "subs_backup.txt")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines))
+                log.debug(f"💾 subs_backup.txt обновлён ({len(lines)-1} подписок)")
+            except Exception as exc:
+                log.warning(f"subs_backup_loop error: {exc}")
+            await asyncio.sleep(INTERVAL)
+
+    async def _save_subs_backup_once():
+        """Однократное сохранение subs_backup.txt (используется при завершении)."""
+        try:
+            users = await um.all_users()
+            import datetime
+            lines = [f"# Backup: {datetime.datetime.utcnow().isoformat()}"]
+            now = time.time()
+            for u in users:
+                if u.sub_status in ("active", "trial") and u.sub_expires > now:
+                    lines.append(
+                        f"{u.user_id}\t{u.username or ''}\t{u.sub_status}\t{u.sub_expires:.0f}"
+                    )
+            db_dir = os.path.dirname(os.path.abspath(config.DB_PATH))
+            path = os.path.join(db_dir, "subs_backup.txt")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+            log.info(f"💾 subs_backup.txt финальное сохранение ({len(lines)-1} подписок)")
+        except Exception as exc:
+            log.warning(f"subs_backup final save error: {exc}")
+
     try:
         await asyncio.gather(
             dp.start_polling(bot, allowed_updates=["message", "callback_query"]),
             scanner.run_forever(),
             pd_runner.run_forever(),
             turso_sync.turso_sync_loop(config.DB_PATH),
+            _subs_backup_loop(),
         )
     finally:
         log.info("🛑 Завершение...")
         await scanner.fetcher.close()
         await bot.session.close()
-        # ─── Turso: финальный пуш перед выходом ──────────────────────────────
+        # ─── Финальное сохранение перед выходом ──────────────────────────────
+        await _save_subs_backup_once()
         await turso_sync.turso_push(config.DB_PATH)
 
 

@@ -3717,6 +3717,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.sub_status = "expired"; user.sub_expires = 0
         user.active = False; user.long_active = False; user.short_active = False
         await um.save(user)
+        await _save_subs_backup()                          # обновляем бэкап
         asyncio.create_task(_turso.turso_push(config.DB_PATH))
         await msg.answer("✅ Доступ отозван у @" + str(user.username or tid))
 
