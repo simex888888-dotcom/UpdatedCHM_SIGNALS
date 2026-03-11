@@ -386,17 +386,24 @@ async def db_upsert_user(data: dict):
 
 async def db_get_active_users() -> list[dict]:
     now = time.time()
-    async with aiosqlite.connect(_db_path) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute(
-            """SELECT * FROM users
-               WHERE sub_status IN ('trial','active') AND sub_expires > ?
-               AND (active=1 OR long_active=1 OR short_active=1
-                    OR smc_long_active=1 OR smc_short_active=1)""",
-            (now,)
-        ) as cur:
-            rows = await cur.fetchall()
-            return [dict(r) for r in rows]
+    for attempt in range(3):
+        try:
+            async with aiosqlite.connect(_db_path, timeout=30) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute(
+                    """SELECT * FROM users
+                       WHERE sub_status IN ('trial','active') AND sub_expires > ?
+                       AND (active=1 OR long_active=1 OR short_active=1
+                            OR smc_long_active=1 OR smc_short_active=1)""",
+                    (now,)
+                ) as cur:
+                    rows = await cur.fetchall()
+                    return [dict(r) for r in rows]
+        except Exception as e:
+            if attempt == 2:
+                raise
+            log.warning(f"db_get_active_users retry {attempt + 1}/3: {e}")
+            await asyncio.sleep(1 + attempt)
 
 
 async def db_get_all_users() -> list[dict]:
