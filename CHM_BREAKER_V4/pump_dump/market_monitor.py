@@ -21,7 +21,7 @@ import pandas as pd
 from pump_dump.pd_config import (
     BINGX_WS_URL, BINGX_REST_FUTURES,
     MIN_VOLUME_24H_USDT,
-    CANDLE_BUFFER, WS_RECONNECT_MAX, HEARTBEAT_INTERVAL,
+    CANDLE_BUFFER, WS_RECONNECT_MAX, HEARTBEAT_INTERVAL, WS_SYMBOLS_PER_CONN,
 )
 
 log = logging.getLogger("CHM.PD.Monitor")
@@ -174,14 +174,33 @@ class MarketMonitor:
     # ─── WebSocket цикл ──────────────────────────────────────────────────────
 
     async def _ws_loop(self):
+        """Разбиваем символы на чанки и держим отдельное WS-соединение на каждый.
+
+        BingX ограничивает одно соединение ~1024 подписками.
+        При 3 стримах на монету (kline + depth + trade) максимум ~340 монет/коннект.
+        WS_SYMBOLS_PER_CONN = 300 даёт 900 подписок — запас безопасности.
+        Если любой коннект падает — исключение выходит наружу, run_forever перезапускает всё.
+        """
+        chunks = [
+            self._symbols[i: i + WS_SYMBOLS_PER_CONN]
+            for i in range(0, len(self._symbols), WS_SYMBOLS_PER_CONN)
+        ]
+        log.info(f"🔌 PD WS: {len(self._symbols)} монет → {len(chunks)} соединений")
+        await asyncio.gather(*[
+            self._ws_connection(chunk, conn_id)
+            for conn_id, chunk in enumerate(chunks)
+        ])
+
+    async def _ws_connection(self, symbols: list[str], conn_id: int):
+        """Одно WS-соединение для заданного списка символов."""
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(
                 BINGX_WS_URL,
                 heartbeat=HEARTBEAT_INTERVAL,
                 timeout=aiohttp.ClientTimeout(total=None),
             ) as ws:
-                log.info("✅ PD WS подключён")
-                await self._subscribe_all(ws)
+                log.info(f"✅ PD WS[{conn_id}] подключён ({len(symbols)} монет)")
+                await self._subscribe_chunk(ws, symbols, conn_id)
                 heartbeat_task = asyncio.create_task(self._heartbeat(ws))
                 try:
                     async for msg in ws:
@@ -194,10 +213,9 @@ class MarketMonitor:
                             if text in ("Ping", "ping"):
                                 await ws.send_str("Pong")
                             elif text.startswith("{"):
-                                # BingX иногда шлёт plaintext JSON вместо gzip
                                 await self._handle_text(text)
                         elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
-                            break
+                            raise ConnectionError(f"WS[{conn_id}] closed")
                 finally:
                     heartbeat_task.cancel()
 
@@ -210,10 +228,11 @@ class MarketMonitor:
             except Exception:
                 break
 
-    async def _subscribe_all(self, ws):
-        """Подписываемся на kline_1m, depth20, trade для каждой монеты."""
-        uid = 0
-        for sym in self._symbols:
+    async def _subscribe_chunk(self, ws, symbols: list[str], conn_id: int = 0):
+        """Подписываемся на kline_1m, depth20, trade для переданного списка монет."""
+        uid_base = conn_id * WS_SYMBOLS_PER_CONN * 3
+        uid = uid_base
+        for sym in symbols:
             for stream in (f"{sym}@kline_1m", f"{sym}@depth20", f"{sym}@trade"):
                 uid += 1
                 payload = json.dumps({"id": str(uid), "reqType": "sub", "dataType": stream})
