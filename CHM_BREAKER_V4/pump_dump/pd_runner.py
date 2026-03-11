@@ -53,6 +53,7 @@ class PDRunner:
             self._process_loop(),
             self._retrain_loop(),
             self._outcome_loop(),
+            self._hidden_data_loop(),
         )
 
     # ── Основной цикл обработки событий ──────────────────────────────────────
@@ -168,6 +169,30 @@ class PDRunner:
             await db.db_pd_save_train(sig_id, (1 if direction == "PUMP" else 2) if correct else 0)
         except Exception as e:
             log.debug(f"PD outcome {symbol}: {e}")
+
+    # ── Независимый цикл обновления Funding/OI/L&S ───────────────────────────
+
+    async def _hidden_data_loop(self):
+        """Обновляет funding/OI/L&S независимо от обработки событий.
+
+        Без этого данные funding появлялись только после обработки первого
+        события из очереди, что могло занять несколько секунд. Кнопка
+        «Аномальный Funding Rate» показывала «загружается» при любом клике.
+        """
+        from pump_dump.hidden_signals import _cache
+        from pump_dump.pd_config import FUNDING_FETCH_EVERY
+        # Ждём пока монитор загрузит список монет (обычно 5-15с)
+        while not self.monitor.get_symbols():
+            await asyncio.sleep(1)
+        log.info("💸 PD: первичная загрузка Funding/OI/L&S…")
+        symbols = self.monitor.get_symbols()
+        await _cache.refresh_if_needed(symbols)
+        log.info("💸 PD: Funding/OI/L&S загружены")
+        while True:
+            await asyncio.sleep(FUNDING_FETCH_EVERY)
+            symbols = self.monitor.get_symbols()
+            if symbols:
+                await _cache.refresh_if_needed(symbols)
 
     # ── Переобучение ML ───────────────────────────────────────────────────────
 
