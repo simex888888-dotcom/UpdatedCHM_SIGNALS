@@ -54,12 +54,30 @@ class Config:
     #   (но не между редеплоями) — DB_PATH=/app/chm_bot.db.
     # ─────────────────────────────────────────────────────────────────────
     _data_dir = "/data"
+
+    def _is_writable(path: str) -> bool:
+        """Проверяет, можно ли создать файл в директории."""
+        probe = os.path.join(path, ".chm_write_probe")
+        try:
+            with open(probe, "w") as _f:
+                _f.write("")
+            os.remove(probe)
+            return True
+        except OSError:
+            return False
+
     _default_db = (
         os.path.join(_data_dir, "chm_bot.db")
-        if os.path.isdir(_data_dir)
+        if os.path.isdir(_data_dir) and _is_writable(_data_dir)
         else os.path.join(os.path.dirname(os.path.abspath(__file__)), "chm_bot.db")
     )
     DB_PATH = os.getenv("DB_PATH", _default_db)
+
+    # Если DB_PATH задан через env — убедимся что его родительская папка существует
+    if "DB_PATH" in os.environ:
+        _db_dir = os.path.dirname(os.path.abspath(DB_PATH))
+        if not os.path.isdir(_db_dir):
+            os.makedirs(_db_dir, exist_ok=True)
 
     # ─────────────────────────────────────────────────────────────────────
     # TURSO — облачный SQLite (опционально, для bothost.ru и др. хостингов)

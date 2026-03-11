@@ -225,8 +225,11 @@ async def main():
         else:
             log.info("♻️ Рестарт без изменений кода — рассылка пропущена.")
 
+    import os as _os
+    _db_dir = _os.path.dirname(_os.path.abspath(config.DB_PATH))
+    _db_writable = _os.access(_db_dir, _os.W_OK)
     log.info("🚀 CHM BREAKER MID запускается...")
-    log.info(f"   SQLite:      {config.DB_PATH}")
+    log.info(f"   SQLite:      {config.DB_PATH}  [{'writable' if _db_writable else '⚠️ NOT WRITABLE — check DB_PATH env var'}]")
     log.info(f"   Воркеров:    {config.SCAN_WORKERS}")
     log.info(f"   API conc.:   {config.API_CONCURRENCY}")
     log.info(f"   Кэш монет:   {config.CACHE_MAX_SYMBOLS} символов")
