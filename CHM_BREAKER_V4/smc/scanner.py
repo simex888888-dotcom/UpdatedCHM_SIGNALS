@@ -7,6 +7,7 @@ import asyncio
 import logging
 import sys
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Optional
 
@@ -33,7 +34,7 @@ _SMC_TF_MAP = {
 
 # Антидубликат: hash → timestamp
 _sent_signals: dict[str, float] = {}
-_DEDUP_HOURS = 2  # часов между одинаковыми сигналами (было 4)
+_DEDUP_HOURS = 2  # часов между одинаковыми сигналами
 
 
 def _fp(v: float) -> str:
@@ -98,20 +99,18 @@ async def run_smc_scanner(
     um,
     fetcher,
     interval_sec: int = 900,
-    tf_key:       str = "1H",
 ) -> None:
     """
     Главный цикл SMC-сканера.
     Фильтрует пользователей у которых user.strategy == "SMC".
+    Каждый пользователь обслуживается в своём preferred tf_key.
     """
     analyzer = SMCAnalyzer(SMCConfig())
-    tf_htf, tf_mtf, tf_ltf = _SMC_TF_MAP.get(tf_key, ("4H", "1H", "15m"))
-    log.info(f"SMC Scanner started: {tf_htf}/{tf_mtf}/{tf_ltf}, interval={interval_sec}s")
+    log.info(f"SMC Scanner started, interval={interval_sec}s")
 
     while True:
         try:
-            await _scan_cycle(bot, um, fetcher, analyzer,
-                              tf_htf, tf_mtf, tf_ltf)
+            await _scan_cycle(bot, um, fetcher, analyzer)
         except asyncio.CancelledError:
             log.info("SMC Scanner stopped.")
             return
@@ -120,8 +119,7 @@ async def run_smc_scanner(
         await asyncio.sleep(interval_sec)
 
 
-async def _scan_cycle(bot, um, fetcher, analyzer,
-                      tf_htf, tf_mtf, tf_ltf) -> None:
+async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
     users = await um.get_active_users()
     # SMC users: strategy==SMC AND at least one direction is active
     smc_users = [
@@ -134,13 +132,12 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
     if not smc_users:
         return
 
-    log.info(f"SMC scan: {len(smc_users)} SMC users, tf={tf_mtf}")
-    base_cfg = SMCConfig()
+    log.info(f"SMC scan: {len(smc_users)} SMC users")
 
     # Наименьший минимальный объём среди всех SMC-пользователей (чтобы покрыть всех)
     min_vol = min((u.get_smc_cfg().min_volume_usdt for u in smc_users), default=5_000_000)
 
-    # Загружаем список монет
+    # Загружаем список монет один раз
     try:
         import cache
         coins = await cache.get_coins()
@@ -152,164 +149,177 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
 
     coins = coins[:50]
 
-    for symbol in coins:
-        try:
-            df_htf_data = await fetcher.get_candles(symbol, tf_htf, limit=200)
-            df_mtf_data = await fetcher.get_candles(symbol, tf_mtf, limit=200)
-            df_ltf_data = await fetcher.get_candles(symbol, tf_ltf, limit=200)
-        except Exception as e:
-            log.warning(f"SMC {symbol}: ошибка загрузки свечей: {e}")
-            continue
+    # Группируем пользователей по их предпочтительному tf_key
+    tf_groups: dict[str, list] = defaultdict(list)
+    for u in smc_users:
+        tf_key = u.get_smc_cfg().tf_key
+        if tf_key not in _SMC_TF_MAP:
+            tf_key = "1H"  # fallback
+        tf_groups[tf_key].append(u)
 
-        if df_htf_data is None or df_mtf_data is None:
-            continue
-        if len(df_htf_data) < 30 or len(df_mtf_data) < 30:
-            continue
+    # Обрабатываем каждую группу tf отдельно
+    for tf_key, group_users in tf_groups.items():
+        tf_htf, tf_mtf, tf_ltf = _SMC_TF_MAP[tf_key]
+        log.info(f"SMC tf={tf_key} ({tf_htf}/{tf_mtf}/{tf_ltf}): {len(group_users)} users")
 
-        try:
-            analysis = analyzer.analyze(symbol, df_htf_data, df_mtf_data, df_ltf_data)
-        except Exception as e:
-            log.warning(f"SMC {symbol}: ошибка анализа: {e}")
-            continue
-
-        # Отправляем каждому пользователю согласно его персональным фильтрам
-        for user in smc_users:
-            # Фильтр выбранной монеты
-            watch = getattr(user, "watch_coin", "").strip().upper()
-            if watch and symbol.upper() != watch:
+        for symbol in coins:
+            try:
+                df_htf_data = await fetcher.get_candles(symbol, tf_htf, limit=200)
+                df_mtf_data = await fetcher.get_candles(symbol, tf_mtf, limit=200)
+                df_ltf_data = await fetcher.get_candles(symbol, tf_ltf, limit=200)
+            except Exception as e:
+                log.warning(f"SMC {symbol}: ошибка загрузки свечей: {e}")
                 continue
 
-            ucfg = user.get_smc_cfg()
-
-            # Применяем пользовательский конфиг поверх базового.
-            # Для «минимальных» порогов берём наименее строгое значение,
-            # чтобы старые сохранённые настройки не заблокировали сигналы.
-            cfg_obj = SMCConfig()
-            cfg_obj.MIN_CONFIRMATIONS   = min(ucfg.min_confirmations, SMCConfig.MIN_CONFIRMATIONS)
-            cfg_obj.MIN_RR              = min(ucfg.min_rr,             SMCConfig.MIN_RR)
-            cfg_obj.SL_BUFFER_PCT       = ucfg.sl_buffer_pct
-            cfg_obj.FVG_ENABLED         = ucfg.fvg_enabled
-            cfg_obj.CHOCH_ENABLED       = ucfg.choch_enabled
-            cfg_obj.OB_USE_BREAKER      = ucfg.ob_use_breaker
-            cfg_obj.OB_MAX_AGE_CANDLES  = max(ucfg.ob_max_age, SMCConfig.OB_MAX_AGE_CANDLES)
-            # SWEEP_CLOSE_REQUIRED: False если хотя бы один из конфигов False
-            cfg_obj.SWEEP_CLOSE_REQUIRED = ucfg.sweep_close_req and SMCConfig.SWEEP_CLOSE_REQUIRED
+            if df_htf_data is None or df_mtf_data is None:
+                continue
+            if len(df_htf_data) < 30 or len(df_mtf_data) < 30:
+                continue
 
             try:
-                sig = build_smc_signal(symbol, analysis, cfg_obj,
-                                       tf_htf=tf_htf, tf_mtf=tf_mtf, tf_ltf=tf_ltf)
+                analysis = analyzer.analyze(symbol, df_htf_data, df_mtf_data, df_ltf_data)
             except Exception as e:
-                log.warning(f"SMC {symbol} build {user.user_id}: {e}")
+                log.warning(f"SMC {symbol}: ошибка анализа: {e}")
                 continue
 
-            if sig is None:
-                continue
+            # Отправляем каждому пользователю группы согласно его персональным фильтрам
+            for user in group_users:
+                # Фильтр выбранной монеты
+                watch = getattr(user, "watch_coin", "").strip().upper()
+                if watch:
+                    sym_clean = symbol.upper().replace("-USDT-SWAP", "").replace("-USDT", "").replace("-SWAP", "")
+                    watch_clean = watch.replace("-USDT-SWAP", "").replace("-USDT", "").replace("-SWAP", "")
+                    if sym_clean != watch_clean:
+                        continue
 
-            # Определяем какие направления активны для этого пользователя
-            long_on  = getattr(user, "smc_long_active",  False)
-            short_on = getattr(user, "smc_short_active", False)
-            # Фильтруем по направлению
-            if long_on and not short_on and sig.direction != "LONG":
-                continue
-            if short_on and not long_on and sig.direction != "SHORT":
-                continue
+                ucfg = user.get_smc_cfg()
 
-            # Антидубликат per-user
-            sig_hash = f"{user.user_id}_{symbol}_{sig.direction}_{sig.score}"
-            if time.time() - _sent_signals.get(sig_hash, 0) < _DEDUP_HOURS * 3600:
-                continue
-            _sent_signals[sig_hash] = time.time()
+                # Применяем персональный конфиг пользователя
+                cfg_obj = SMCConfig()
+                cfg_obj.MIN_CONFIRMATIONS    = ucfg.min_confirmations
+                cfg_obj.MIN_RR               = ucfg.min_rr
+                cfg_obj.SL_BUFFER_PCT        = ucfg.sl_buffer_pct
+                cfg_obj.FVG_ENABLED          = ucfg.fvg_enabled
+                cfg_obj.CHOCH_ENABLED        = ucfg.choch_enabled
+                cfg_obj.OB_USE_BREAKER       = ucfg.ob_use_breaker
+                cfg_obj.OB_MAX_AGE_CANDLES   = ucfg.ob_max_age
+                cfg_obj.SWEEP_CLOSE_REQUIRED = ucfg.sweep_close_req
 
-            # ── Сохраняем сигнал в БД ────────────────────────────
-            trade_id = f"{user.user_id}_{int(time.time() * 1000)}"
-            await db.db_add_trade({
-                "trade_id":      trade_id,
-                "user_id":       user.user_id,
-                "symbol":        sig.symbol,
-                "direction":     sig.direction,
-                "entry":         sig.entry,
-                "sl":            sig.sl,
-                "tp1":           sig.tp1,
-                "tp2":           sig.tp2,
-                "tp3":           sig.tp3,
-                "tp1_rr":        sig.rr,
-                "tp2_rr":        round(sig.rr * 1.5, 2),
-                "tp3_rr":        round(sig.rr * 2.0, 2),
-                "quality":       sig.score,
-                "timeframe":     tf_ltf,
-                "breakout_type": "SMC",
-                "created_at":    time.time(),
-            })
+                try:
+                    sig = build_smc_signal(symbol, analysis, cfg_obj,
+                                           tf_htf=tf_htf, tf_mtf=tf_mtf, tf_ltf=tf_ltf)
+                except Exception as e:
+                    log.warning(f"SMC {symbol} build {user.user_id}: {e}")
+                    continue
 
-            # ── Авто-трейдинг ────────────────────────────────────
-            auto_trade      = getattr(user, "auto_trade",      False)
-            auto_trade_mode = getattr(user, "auto_trade_mode", "confirm")
-            api_key         = getattr(user, "bybit_api_key",   "")
-            api_secret      = getattr(user, "bybit_api_secret","")
-            risk_pct        = getattr(user, "trade_risk_pct",  1.0)
-            leverage        = getattr(user, "trade_leverage",  10)
-            show_trade_btn  = False
+                if sig is None:
+                    continue
 
-            if auto_trade and api_key and api_secret:
-                max_trades = getattr(user, "max_trades_limit", 5)
-                open_count = await db.db_count_open_trades(user.user_id)
-                if open_count >= max_trades:
-                    await bot.send_message(
-                        user.user_id,
-                        f"⛔ Авто-трейд отклонён: достигнут лимит открытых сделок "
-                        f"({open_count}/{max_trades}).\n"
-                        f"Сигнал: {sig.symbol} {sig.direction}",
-                        protect_content=True,
-                    )
-                    auto_trade = False
+                # Фильтруем по направлению (boolean-флаги всегда в синхронизации с cfg)
+                long_on  = getattr(user, "smc_long_active",  False)
+                short_on = getattr(user, "smc_short_active", False)
+                if long_on and not short_on and sig.direction != "LONG":
+                    continue
+                if short_on and not long_on and sig.direction != "SHORT":
+                    continue
 
-            if auto_trade and api_key and api_secret:
-                if auto_trade_mode == "auto":
-                    try:
-                        import bybit_trader
-                        result = await bybit_trader.place_trade(
-                            api_key, api_secret,
-                            sig.symbol, sig.direction,
-                            sig.entry, sig.sl, sig.tp1,
-                            risk_pct, leverage,
-                            tp2=sig.tp2, tp3=sig.tp3,
-                        )
-                        # Сохраняем pos_idx чтобы BE-монитор корректно переносил стоп
-                        if result.get("ok") and "pos_idx" in result:
-                            await db.db_update_trade_pos_idx(
-                                trade_id, result["pos_idx"]
-                            )
-                        trade_msg = bybit_trader.format_trade_result(
-                            result, sig.direction, sig.symbol,
-                            sig.entry, sig.sl, sig.tp1, risk_pct, leverage,
-                            tp2=sig.tp2, tp3=sig.tp3,
-                        )
-                        await bot.send_message(user.user_id, trade_msg,
-                                               parse_mode="HTML", protect_content=True)
-                    except Exception as e:
-                        log.error(f"SMC auto_trade {sig.symbol}: {e}")
+                # Антидубликат per-user
+                sig_hash = f"{user.user_id}_{symbol}_{sig.direction}_{sig.score}"
+                if time.time() - _sent_signals.get(sig_hash, 0) < _DEDUP_HOURS * 3600:
+                    continue
+                _sent_signals[sig_hash] = time.time()
+
+                # ── Сохраняем сигнал в БД ────────────────────────────
+                trade_id = f"{user.user_id}_{int(time.time() * 1000)}"
+                await db.db_add_trade({
+                    "trade_id":      trade_id,
+                    "user_id":       user.user_id,
+                    "symbol":        sig.symbol,
+                    "direction":     sig.direction,
+                    "entry":         sig.entry,
+                    "sl":            sig.sl,
+                    "tp1":           sig.tp1,
+                    "tp2":           sig.tp2,
+                    "tp3":           sig.tp3,
+                    "tp1_rr":        sig.rr,
+                    "tp2_rr":        round(sig.rr * 1.5, 2),
+                    "tp3_rr":        round(sig.rr * 2.0, 2),
+                    "quality":       sig.score,
+                    "timeframe":     tf_ltf,
+                    "breakout_type": "SMC",
+                    "created_at":    time.time(),
+                })
+
+                # ── Авто-трейдинг ────────────────────────────────────
+                auto_trade      = getattr(user, "auto_trade",      False)
+                auto_trade_mode = getattr(user, "auto_trade_mode", "confirm")
+                api_key         = getattr(user, "bybit_api_key",   "")
+                api_secret      = getattr(user, "bybit_api_secret","")
+                risk_pct        = getattr(user, "trade_risk_pct",  1.0)
+                leverage        = getattr(user, "trade_leverage",  10)
+                show_trade_btn  = False
+
+                if auto_trade and api_key and api_secret:
+                    max_trades = getattr(user, "max_trades_limit", 5)
+                    open_count = await db.db_count_open_trades(user.user_id)
+                    # max_trades=0 означает без лимита
+                    if max_trades > 0 and open_count >= max_trades:
                         await bot.send_message(
                             user.user_id,
-                            f"⚠️ Авто-трейд: ошибка открытия {sig.symbol}: {e}",
+                            f"⛔ Авто-трейд отклонён: достигнут лимит открытых сделок "
+                            f"({open_count}/{max_trades}).\n"
+                            f"Сигнал: {sig.symbol} {sig.direction}",
                             protect_content=True,
                         )
-                else:
-                    show_trade_btn = True
+                        auto_trade = False
 
-            text = wm_inject(_signal_text_smc(sig), user.user_id)
-            try:
-                await bot.send_message(
-                    user.user_id, text,
-                    parse_mode="HTML",
-                    reply_markup=_smc_keyboard(sig.symbol, trade_id, show_trade_btn),
-                    protect_content=True,
-                )
-                log.info(f"SMC ✅ {symbol} {sig.direction} {sig.grade} → @{user.username or user.user_id}")
-            except TelegramForbiddenError:
-                user.long_active = user.short_active = user.active = False
-                user.smc_long_active = user.smc_short_active = False
-                await um.save(user)
-            except Exception as e:
-                log.error(f"SMC send {user.user_id}: {e}")
+                if auto_trade and api_key and api_secret:
+                    if auto_trade_mode == "auto":
+                        try:
+                            import bybit_trader
+                            result = await bybit_trader.place_trade(
+                                api_key, api_secret,
+                                sig.symbol, sig.direction,
+                                sig.entry, sig.sl, sig.tp1,
+                                risk_pct, leverage,
+                                tp2=sig.tp2, tp3=sig.tp3,
+                            )
+                            # Сохраняем pos_idx чтобы BE-монитор корректно переносил стоп
+                            if result.get("ok") and "pos_idx" in result:
+                                await db.db_update_trade_pos_idx(
+                                    trade_id, result["pos_idx"]
+                                )
+                            trade_msg = bybit_trader.format_trade_result(
+                                result, sig.direction, sig.symbol,
+                                sig.entry, sig.sl, sig.tp1, risk_pct, leverage,
+                                tp2=sig.tp2, tp3=sig.tp3,
+                            )
+                            await bot.send_message(user.user_id, trade_msg,
+                                                   parse_mode="HTML", protect_content=True)
+                        except Exception as e:
+                            log.error(f"SMC auto_trade {sig.symbol}: {e}")
+                            await bot.send_message(
+                                user.user_id,
+                                f"⚠️ Авто-трейд: ошибка открытия {sig.symbol}: {e}",
+                                protect_content=True,
+                            )
+                    else:
+                        show_trade_btn = True
 
-        await asyncio.sleep(0.1)
+                text = wm_inject(_signal_text_smc(sig), user.user_id)
+                try:
+                    await bot.send_message(
+                        user.user_id, text,
+                        parse_mode="HTML",
+                        reply_markup=_smc_keyboard(sig.symbol, trade_id, show_trade_btn),
+                        protect_content=True,
+                    )
+                    log.info(f"SMC ✅ {symbol} {sig.direction} {sig.grade} → @{user.username or user.user_id}")
+                except TelegramForbiddenError:
+                    user.long_active = user.short_active = user.active = False
+                    user.smc_long_active = user.smc_short_active = False
+                    await um.save(user)
+                except Exception as e:
+                    log.error(f"SMC send {user.user_id}: {e}")
+
+            await asyncio.sleep(0.1)

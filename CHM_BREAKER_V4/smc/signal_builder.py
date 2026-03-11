@@ -398,12 +398,13 @@ def build_smc_signal(symbol: str, analysis: dict, cfg,
         grade = GRADES.get(score, f"⚡ {score}/5")
 
         # ── Взвешенный R:R фильтр ─────────────────────────────────────────
-        rr_val = levels["rr"]
-        if rr_val < 0.8:
-            continue  # блок — слишком низкий R:R (было 1.2)
+        rr_val  = levels["rr"]
+        min_rr  = getattr(cfg, "MIN_RR", 0.8)
+        if rr_val < min_rr:
+            continue  # ниже пользовательского минимума
         adjusted_score = score
-        if rr_val < 1.2:
-            adjusted_score = max(0, score - 1)  # -1 подтверждение (было < 1.8)
+        if rr_val < max(min_rr, 1.2):
+            adjusted_score = max(0, score - 1)  # низкий R:R снижает оценку
 
         # ── Мемкоин: максимум 3 подтверждения ────────────────────────────
         _MEMCOIN_KW = ("FLOKI","PEPE","SHIB","DOGE","WIF","BONK","NEIRO",

@@ -1758,14 +1758,16 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not has:
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
-        is_active = user.active and user.scan_mode == "smc_both"
-        if is_active:
-            user.active = False
+        both_on = user.smc_long_active and user.smc_short_active
+        if both_on:
+            user.smc_long_active  = False
+            user.smc_short_active = False
         else:
-            user.active    = True
-            user.scan_mode = "smc_both"
+            user.smc_long_active  = True
+            user.smc_short_active = True
         await um.save(user)
-        await cb.answer("🟢 SMC ОБА включён!" if user.active else "🔴 SMC ОБА выключен.")
+        both_on = user.smc_long_active and user.smc_short_active
+        await cb.answer("🟢 SMC ОБА включён!" if both_on else "🔴 SMC ОБА выключен.")
         await safe_edit(cb, "⚡ <b>SMC ОБА</b>", kb_smc_mode_both(user))
 
     # ─── SMC НАСТРОЙКИ ────────────────────────────────
@@ -1850,10 +1852,21 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def smc_set_dir(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         cfg  = user.get_smc_cfg()
-        cfg.direction = cb.data.replace("smc_set_dir_", "")
+        direction = cb.data.replace("smc_set_dir_", "")
+        cfg.direction = direction
         user.set_smc_cfg(cfg)
+        # Синхронизируем boolean-флаги — именно их читает сканер
+        if direction == "LONG":
+            user.smc_long_active  = True
+            user.smc_short_active = False
+        elif direction == "SHORT":
+            user.smc_long_active  = False
+            user.smc_short_active = True
+        else:  # BOTH
+            user.smc_long_active  = True
+            user.smc_short_active = True
         await um.save(user)
-        await cb.answer("✅ Направление: " + cfg.direction)
+        await cb.answer("✅ Направление: " + direction)
         await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
 
     @dp.callback_query(F.data.startswith("smc_set_conf_"))
