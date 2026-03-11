@@ -184,7 +184,7 @@ CREATE TABLE IF NOT EXISTS ref_rewards (
 CREATE TABLE IF NOT EXISTS pd_users (
     user_id       INTEGER PRIMARY KEY,
     pd_subscribed INTEGER DEFAULT 0,
-    pd_threshold  INTEGER DEFAULT 70
+    pd_threshold  INTEGER DEFAULT 50
 );
 
 CREATE TABLE IF NOT EXISTS pd_signals (
@@ -255,6 +255,9 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN watch_coin TEXT DEFAULT ''",
             "ALTER TABLE trades ADD COLUMN be_set INTEGER DEFAULT 0",
             "ALTER TABLE trades ADD COLUMN pos_idx INTEGER DEFAULT 0",
+            # Снижаем порог существующих пользователей с дефолтного 70 → 50
+            # чтобы они начали получать сигналы (MIN_SIGNAL_SCORE теперь 40%)
+            "UPDATE pd_users SET pd_threshold=50 WHERE pd_threshold=70",
         ]
         for sql in migrations:
             try:
@@ -591,11 +594,12 @@ async def db_pd_get_user(user_id: int) -> Optional[dict]:
 
 
 async def db_pd_upsert_user(user_id: int, subscribed: bool = None, threshold: int = None):
+    from pump_dump.pd_config import DEFAULT_USER_THRESHOLD
     async with _lock:
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
-                "INSERT INTO pd_users(user_id) VALUES(?) ON CONFLICT(user_id) DO NOTHING",
-                (user_id,)
+                "INSERT INTO pd_users(user_id, pd_threshold) VALUES(?,?) ON CONFLICT(user_id) DO NOTHING",
+                (user_id, DEFAULT_USER_THRESHOLD)
             )
             if subscribed is not None:
                 await db.execute(

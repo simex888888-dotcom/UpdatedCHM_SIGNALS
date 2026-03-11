@@ -57,7 +57,7 @@ def _kb_pd_main(subscribed: bool, threshold: int) -> InlineKeyboardMarkup:
 
 
 def _kb_threshold() -> InlineKeyboardMarkup:
-    thresholds = [70, 75, 80, 85, 90, 95]
+    thresholds = [40, 50, 60, 70, 80, 90]
     rows = []
     for i in range(0, len(thresholds), 3):
         rows.append([
@@ -165,7 +165,7 @@ def register_pd_handlers(dp: Dispatcher, bot: Bot, runner_getter):
                 f"🎚 <b>Порог уверенности</b>\n\n"
                 f"Текущий: <b>{threshold}%</b>\n\n"
                 f"Чем выше порог — тем меньше сигналов, но точнее.\n"
-                f"Рекомендуем: 75–80%",
+                f"Рекомендуем: 50–60%",
                 parse_mode="HTML",
                 reply_markup=_kb_threshold(),
             )
