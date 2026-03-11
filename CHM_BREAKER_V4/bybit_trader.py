@@ -199,6 +199,19 @@ def _place_trade_sync(
                      f"Нужен депозит от ${MIN_NOTIONAL / (risk_pct / 100):.0f} при риске {risk_pct}%."
         }
 
+    # Проверяем, хватит ли маржи (notional / leverage) на балансе
+    margin_required = (float(qty_str) * entry) / lev
+    if margin_required > balance * 0.95:
+        return {
+            "ok": False,
+            "error": (
+                f"Недостаточно маржи для открытия позиции.\n"
+                f"Требуется: ${margin_required:.2f} USDT\n"
+                f"Доступно:  ${balance:.2f} USDT\n"
+                f"Уменьши риск (сейчас {risk_pct}%) или пополни счёт."
+            )
+        }
+
     # Выставляем ордер.
     # positionIdx: 0 = One-Way Mode, 1 = Hedge Buy, 2 = Hedge Sell.
     # Пробуем One-Way, при ошибке режима — переключаемся на Hedge.
