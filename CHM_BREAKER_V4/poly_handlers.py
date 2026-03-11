@@ -124,7 +124,7 @@ def _market_kb(sk: int, market: dict, analysis: dict, default_bet: float) -> Inl
             _btn(f"BUY NO ${bet_str}",  f"pm:buy:{sk}:no:{no_short}:{bet_str}"),
         ])
         rows.append([_btn("💰 Своя сумма", f"pm:custom:{sk}:yes:{yes_short}")])
-    rows.append([_btn("🔙 Назад к списку", "pm:trending:0")])
+    rows.append([_btn("🔙 К списку", "pm:trending:0"), _btn("📊 Polymarket", "pm:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -186,6 +186,7 @@ def register_poly_handlers(
             [_btn("💼 Мои ставки",          "pm:mybets")],
             [_btn("💰 Баланс кошелька",      "pm:balance")],
             [_btn("⚙️ Размер ставки",        "pm:settings")],
+            [_btn("🔙 Главное меню",          "back_main")],
         )
         await msg.answer(
             "📊 <b>Polymarket — Prediction Market</b>" + trade_note,
@@ -210,14 +211,13 @@ def register_poly_handlers(
             return
 
         if not markets:
-            await _safe_edit(cb, "📭 Маркеты не найдены.", _ik([_btn("🔙 Меню", "pm:menu")]))
+            await _safe_edit(cb, "📭 Маркеты не найдены.", _ik([_btn("🔙 Polymarket", "pm:menu")]))
             return
 
         rows = []
         for m in markets:
             q    = _market_short(m.get("question", "—"), 40)
             sk   = _get_short_key(m.get("id", ""))
-            yes_, _ = analyze_market(m)["yes_price"], None
             analysis = analyze_market(m)
             pct  = f"{analysis['yes_price']:.0%}"
             rows.append([_btn(f"{'✅' if analysis['recommendation']!='SKIP' else '📊'} {q} | YES {pct}", f"pm:view:{sk}")])
@@ -229,7 +229,7 @@ def register_poly_handlers(
             nav.append(_btn("▶️ Ещё", f"pm:trending:{offset+10}"))
         if nav:
             rows.append(nav)
-        rows.append([_btn("🔙 Меню", "pm:menu")])
+        rows.append([_btn("🔙 Polymarket", "pm:menu")])
 
         await _safe_edit(
             cb,
@@ -266,7 +266,7 @@ def register_poly_handlers(
 
         if not markets:
             await msg.answer(f"📭 По запросу «{query}» ничего не найдено.",
-                             reply_markup=_ik([_btn("🔙 Меню", "pm:menu")]))
+                             reply_markup=_ik([_btn("🔙 Polymarket", "pm:menu")]))
             return
 
         rows = []
@@ -276,7 +276,7 @@ def register_poly_handlers(
             analysis = analyze_market(m)
             pct = f"{analysis['yes_price']:.0%}"
             rows.append([_btn(f"📊 {q} | YES {pct}", f"pm:view:{sk}")])
-        rows.append([_btn("🔙 Меню", "pm:menu")])
+        rows.append([_btn("🔙 Polymarket", "pm:menu")])
 
         await msg.answer(
             f"🔍 <b>Результаты поиска «{query}»</b> ({len(markets)} маркетов)",
@@ -441,7 +441,7 @@ def register_poly_handlers(
             f"Маркет: <b>{_market_short(q, 50)}</b>" + NL +
             f"Сторона: <b>{side}</b>  Сумма: <b>${amount:.2f} USDC</b>" + NL +
             (f"Order ID: <code>{order_id[:40]}</code>" if order_id else ""),
-            _ik([_btn("💼 Мои ставки", "pm:mybets"), _btn("🔙 Меню", "pm:menu")]),
+            _ik([_btn("💼 Мои ставки", "pm:mybets"), _btn("🔙 Polymarket", "pm:menu")]),
         )
 
     # ── Своя сумма ────────────────────────────────────────────────────────
@@ -515,7 +515,7 @@ def register_poly_handlers(
         bets = await db.poly_get_bets(cb.from_user.id, limit=10)
         if not bets:
             await _safe_edit(cb, "📭 Ставок пока нет.",
-                             _ik([_btn("🔙 Меню", "pm:menu")]))
+                             _ik([_btn("🔙 Polymarket", "pm:menu")]))
             return
 
         NL = "\n"
@@ -530,7 +530,7 @@ def register_poly_handlers(
                          f"   {side} | ${amt:.2f} | {dt}")
 
         await _safe_edit(cb, NL.join(lines),
-                         _ik([_btn("🔙 Меню", "pm:menu")]))
+                         _ik([_btn("🔙 Polymarket", "pm:menu")]))
 
     # ── Баланс ───────────────────────────────────────────────────────────
 
@@ -540,14 +540,14 @@ def register_poly_handlers(
         if not is_admin(cb.from_user.id):
             await _safe_edit(cb,
                 "🔒 Баланс кошелька доступен только администраторам.",
-                _ik([_btn("🔙 Меню", "pm:menu")]),
+                _ik([_btn("🔙 Polymarket", "pm:menu")]),
             )
             return
         await _safe_edit(cb, "⏳ Запрашиваем баланс...", None)
         balance = await poly.get_balance()
         await _safe_edit(cb,
             f"💰 <b>Баланс кошелька:</b> <b>${balance:.2f} USDC</b>",
-            _ik([_btn("🔙 Меню", "pm:menu")]),
+            _ik([_btn("🔙 Polymarket", "pm:menu")]),
         )
 
     # ── Настройки (размер ставки по умолчанию) ───────────────────────────
@@ -564,7 +564,7 @@ def register_poly_handlers(
                 [_btn("$1", "pm:setbet:1"), _btn("$5", "pm:setbet:5"),
                  _btn("$10", "pm:setbet:10"), _btn("$25", "pm:setbet:25")],
                 [_btn("💬 Своё значение", "pm:setbet:custom")],
-                [_btn("🔙 Меню", "pm:menu")],
+                [_btn("🔙 Polymarket", "pm:menu")],
             ),
         )
 
@@ -594,7 +594,7 @@ def register_poly_handlers(
         await msg.answer(
             f"✅ Размер ставки по умолчанию: <b>${val:.1f} USDC</b>",
             parse_mode="HTML",
-            reply_markup=_ik([_btn("🔙 Меню", "pm:menu")]),
+            reply_markup=_ik([_btn("🔙 Polymarket", "pm:menu")]),
         )
 
     # ── Вспомогательные callback'и ────────────────────────────────────────
@@ -612,6 +612,7 @@ def register_poly_handlers(
             [_btn("💼 Мои ставки",          "pm:mybets")],
             [_btn("💰 Баланс кошелька",      "pm:balance")],
             [_btn("⚙️ Размер ставки",        "pm:settings")],
+            [_btn("🔙 Главное меню",          "back_main")],
         )
         await _safe_edit(
             cb,

@@ -121,6 +121,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
             _btn("🔍 Анализ монеты — разовый сигнал по запросу",                  "analyze_coin"),
             _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",                "auto_trade_menu"),
             _btn("🎰 Памп/Дамп детектор (BingX)",                              "pd_menu"),
+            _btn("🎲 Polymarket — prediction market / AI ставки",              "pm:menu"),
             _btn("👥 Реферальная программа — пригласить друга",                 "my_referral"),
             _btn("❓ Справка — что делает каждая кнопка",                          "help_show"),
         ])
@@ -142,6 +143,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
         _btn("🔍 Анализ монеты — разовый сигнал по запросу",               "analyze_coin"),
         _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",             "auto_trade_menu"),
         _btn("🎰 Памп/Дамп детектор (BingX)",                              "pd_menu"),
+        _btn("🎲 Polymarket — prediction market / AI ставки",              "pm:menu"),
         _btn("👥 Реферальная программа — пригласить друга",                "my_referral"),
         _btn("❓ Справка — что делает каждая кнопка",                       "help_show"),
     ])
@@ -746,7 +748,23 @@ def help_text() -> str:
         "━━ <b>ПОД КАЖДЫМ СИГНАЛОМ</b> ━━━━━━━━━\n"
         "📈 <b>График</b> — открыть монету на TradingView\n"
         "📋 <b>Результат</b> — записать итог (TP1/TP2/TP3/SL/Пропустил)\n"
-        "📊 <b>Статистика</b> — кривая доходности по всем записанным сделкам\n"
+        "📊 <b>Статистика</b> — кривая доходности по всем записанным сделкам\n\n"
+
+        "━━ <b>🎲 POLYMARKET</b> ━━━━━━━━━━━━━━━━\n"
+        "Prediction market — ставки на реальные события (политика, крипто, спорт).\n"
+        "Команда: /poly  |  Кнопка в главном меню: 🎲 Polymarket\n\n"
+        "🔥 <b>Трендовые маркеты</b> — топ-10 по объёму торгов с пагинацией.\n"
+        "🔍 <b>Поиск</b> — найти маркет по ключевому слову (bitcoin, trump, election...).\n"
+        "📊 <b>Карточка маркета</b>:\n"
+        "   YES/NO цены, ликвидность, объём 24ч, дата закрытия.\n"
+        "🤖 <b>AI-анализ (Groq llama-3.3-70b)</b>:\n"
+        "   Рекомендация: BUY YES / BUY NO / SKIP\n"
+        "   Уверенность, риск, edge и объяснение на русском.\n"
+        "   При недоступности Groq — автоматически rule-based анализ.\n"
+        "💼 <b>Мои ставки</b> — история последних 10 ставок.\n"
+        "⚙️ <b>Размер ставки</b> — настройка суммы по умолчанию ($1–$25).\n\n"
+        "⚠️ <b>Торговля</b> (BUY YES/BUY NO) — только для администраторов.\n"
+        "   Требует POLY_PRIVATE_KEY + USDC на Polygon в .env\n"
     )
 
 
