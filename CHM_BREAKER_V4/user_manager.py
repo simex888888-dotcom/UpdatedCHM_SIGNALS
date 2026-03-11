@@ -74,11 +74,18 @@ class TradeCfg:
 
     def merged_with(self, override: "TradeCfg") -> "TradeCfg":
         """Применяем override поверх self (только непустые значения)."""
+        import math
+        def _differs(a, b) -> bool:
+            """Сравнивает значения с учётом float-точности."""
+            if isinstance(a, float) and isinstance(b, float):
+                return not math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-9)
+            return a != b
+
         base  = asdict(self)
         odict = asdict(override)
         defs  = asdict(TradeCfg())          # дефолтные значения
         # берём из override только то что отличается от дефолта
-        merged = {k: (odict[k] if odict[k] != defs[k] else base[k]) for k in base}
+        merged = {k: (odict[k] if _differs(odict[k], defs[k]) else base[k]) for k in base}
         return TradeCfg(**merged)
 
 
@@ -90,16 +97,16 @@ class SMCUserCfg:
     tf_key:           str   = "1H"        # "15m" | "1H" | "4H" — основной таймфрейм
     scan_interval:    int   = 900         # интервал сканирования (сек)
     direction:        str   = "BOTH"      # "LONG" | "SHORT" | "BOTH"
-    min_confirmations: int  = 3           # мин. подтверждений из 5 для сигнала
-    min_rr:           float = 2.0         # мин. R:R
+    min_confirmations: int  = 2           # мин. подтверждений из 5 для сигнала (было 3)
+    min_rr:           float = 1.5         # мин. R:R (было 2.0)
     sl_buffer_pct:    float = 0.15        # буфер SL от экстремума OB (%)
     min_volume_usdt:  float = 5_000_000   # мин. объём монеты ($)
     # ── Фильтры структуры ──────────────────────────
     fvg_enabled:      bool  = True        # учитывать FVG в подтверждениях
     choch_enabled:    bool  = True        # учитывать CHoCH
     ob_use_breaker:   bool  = True        # Breaker Blocks
-    ob_max_age:       int   = 50          # макс. возраст OB в свечах
-    sweep_close_req:  bool  = True        # liquidity sweep — требуется закрытие за уровнем
+    ob_max_age:       int   = 80          # макс. возраст OB в свечах (было 50)
+    sweep_close_req:  bool  = False       # liquidity sweep — не требуем закрытия (было True)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))

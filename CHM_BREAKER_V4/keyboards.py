@@ -120,6 +120,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
             _btn("🔍 Анализ монеты — разовый сигнал по запросу",                  "analyze_coin"),
             _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",                "auto_trade_menu"),
             _btn("🎰 Памп/Дамп детектор (BingX)",                              "pd_menu"),
+            _btn("👥 Реферальная программа — пригласить друга",                 "my_referral"),
             _btn("❓ Справка — что делает каждая кнопка",                          "help_show"),
         ])
     # ── LEVELS (default) ──
@@ -140,6 +141,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
         _btn("🔍 Анализ монеты — разовый сигнал по запросу",               "analyze_coin"),
         _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",             "auto_trade_menu"),
         _btn("🎰 Памп/Дамп детектор (BingX)",                              "pd_menu"),
+        _btn("👥 Реферальная программа — пригласить друга",                "my_referral"),
         _btn("❓ Справка — что делает каждая кнопка",                       "help_show"),
     ])
 
@@ -480,7 +482,7 @@ def kb_notify(user: UserSettings) -> InlineKeyboardMarkup:
 # ── ПОДПИСКА — ВЫБОР ТАРИФА ───────────────────────────
 
 def kb_subscribe(config=None) -> InlineKeyboardMarkup:
-    """Меню выбора тарифа при старте — без триала."""
+    """Меню выбора тарифа при старте."""
     return InlineKeyboardMarkup(inline_keyboard=[
         _noop("── 🤖 CHM BREAKER BOT ──────────────────────"),
         _btn("📅 3 месяца — 290$", "plan_bot_90"),
@@ -490,6 +492,7 @@ def kb_subscribe(config=None) -> InlineKeyboardMarkup:
             text="💎 Бот + Лаба — написать @crypto_chm",
             url="https://t.me/crypto_chm"
         )],
+        _btn("🎟 Ввести промокод (тестовый доступ)", "enter_promo"),
     ])
 
 

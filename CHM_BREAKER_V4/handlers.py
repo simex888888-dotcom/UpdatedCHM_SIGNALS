@@ -49,6 +49,9 @@ from watermark import wm_decode
 
 log = logging.getLogger("CHM.Handlers")
 
+# Кэш username бота (заполняется при старте, нужен для реферальных ссылок)
+_bot_username: str = ""
+
 # ─── Antispam: user_id → last_analyze_ts ──────────────
 _analyze_cooldown: dict[int, float] = {}
 _ANALYZE_COOLDOWN_SEC = 10  # секунд между /analyze запросами
@@ -116,6 +119,14 @@ class AnalyzeState(StatesGroup):
 
 class WatchCoinState(StatesGroup):
     waiting_coin = State()
+
+
+class PromoState(StatesGroup):
+    waiting_code = State()
+
+
+class BroadcastState(StatesGroup):
+    confirm = State()
 
 
 class SetupBybitState(StatesGroup):
@@ -1183,10 +1194,30 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     _fetcher_for_smc = _OKXFetcher()
 
     async def _on_startup_inner():
+        global _bot_username
+        try:
+            me = await bot.get_me()
+            _bot_username = me.username or ""
+        except Exception:
+            pass
         from smc.scanner import run_smc_scanner
-        asyncio.create_task(
-            run_smc_scanner(bot, um, _fetcher_for_smc)
-        )
+
+        async def _smc_task_with_restart():
+            """Запускает SMC-сканер и перезапускает при падении."""
+            _restart_delay = 30
+            while True:
+                try:
+                    await run_smc_scanner(bot, um, _fetcher_for_smc)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    log.error(
+                        f"SMC scanner упал, перезапуск через {_restart_delay}с: {e}",
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(_restart_delay)
+
+        asyncio.create_task(_smc_task_with_restart())
 
     dp.startup.register(_on_startup_inner)
 
@@ -1195,6 +1226,16 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.message(Command("start"))
     async def cmd_start(msg: Message):
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
+        # Обрабатываем реферальную ссылку: /start ref_12345
+        args = msg.text.split(maxsplit=1)
+        payload = args[1].strip() if len(args) > 1 else ""
+        if payload.startswith("ref_"):
+            try:
+                referrer_id = int(payload[4:])
+                if referrer_id != msg.from_user.id:
+                    await db.db_ref_set(msg.from_user.id, referrer_id)
+            except (ValueError, Exception):
+                pass
         has, reason = user.check_access()
         if not has:
             await msg.answer(
@@ -1292,6 +1333,69 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     # ─── ВЫБОР СТРАТЕГИИ ──────────────────────────────
 
+    @dp.callback_query(F.data == "enter_promo")
+    async def cb_enter_promo(cb: CallbackQuery, state: FSMContext):
+        await cb.answer()
+        await state.set_state(PromoState.waiting_code)
+        await cb.message.answer(
+            "🎟 <b>Введите промокод</b>\n\n"
+            "Отправьте код, который вам выдал администратор.\n"
+            "Он даёт временный тестовый доступ к боту.",
+            parse_mode="HTML",
+        )
+
+    @dp.message(PromoState.waiting_code)
+    async def promo_code_input(msg: Message, state: FSMContext):
+        await state.clear()
+        code = msg.text.strip() if msg.text else ""
+        if not code:
+            await msg.answer("❌ Пустой код. Попробуйте ещё раз через меню.")
+            return
+        ok, text, hours = await db.db_promo_validate_and_use(msg.from_user.id, code)
+        if not ok:
+            await msg.answer(text)
+            return
+        # Выдаём доступ
+        user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
+        if user.check_access()[0]:
+            # Уже есть активная подписка
+            await msg.answer(
+                "ℹ️ У вас уже есть активный доступ.\n"
+                "Промокод засчитан, но ваша подписка не изменена."
+            )
+            return
+        import time as _time
+        user.sub_expires = _time.time() + hours * 3600
+        user.sub_status  = "active"
+        await um.save(user)
+        await msg.answer(
+            f"✅ <b>Промокод принят!</b>\n\n"
+            f"Вам открыт тестовый доступ на <b>{hours} часа</b>.\n"
+            f"Нажмите /start чтобы войти в бот.",
+            parse_mode="HTML",
+        )
+
+    @dp.callback_query(F.data == "my_referral")
+    async def cb_my_referral(cb: CallbackQuery):
+        await cb.answer()
+        uid  = cb.from_user.id
+        stat = await db.db_ref_stats(uid)
+        link = f"https://t.me/{_bot_username}?start=ref_{uid}" if _bot_username else f"start=ref_{uid}"
+        NL   = "\n"
+        text = (
+            "👥 <b>Реферальная программа</b>" + NL + NL +
+            "Приглашайте друзей по своей ссылке." + NL +
+            "После того как <b>5 приглашённых купят подписку</b> — вы получаете <b>30 дней бесплатно</b>!" + NL + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "🔗 Ваша реферальная ссылка:" + NL +
+            f"<code>{link}</code>" + NL + NL +
+            f"📊 Приглашено: <b>{stat['total']}</b>" + NL +
+            f"💰 Купили подписку: <b>{stat['converted']}</b>" + NL +
+            f"🎁 Наград получено: <b>{stat['rewards']}</b> × 30 дней" + NL +
+            f"⏳ До следующей награды: ещё <b>{stat['until_next']}</b> покупок"
+        )
+        await cb.message.answer(text, parse_mode="HTML")
+
     @dp.callback_query(F.data.startswith("strategy_"))
     async def cb_strategy(cb: CallbackQuery):
         choice = cb.data.replace("strategy_", "")   # "levels" | "smc"
@@ -1329,6 +1433,11 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await send(f"⏳ Подожди {_ANALYZE_COOLDOWN_SEC} секунд между запросами.", parse_mode="HTML")
             return
         _analyze_cooldown[uid] = now
+        # Периодически очищаем устаревшие записи, чтобы словарь не рос бесконечно
+        if len(_analyze_cooldown) > 2000:
+            _cutoff = now - 3600
+            for _k in [_k for _k, _v in _analyze_cooldown.items() if _v < _cutoff]:
+                _analyze_cooldown.pop(_k, None)
 
         wait_msg = await send(
             "⏳ <b>Глубокий анализ " + symbol + "...</b>\n\nЗагружаю свечи 1H/4H/1D...",
@@ -3494,7 +3603,12 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             "Кэш: <b>" + str(cs.get("size",0)) + "</b> ключей | хит <b>" + str(cs.get("ratio",0)) + "%</b>" + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
             "/give [id] [дней]  /revoke [id]  /ban [id]" + NL +
-            "/unban [id]  /userinfo [id]  /broadcast [текст]",
+            "/unban [id]  /userinfo [id]  /broadcast [текст]" + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "🎟 Промокоды:" + NL +
+            "/addcode [код] [часов]  — создать промокод (по умолч. 2 ч.)" + NL +
+            "/delcode [код]           — удалить промокод" + NL +
+            "/listcodes               — список активных промокодов",
             parse_mode="HTML",
         )
 
@@ -3522,6 +3636,22 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 parse_mode="HTML",
             )
         except Exception: pass
+        # Реферальная программа: отмечаем конверсию и выдаём награду если нужно
+        try:
+            ref_result = await db.db_ref_on_purchase(tid)
+            if ref_result:
+                referrer_id, total_conv = ref_result
+                notify = f"🎉 Ваш реферал купил подписку! Всего успешных: <b>{total_conv}</b>"
+                should_reward = await db.db_ref_check_and_claim_reward(referrer_id)
+                if should_reward:
+                    referrer = await um.get(referrer_id)
+                    if referrer:
+                        referrer.grant_access(30)
+                        await um.save(referrer)
+                    notify += "\n\n🎁 <b>Вы получили 30 дней бесплатно!</b> (5 успешных рефералов)"
+                await bot.send_message(referrer_id, notify, parse_mode="HTML")
+        except Exception:
+            pass
 
     @dp.message(Command("revoke"))
     async def cmd_revoke(msg: Message):
@@ -3611,21 +3741,45 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await msg.answer("🔍 User ID из водяного знака: <code>" + str(uid) + "</code>\n(пользователь не найден в БД)", parse_mode="HTML")
 
     @dp.message(Command("broadcast"))
-    async def cmd_broadcast(msg: Message):
+    async def cmd_broadcast(msg: Message, state: FSMContext):
         if not is_admin(msg.from_user.id): return
         text = msg.text.replace("/broadcast", "", 1).strip()
-        if not text: await msg.answer("Использование: /broadcast [текст]"); return
+        if not text:
+            await msg.answer("Использование: /broadcast [текст]"); return
         users  = await um.all_users()
-        sent = failed = 0
-        for u in users:
-            if u.sub_status in ("trial", "active"):
-                try:
-                    await bot.send_message(u.user_id, "📢 " + text)
-                    sent += 1
-                    await asyncio.sleep(0.04)
-                except Exception:
-                    failed += 1
-        await msg.answer("📢 Рассылка: ✅ " + str(sent) + "  ❌ " + str(failed))
+        target = [u for u in users if u.sub_status in ("trial", "active")]
+        await state.update_data(broadcast_text=text)
+        await state.set_state(BroadcastState.confirm)
+        await msg.answer(
+            f"📢 <b>Подтверждение рассылки</b>\n\n"
+            f"Получателей: <b>{len(target)}</b> активных пользователей\n\n"
+            f"Текст сообщения:\n<i>{text}</i>\n\n"
+            f"Напишите <code>CONFIRM</code> для отправки или /cancel для отмены.",
+            parse_mode="HTML",
+        )
+
+    @dp.message(BroadcastState.confirm)
+    async def broadcast_confirm(msg: Message, state: FSMContext):
+        if not is_admin(msg.from_user.id):
+            await state.clear(); return
+        if msg.text and msg.text.strip().upper() == "CONFIRM":
+            data = await state.get_data()
+            text = data.get("broadcast_text", "")
+            await state.clear()
+            users = await um.all_users()
+            sent = failed = 0
+            for u in users:
+                if u.sub_status in ("trial", "active"):
+                    try:
+                        await bot.send_message(u.user_id, "📢 " + text)
+                        sent += 1
+                        await asyncio.sleep(0.04)
+                    except Exception:
+                        failed += 1
+            await msg.answer(f"📢 Рассылка завершена: ✅ {sent}  ❌ {failed}")
+        else:
+            await state.clear()
+            await msg.answer("❌ Рассылка отменена.")
 
     # ─── ПРОЧЕЕ ───────────────────────────────────────
 
@@ -3648,6 +3802,55 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.message(Command("help"))
     async def cmd_help(msg: Message):
         await msg.answer(help_text(), parse_mode="HTML", reply_markup=kb_help())
+
+    # ─── ПРОМОКОДЫ (ADMIN) ─────────────────────────────
+
+    @dp.message(Command("addcode"))
+    async def cmd_addcode(msg: Message):
+        if not is_admin(msg.from_user.id): return
+        parts = msg.text.split()
+        if len(parts) < 2:
+            await msg.answer("Использование: /addcode [код] [часов]\nПример: /addcode FREECHM 2"); return
+        code  = parts[1].upper()
+        hours = 2
+        if len(parts) >= 3:
+            try: hours = int(parts[2])
+            except ValueError: await msg.answer("❌ Количество часов должно быть числом"); return
+        await db.db_promo_create(code, msg.from_user.id, hours)
+        await msg.answer(
+            f"✅ Промокод <code>{code}</code> создан ({hours} ч.)\n\n"
+            f"Пользователь вводит его на экране тарифов. Удалить: /delcode {code}",
+            parse_mode="HTML",
+        )
+
+    @dp.message(Command("delcode"))
+    async def cmd_delcode(msg: Message):
+        if not is_admin(msg.from_user.id): return
+        parts = msg.text.split()
+        if len(parts) < 2:
+            await msg.answer("Использование: /delcode [код]"); return
+        code = parts[1].upper()
+        deleted = await db.db_promo_delete(code)
+        if deleted:
+            await msg.answer(f"✅ Промокод <code>{code}</code> удалён — теперь недействителен.", parse_mode="HTML")
+        else:
+            await msg.answer(f"❌ Промокод <code>{code}</code> не найден.", parse_mode="HTML")
+
+    @dp.message(Command("listcodes"))
+    async def cmd_listcodes(msg: Message):
+        if not is_admin(msg.from_user.id): return
+        codes = await db.db_promo_list()
+        if not codes:
+            await msg.answer("📋 Активных промокодов нет."); return
+        import time as _time
+        NL   = "\n"
+        lines = ["📋 <b>Активные промокоды:</b>" + NL]
+        for c in codes:
+            import datetime
+            dt = datetime.datetime.fromtimestamp(c["created_at"]).strftime("%d.%m %H:%M")
+            lines.append(f"<code>{c['code']}</code> — {c['duration_hours']} ч.  (создан {dt})")
+        lines.append(NL + "Удалить: /delcode КОД")
+        await msg.answer(NL.join(lines), parse_mode="HTML")
 
     # ─── ЭКСПОРТ / ИМПОРТ ПОДПИСОК ────────────────────
     # После редеплоя БД может быть пуста. /export_subs сохраняет
