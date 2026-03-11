@@ -90,7 +90,6 @@ def _market_card(market: dict, analysis: dict) -> str:
     reason   = analysis["reasoning"]
     risk     = analysis.get("risk", "MEDIUM")
     edge     = analysis.get("edge", "0%")
-    ai_label = "🤖 <b>AI-анализ (Groq):</b>" if analysis.get("_source") != "rule" else "🤖 <b>AI-анализ:</b>"
 
     NL = "\n"
     return (
@@ -99,12 +98,13 @@ def _market_card(market: dict, analysis: dict) -> str:
         f"💧 Ликвидность: <b>{_fmt_usd(liq)}</b>" + NL +
         f"📈 Объём 24ч: <b>{_fmt_usd(vol)}</b>" + NL +
         f"⏰ Закрытие: <b>{end_date}</b>" + NL + NL +
-        ai_label + NL +
+        "🤖 <b>AI-анализ:</b>" + NL +
         f"Рекомендация: <b>{rec}</b> {_rec_emoji(rec)}" + NL +
         f"Уверенность: <b>{conf}</b> {_conf_emoji(conf)}" + NL +
-        f"Риск: <b>{risk}</b> {_risk_emoji(risk)}" + NL + NL +
-        f"<i>{reason}</i>" + NL +
-        f"<code>Edge: {edge}</code>"
+        f"Риск: <b>{risk}</b> {_risk_emoji(risk)}" + NL +
+        f"<code>Edge: {edge}</code>" + NL + NL +
+        "💭 <b>Мысли:</b>" + NL +
+        f"<i>{reason}</i>"
     )
 
 

@@ -256,14 +256,14 @@ class PolymarketService:
         v = data["volume_24h"]
         if y < 0.35 and v > 50_000:
             return {"recommendation": "BUY NO",  "confidence": "HIGH",
-                    "reasoning": "Цена YES завышена относительно объёма торгов.",
+                    "reasoning": f"YES торгуется по {y:.0%}, хотя объём ${v:,.0f} за 24ч не подтверждает такую высокую вероятность — рынок перекуплен по YES, выгоднее ставить NO.",
                     "edge": f"~{(0.35 - y) * 100:.0f}%", "risk": "MEDIUM"}
         if y > 0.65 and v > 50_000:
             return {"recommendation": "BUY YES", "confidence": "HIGH",
-                    "reasoning": "Цена NO завышена относительно объёма торгов.",
+                    "reasoning": f"YES торгуется по {y:.0%} с объёмом ${v:,.0f} за 24ч — устойчивый спрос на YES подтверждает тренд, NO переоценён.",
                     "edge": f"~{(y - 0.65) * 100:.0f}%", "risk": "MEDIUM"}
         return     {"recommendation": "SKIP",    "confidence": "LOW",
-                    "reasoning": "Рынок сбалансирован, нет явного перекоса.",
+                    "reasoning": f"YES {y:.0%} / NO {1-y:.0%} — рынок сбалансирован, явного ценового перекоса нет, входить невыгодно.",
                     "edge": "0%", "risk": "HIGH"}
 
     # ── Торговля (требует POLY_PRIVATE_KEY) ───────────────────────────────────
