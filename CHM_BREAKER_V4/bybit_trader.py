@@ -99,7 +99,8 @@ def _get_balance_sync(api_key: str, api_secret: str) -> float:
     coins = resp["result"]["list"][0]["coin"]
     for coin in coins:
         if coin["coin"] == "USDT":
-            val = (coin.get("availableToWithdraw") or
+            val = (coin.get("availableBalance") or
+                   coin.get("availableToWithdraw") or
                    coin.get("walletBalance") or "0")
             try:
                 return float(val)

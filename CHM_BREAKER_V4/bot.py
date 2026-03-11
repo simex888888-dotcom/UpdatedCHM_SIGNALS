@@ -165,7 +165,9 @@ async def main():
         или полностью заполненная — лишних перезаписей не будет).
         """
         import os, time as _time
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subs_backup.txt")
+        # Читаем из той же папки, куда handlers.py пишет (рядом с БД)
+        db_dir = os.path.dirname(os.path.abspath(config.DB_PATH))
+        path = os.path.join(db_dir, "subs_backup.txt")
         if not os.path.exists(path):
             return
         restored = 0
