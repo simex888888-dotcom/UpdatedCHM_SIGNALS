@@ -100,7 +100,13 @@ class MarketMonitor:
                 await self._ws_loop()
                 backoff = 1
             except Exception as exc:
-                log.warning(f"PD WS ошибка: {exc}. Реконнект через {backoff}с")
+                exc_str = str(exc)
+                # "Cannot write to closing transport" — штатное закрытие BingX WS,
+                # не настоящая ошибка — логируем тихо
+                if "closing transport" in exc_str or "ConnectionResetError" in exc_str:
+                    log.debug(f"PD WS закрыт сервером. Реконнект через {backoff}с")
+                else:
+                    log.warning(f"PD WS ошибка: {exc_str}. Реконнект через {backoff}с")
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, WS_RECONNECT_MAX)
 
@@ -219,7 +225,10 @@ class MarketMonitor:
                         elif msg.type == aiohttp.WSMsgType.TEXT:
                             text = msg.data
                             if text in ("Ping", "ping"):
-                                await ws.send_str("Pong")
+                                try:
+                                    await ws.send_str("Pong")
+                                except Exception:
+                                    break  # WS уже закрывается — выходим штатно
                             elif text.startswith("{"):
                                 await self._handle_text(text)
                         elif msg.type in (aiohttp.WSMsgType.ERROR, aiohttp.WSMsgType.CLOSED):
