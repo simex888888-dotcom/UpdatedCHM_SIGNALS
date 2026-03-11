@@ -225,6 +225,47 @@ class PolymarketService:
             data = await r.json()
         return float(data.get("mid", 0.5))
 
+    async def analyze_market(self, market: dict) -> dict:
+        """AI-анализ через Groq с fallback на rule-based."""
+        yes_price, no_price = _parse_prices(market)
+        volume_24h = float(market.get("volume24hr", 0) or 0)
+        liquidity  = float(market.get("liquidityNum", 0) or 0)
+        end_date   = (market.get("endDate") or "неизвестно")[:10]
+
+        data = {
+            "question":   market.get("question", ""),
+            "yes_price":  yes_price,
+            "no_price":   no_price,
+            "volume_24h": volume_24h,
+            "liquidity":  liquidity,
+            "end_date":   end_date,
+        }
+
+        try:
+            from groq_analyzer import analyze_with_groq
+            ai = await analyze_with_groq(data)
+        except Exception as e:
+            log.warning(f"Groq fallback: {e}")
+            ai = self._rule_based_analysis(data)
+
+        return {**data, **ai}
+
+    @staticmethod
+    def _rule_based_analysis(data: dict) -> dict:
+        y = data["yes_price"]
+        v = data["volume_24h"]
+        if y < 0.35 and v > 50_000:
+            return {"recommendation": "BUY NO",  "confidence": "HIGH",
+                    "reasoning": "Цена YES завышена относительно объёма торгов.",
+                    "edge": f"~{(0.35 - y) * 100:.0f}%", "risk": "MEDIUM"}
+        if y > 0.65 and v > 50_000:
+            return {"recommendation": "BUY YES", "confidence": "HIGH",
+                    "reasoning": "Цена NO завышена относительно объёма торгов.",
+                    "edge": f"~{(y - 0.65) * 100:.0f}%", "risk": "MEDIUM"}
+        return     {"recommendation": "SKIP",    "confidence": "LOW",
+                    "reasoning": "Рынок сбалансирован, нет явного перекоса.",
+                    "edge": "0%", "risk": "HIGH"}
+
     # ── Торговля (требует POLY_PRIVATE_KEY) ───────────────────────────────────
 
     def _make_client(self):

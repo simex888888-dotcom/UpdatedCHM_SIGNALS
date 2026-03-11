@@ -54,8 +54,12 @@ def _conf_emoji(conf: str) -> str:
     return {"HIGH": "🟢", "MEDIUM": "🟡", "LOW": "🔴"}.get(conf, "⚪")
 
 
+def _risk_emoji(risk: str) -> str:
+    return {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}.get(risk, "⚪")
+
+
 def _rec_emoji(rec: str) -> str:
-    return {"BUY YES": "✅", "BUY NO": "🔴", "SKIP": "⏭"}.get(rec, "⏭")
+    return {"BUY YES": "✅", "BUY NO": "✅", "SKIP": "⏭️"}.get(rec, "⏭️")
 
 
 def _fmt_pct(v: float) -> str:
@@ -75,15 +79,18 @@ def _market_short(question: str, max_len: int = 38) -> str:
 
 
 def _market_card(market: dict, analysis: dict) -> str:
-    q         = market.get("question", "—")
-    end_date  = market.get("endDate", "")[:10] or "—"
-    yes_p     = analysis["yes_price"]
-    no_p      = analysis["no_price"]
-    vol       = analysis["volume_24h"]
-    liq       = analysis["liquidity"]
-    rec       = analysis["recommendation"]
-    conf      = analysis["confidence"]
-    reason    = analysis["reasoning"]
+    q        = market.get("question", "—")
+    end_date = market.get("endDate", "")[:10] or "—"
+    yes_p    = analysis["yes_price"]
+    no_p     = analysis["no_price"]
+    vol      = analysis["volume_24h"]
+    liq      = analysis["liquidity"]
+    rec      = analysis["recommendation"]
+    conf     = analysis["confidence"]
+    reason   = analysis["reasoning"]
+    risk     = analysis.get("risk", "MEDIUM")
+    edge     = analysis.get("edge", "0%")
+    ai_label = "🤖 <b>AI-анализ (Groq):</b>" if analysis.get("_source") != "rule" else "🤖 <b>AI-анализ:</b>"
 
     NL = "\n"
     return (
@@ -92,10 +99,12 @@ def _market_card(market: dict, analysis: dict) -> str:
         f"💧 Ликвидность: <b>{_fmt_usd(liq)}</b>" + NL +
         f"📈 Объём 24ч: <b>{_fmt_usd(vol)}</b>" + NL +
         f"⏰ Закрытие: <b>{end_date}</b>" + NL + NL +
-        "🤖 <b>AI-анализ:</b>" + NL +
+        ai_label + NL +
         f"Рекомендация: <b>{rec}</b> {_rec_emoji(rec)}" + NL +
-        f"Уверенность: <b>{conf}</b> {_conf_emoji(conf)}" + NL + NL +
-        f"<i>{reason}</i>"
+        f"Уверенность: <b>{conf}</b> {_conf_emoji(conf)}" + NL +
+        f"Риск: <b>{risk}</b> {_risk_emoji(risk)}" + NL + NL +
+        f"<i>{reason}</i>" + NL +
+        f"<code>Edge: {edge}</code>"
     )
 
 
@@ -289,7 +298,8 @@ def register_poly_handlers(
         if not market:
             await cb.answer("⚠️ Не удалось загрузить маркет.", show_alert=True); return
 
-        analysis = analyze_market(market)
+        await _safe_edit(cb, "⏳ <b>AI анализирует маркет...</b>", None)
+        analysis = await poly.analyze_market(market)
         settings = await db.poly_get_settings(cb.from_user.id)
         default_bet = settings.get("default_bet", 5.0)
 
@@ -333,8 +343,8 @@ def register_poly_handlers(
 
         yes_, no_ = (0.5, 0.5)
         if market:
-            analysis = analyze_market(market)
-            yes_, no_ = analysis["yes_price"], analysis["no_price"]
+            _a = analyze_market(market)   # fast rule-based for price only
+            yes_, no_ = _a["yes_price"], _a["no_price"]
 
         price    = yes_ if side == "YES" else no_
         shares   = round(amount / price, 2) if price > 0 else 0
@@ -477,8 +487,8 @@ def register_poly_handlers(
             tids = _get_token_ids(market)
             token_id = tids.get(side.lower(), tok_short)
 
-        analysis = analyze_market(market) if market else {"yes_price": 0.5, "no_price": 0.5}
-        price    = analysis["yes_price"] if side == "YES" else analysis["no_price"]
+        _a    = analyze_market(market) if market else {"yes_price": 0.5, "no_price": 0.5}
+        price = _a["yes_price"] if side == "YES" else _a["no_price"]
         shares   = round(amount / price, 2) if price > 0 else 0
         profit   = round(shares - amount, 2)
 

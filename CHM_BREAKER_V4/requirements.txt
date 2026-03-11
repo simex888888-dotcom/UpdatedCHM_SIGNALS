@@ -11,6 +11,9 @@ websockets>=12.0
 scikit-learn>=1.4.0
 xgboost>=2.0.0
 
+# Polymarket AI-анализ (Groq)
+openai>=1.0.0
+
 # Polymarket (опционально — только для реальной торговли через POLY_PRIVATE_KEY)
 # Раскомментируй если нужна торговля:
 # py-clob-client>=0.17.0
