@@ -73,16 +73,22 @@ class MarketMonitor:
         """Главный цикл: получает список монет, затем держит WS соединение."""
         self._running = True
         log.info("🔌 PD Monitor запускается…")
-        await self._fetch_top_symbols()
-        if not self._symbols:
-            log.error("❌ PD Monitor: не удалось получить список монет")
-            return
 
+        # Баг 1 фикс: retry вместо return — сетевая ошибка не должна убивать систему навсегда
+        while self._running and not self._symbols:
+            await self._fetch_top_symbols()
+            if not self._symbols:
+                log.error("❌ PD Monitor: не удалось получить список монет, повтор через 30с")
+                await asyncio.sleep(30)
+
+        _prewarm_done = False  # Баг 4 фикс: прогрев только при первом старте
         backoff = 1
         while self._running:
             try:
                 await self._fetch_historical_candles()
-                await self._push_initial_events()
+                if not _prewarm_done:
+                    await self._push_initial_events()
+                    _prewarm_done = True
                 await self._ws_loop()
                 backoff = 1
             except Exception as exc:

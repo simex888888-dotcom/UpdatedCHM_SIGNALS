@@ -192,6 +192,10 @@ class PDRunner:
             await asyncio.sleep(FUNDING_FETCH_EVERY)
             symbols = self.monitor.get_symbols()
             if symbols:
+                # Баг 2 фикс: сбрасываем TTL, иначе now - last == FUNDING_FETCH_EVERY → False
+                _cache._last_funding_fetch = 0
+                _cache._last_oi_fetch      = 0
+                _cache._last_ls_fetch      = 0
                 await _cache.refresh_if_needed(symbols)
 
     # ── Переобучение ML ───────────────────────────────────────────────────────
