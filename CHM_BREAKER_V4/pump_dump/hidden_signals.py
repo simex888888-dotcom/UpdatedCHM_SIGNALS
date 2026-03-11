@@ -83,7 +83,7 @@ class HiddenSignalsCache:
     async def _fetch_funding(self, symbols: list[str]):
         url = f"{BINGX_REST_FUTURES}/quote/fundingRate"
         async with aiohttp.ClientSession() as s:
-            for sym in symbols[:30]:  # не перегружаем API
+            for sym in symbols:
                 try:
                     async with s.get(url, params={"symbol": sym},
                                      timeout=aiohttp.ClientTimeout(total=5)) as r:
@@ -97,7 +97,7 @@ class HiddenSignalsCache:
     async def _fetch_oi(self, symbols: list[str]):
         url = f"{BINGX_REST_FUTURES}/quote/openInterest"
         async with aiohttp.ClientSession() as s:
-            for sym in symbols[:30]:
+            for sym in symbols:
                 try:
                     async with s.get(url, params={"symbol": sym},
                                      timeout=aiohttp.ClientTimeout(total=5)) as r:
@@ -112,7 +112,7 @@ class HiddenSignalsCache:
         # BingX: GET /openApi/swap/v2/quote/globalLongShortPositionRatio
         url = f"{BINGX_REST_FUTURES}/quote/globalLongShortPositionRatio"
         async with aiohttp.ClientSession() as s:
-            for sym in symbols[:20]:
+            for sym in symbols:
                 try:
                     async with s.get(url, params={"symbol": sym, "period": "5m", "limit": 1},
                                      timeout=aiohttp.ClientTimeout(total=5)) as r:

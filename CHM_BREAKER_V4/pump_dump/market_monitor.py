@@ -20,7 +20,7 @@ import pandas as pd
 
 from pump_dump.pd_config import (
     BINGX_WS_URL, BINGX_REST_FUTURES,
-    TOP_COINS_COUNT, MIN_VOLUME_24H_USDT,
+    MIN_VOLUME_24H_USDT,
     CANDLE_BUFFER, WS_RECONNECT_MAX, HEARTBEAT_INTERVAL,
 )
 
@@ -117,7 +117,7 @@ class MarketMonitor:
                 and t.get("symbol", "").endswith("-USDT")
             ]
             filtered.sort(key=lambda t: float(t.get("quoteVolume", 0)), reverse=True)
-            self._symbols = [t["symbol"] for t in filtered[:TOP_COINS_COUNT]]
+            self._symbols = [t["symbol"] for t in filtered]
             log.info(f"✅ PD Monitor: {len(self._symbols)} монет для мониторинга")
         except Exception as e:
             log.error(f"PD fetch_top_symbols: {e}")

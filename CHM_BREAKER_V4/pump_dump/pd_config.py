@@ -9,8 +9,7 @@ BINGX_API_KEY      = os.getenv("BINGX_API_KEY",    "p1hIr0pmP9gVqO3rHeWVPjIjcdke
 BINGX_SECRET_KEY   = os.getenv("BINGX_SECRET_KEY", "cw7ZMgUeAKiKXjOH5Dl862AnjdXTCXYKnTh3zJxSLXA1DZOKSKtvATzK2OIHF3fxEEuulNtk27cv2KRreg")
 
 # ── Мониторинг ────────────────────────────────────────────────────────────────
-TOP_COINS_COUNT     = 80          # топ монет по объёму (было 50 — PIXEL и др. могут не попасть)
-MIN_VOLUME_24H_USDT = 250_000     # минимальный 24h объём (было 500K — слишком ограничительно)
+MIN_VOLUME_24H_USDT = 50_000      # минимальный 24h объём — фильтрует только совсем мёртвые пары
 CANDLE_BUFFER       = 200         # свечей в буфере на монету
 WS_RECONNECT_MAX    = 60          # максимальная задержка реконнекта (сек)
 HEARTBEAT_INTERVAL  = 5           # интервал pong (сек)
