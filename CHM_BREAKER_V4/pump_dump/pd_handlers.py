@@ -74,6 +74,14 @@ def _kb_back_pd() -> InlineKeyboardMarkup:
     ]])
 
 
+def _kb_loading_pd(refresh_cb: str) -> InlineKeyboardMarkup:
+    """Клавиатура для экрана загрузки: кнопка Обновить + Назад."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔄 Обновить", callback_data=refresh_cb)],
+        [InlineKeyboardButton(text="◀️ Памп/Дамп меню", callback_data="pd_menu")],
+    ])
+
+
 # ── Тексты ────────────────────────────────────────────────────────────────────
 
 def _pd_main_text(subscribed: bool, threshold: int) -> str:
@@ -216,7 +224,13 @@ def register_pd_handlers(dp: Dispatcher, bot: Bot, runner_getter):
     @dp.callback_query(F.data == "pd_top")
     async def cb_pd_top(cb: CallbackQuery):
         if not _current_scores:
-            await cb.answer("⏳ Анализ ещё не завершён, подождите немного")
+            text = "⏳ <b>Анализ ещё не завершён</b>\n\nДанные загружаются ~30 секунд после старта. Нажмите 🔄 Обновить."
+            try:
+                await cb.message.edit_text(text, parse_mode="HTML",
+                                           reply_markup=_kb_loading_pd("pd_top"))
+            except Exception:
+                pass
+            await cb.answer()
             return
         top5 = sorted(_current_scores.items(), key=lambda x: x[1], reverse=True)[:5]
         NL   = "\n"
@@ -241,9 +255,10 @@ def register_pd_handlers(dp: Dispatcher, bot: Bot, runner_getter):
             key=lambda x: abs(x[1]), reverse=True
         )[:10]
         if not rows:
-            text = "⏳ <b>Данные ещё загружаются</b>\n\nПодождите ~10 секунд и попробуйте снова."
+            text = "⏳ <b>Данные ещё загружаются</b>\n\nПодождите ~30 секунд и нажмите 🔄 Обновить."
             try:
-                await cb.message.edit_text(text, parse_mode="HTML", reply_markup=_kb_back_pd())
+                await cb.message.edit_text(text, parse_mode="HTML",
+                                           reply_markup=_kb_loading_pd("pd_funding"))
             except Exception:
                 pass
             await cb.answer()

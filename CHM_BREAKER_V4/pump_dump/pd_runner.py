@@ -78,7 +78,7 @@ class PDRunner:
             return
 
         # Параллельный анализ всех слоёв
-        an   = anomaly.detect(df)
+        an   = anomaly.detect(df, event.trades_buy_vol, event.trades_sell_vol)
         ob   = orderbook.analyze(event.orderbook, an.price_change_1m)
         ind  = indicators.analyze(df)
         hs   = await hidden_signals.analyze(sym, df, self.monitor.get_symbols())

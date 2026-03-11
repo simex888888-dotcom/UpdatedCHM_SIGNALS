@@ -42,9 +42,13 @@ class AnomalyResult:
     atr_pct: float                  # ATR нормализованный (ATR/close*100)
 
 
-def detect(df: pd.DataFrame) -> AnomalyResult:
+def detect(df: pd.DataFrame,
+           trade_buy_vol: float = 0.0,
+           trade_sell_vol: float = 0.0) -> AnomalyResult:
     """
-    df — DataFrame со столбцами: open, high, low, close, volume, buy_vol
+    df             — DataFrame со столбцами: open, high, low, close, volume, buy_vol
+    trade_buy_vol  — суммарный объём покупок из @trade WS (последние 30 тиков)
+    trade_sell_vol — суммарный объём продаж из @trade WS (последние 30 тиков)
     Минимум 30 строк.
     """
     if len(df) < 30:
@@ -98,6 +102,17 @@ def detect(df: pd.DataFrame) -> AnomalyResult:
         if all(last5[i] < last5[i+1] for i in range(4)):
             cvd_signal, cvd_dir = True, "PUMP"
         elif all(last5[i] > last5[i+1] for i in range(4)):
+            cvd_signal, cvd_dir = True, "DUMP"
+
+    # Переопределяем CVD через реальный trade-поток (@trade WS) если данные есть.
+    # buy_vol из свечей = volume*0.5 всегда (BingX REST не даёт taker split),
+    # поэтому candle CVD = 0 навсегда. Trade stream — единственный честный источник.
+    trade_total = trade_buy_vol + trade_sell_vol
+    if trade_total > 0:
+        buy_ratio = trade_buy_vol / trade_total
+        if buy_ratio > 0.62:
+            cvd_signal, cvd_dir = True, "PUMP"
+        elif buy_ratio < 0.38:
             cvd_signal, cvd_dir = True, "DUMP"
 
     # ── ATR ──────────────────────────────────────────────────────────────────
