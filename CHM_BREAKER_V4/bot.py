@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import time
+from logging.handlers import RotatingFileHandler
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -55,7 +56,10 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("chm_mid.log", encoding="utf-8"),
+        RotatingFileHandler(
+            "chm_mid.log", maxBytes=10 * 1024 * 1024,  # 10 MB
+            backupCount=3, encoding="utf-8"
+        ),
     ],
 )
 logging.getLogger("aiogram").setLevel(logging.WARNING)
@@ -82,7 +86,7 @@ async def notify_restart(bot: Bot, um: UserManager, admin_ids: list):
 
     # 1. Всем пользователям из БД
     for user in users:
-        if user.sub_status == "banned":
+        if user.sub_status not in ("trial", "active"):
             continue
         try:
             await bot.send_message(user.user_id, text, parse_mode="HTML", reply_markup=markup)

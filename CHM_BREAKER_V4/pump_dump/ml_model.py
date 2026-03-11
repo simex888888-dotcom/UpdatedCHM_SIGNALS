@@ -13,6 +13,7 @@ import os
 import pickle
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional
 
 import numpy as np
@@ -131,7 +132,7 @@ class PDMLModel:
                 n_estimators=500, max_depth=6, learning_rate=0.01,
                 subsample=0.8, colsample_bytree=0.8,
                 scale_pos_weight=10,
-                use_label_encoder=False, eval_metric="mlogloss",
+                eval_metric="mlogloss",
                 verbosity=0,
             )
             model.fit(X_tr, y_tr)
@@ -187,7 +188,7 @@ def build_feature_vector(an, ob, hs, ind) -> list[float]:
         float(hs.long_short_ratio),
         float(0.0),                                 # liquidation_zone_distance (нет Coinglass)
         # Контекст
-        float(__import__("datetime").datetime.utcnow().hour),
+        float(datetime.now(timezone.utc).hour),
         float(abs(an.price_change_3m) * 100),       # приближение volatility_24h
         float(ob.spread_pct),
     ]

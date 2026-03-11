@@ -123,11 +123,10 @@ async def run_smc_scanner(
 async def _scan_cycle(bot, um, fetcher, analyzer,
                       tf_htf, tf_mtf, tf_ltf) -> None:
     users = await um.get_active_users()
-    # SMC users: strategy==SMC AND at least one scanner is on
+    # SMC users: strategy==SMC AND at least one direction is active
     smc_users = [
         u for u in users
         if u.strategy == "SMC" and (
-            u.active or
             getattr(u, "smc_long_active",  False) or
             getattr(u, "smc_short_active", False)
         )
@@ -209,9 +208,6 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
             # Определяем какие направления активны для этого пользователя
             long_on  = getattr(user, "smc_long_active",  False)
             short_on = getattr(user, "smc_short_active", False)
-            # Если оба выключены — не отправляем ничего
-            if not long_on and not short_on:
-                continue
             # Фильтруем по направлению
             if long_on and not short_on and sig.direction != "LONG":
                 continue

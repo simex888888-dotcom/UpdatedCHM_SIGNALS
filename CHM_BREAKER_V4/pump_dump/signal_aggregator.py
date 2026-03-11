@@ -193,7 +193,7 @@ def _score_layers(direction, an, ob, hs, ind, ml) -> tuple[dict, list, float]:
     elif ml is None:
         pass  # модель не обучена — слой не участвует
     else:
-        inactive.append(f"ML модель: {'нет сигнала' if ml else 'не обучена'}")
+        inactive.append("ML модель: нет сигнала")
 
     # ── Взвешенный score ──────────────────────────────────────────────────────
     total_w = sum(w[k] for k in active)
