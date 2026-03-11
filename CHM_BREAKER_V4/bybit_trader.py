@@ -379,6 +379,29 @@ async def get_positions(api_key: str, api_secret: str, symbol: str = "") -> list
     )
 
 
+# ── Закрытые позиции (для определения результата сделки) ──────────────────────
+
+def _get_closed_pnl_sync(api_key: str, api_secret: str, symbol: str) -> list:
+    """Возвращает последние закрытые позиции по символу (linear)."""
+    session   = _get_session(api_key, api_secret)
+    bb_symbol = _to_bybit_symbol(symbol)
+    try:
+        resp = session.get_closed_pnl(category="linear", symbol=bb_symbol, limit=10)
+        if resp.get("retCode", -1) == 0:
+            return resp["result"].get("list", [])
+    except Exception as e:
+        log.debug(f"get_closed_pnl {symbol}: {e}")
+    return []
+
+
+async def get_closed_pnl(api_key: str, api_secret: str, symbol: str) -> list:
+    """Асинхронно возвращает последние закрытые позиции."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, _get_closed_pnl_sync, api_key, api_secret, symbol,
+    )
+
+
 def format_trade_result(result: dict, direction: str, symbol: str,
                         entry: float, sl: float, tp1: float,
                         risk_pct: float, leverage: int,

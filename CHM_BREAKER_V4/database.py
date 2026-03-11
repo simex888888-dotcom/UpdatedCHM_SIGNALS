@@ -434,6 +434,29 @@ async def db_get_open_trades_for_be(user_id: int) -> list[dict]:
             return [dict(r) for r in rows]
 
 
+async def db_get_all_open_trades(user_id: int) -> list[dict]:
+    """Возвращает все незакрытые сделки пользователя."""
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM trades WHERE user_id=? AND result=''",
+            (user_id,)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def db_update_trade_pos_idx(trade_id: str, pos_idx: int):
+    """Обновляет pos_idx сделки после подтверждения открытия на бирже."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "UPDATE trades SET pos_idx=? WHERE trade_id=?",
+                (pos_idx, trade_id)
+            )
+            await db.commit()
+
+
 async def db_set_trade_be(trade_id: str):
     """Помечает что безубыток по сделке уже выставлен."""
     async with _lock:
