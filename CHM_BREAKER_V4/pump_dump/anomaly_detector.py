@@ -2,7 +2,7 @@
 anomaly_detector.py — детектор аномалий объёма и цены.
 
 Реализует двойное кондиционирование (DOUBLE CONDITIONING):
-  - volume > ewma_mean * 1.30  И  volume > rolling_max * 0.60
+  - volume > ewma_mean * 1.15  И  volume > rolling_max * 0.45
 
 Z-score через EWMA вместо SMA для быстрой адаптации к рынку.
 """
