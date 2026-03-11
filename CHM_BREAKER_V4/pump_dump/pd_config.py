@@ -5,8 +5,8 @@ import os
 # ── BingX API ────────────────────────────────────────────────────────────────
 BINGX_WS_URL       = "wss://open-api-ws.bingx.com/market"
 BINGX_REST_FUTURES = "https://open-api.bingx.com/openApi/swap/v2"
-BINGX_API_KEY      = os.getenv("BINGX_API_KEY",    "p1hIr0pmP9gVqO3rHeWVPjIjcdkeRlHAuFTjob5kkV9bc5ZkXxS20a0OrnPHpMkgXQoCETk49IpAfrfK52JA")
-BINGX_SECRET_KEY   = os.getenv("BINGX_SECRET_KEY", "cw7ZMgUeAKiKXjOH5Dl862AnjdXTCXYKnTh3zJxSLXA1DZOKSKtvATzK2OIHF3fxEEuulNtk27cv2KRreg")
+BINGX_API_KEY      = os.getenv("BINGX_API_KEY",    "")
+BINGX_SECRET_KEY   = os.getenv("BINGX_SECRET_KEY", "")
 
 # ── Мониторинг ────────────────────────────────────────────────────────────────
 TOP_COINS_COUNT     = 50          # топ монет по объёму (50 для стабильности WS)

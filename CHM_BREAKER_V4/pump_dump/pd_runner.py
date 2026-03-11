@@ -143,7 +143,7 @@ class PDRunner:
             price=signal.price,
         )
         # Через 15 мин бэкфиллим исход
-        asyncio.get_event_loop().call_later(
+        asyncio.get_running_loop().call_later(
             900, lambda: asyncio.create_task(
                 self._fill_outcome(sig_id, signal.symbol, signal.price, signal.direction)
             )

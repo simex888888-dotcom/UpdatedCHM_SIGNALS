@@ -104,7 +104,8 @@ CREATE TABLE IF NOT EXISTS users (
     auto_trade_mode     TEXT    DEFAULT 'confirm',
     trade_risk_pct      REAL    DEFAULT 1.0,
     trade_leverage      INTEGER DEFAULT 10,
-    max_trades_limit    INTEGER DEFAULT 5
+    max_trades_limit    INTEGER DEFAULT 5,
+    watch_coin          TEXT    DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS trades (
@@ -300,8 +301,29 @@ async def db_get_user(user_id: int) -> Optional[dict]:
             return dict(row) if row else None
 
 
+_ALLOWED_USER_COLS = {
+    "user_id", "username", "active", "sub_status", "sub_expires",
+    "trial_started", "trial_used", "timeframe", "scan_interval",
+    "pivot_strength", "max_level_age", "max_retest_bars", "zone_buffer",
+    "ema_fast", "ema_slow", "htf_ema_period", "rsi_period", "rsi_ob",
+    "rsi_os", "vol_mult", "vol_len", "use_rsi", "use_volume",
+    "use_pattern", "use_htf", "atr_period", "atr_mult", "max_risk_pct",
+    "tp1_rr", "tp2_rr", "tp3_rr", "zone_pct", "max_dist_pct", "min_rr",
+    "max_level_tests", "min_volume_usdt", "min_quality", "cooldown_bars",
+    "notify_signal", "notify_breakout", "scan_mode", "long_tf",
+    "long_interval", "short_tf", "short_interval", "long_active",
+    "short_active", "smc_long_active", "smc_short_active", "long_cfg",
+    "short_cfg", "smc_cfg", "trend_only", "signals_received",
+    "trial_reminder_sent", "expired_notified", "updated_at", "strategy",
+    "bybit_api_key", "bybit_api_secret", "auto_trade", "auto_trade_mode",
+    "trade_risk_pct", "trade_leverage", "max_trades_limit", "watch_coin",
+}
+
+
 async def db_upsert_user(data: dict):
     data["updated_at"] = time.time()
+    # Фильтруем только допустимые колонки во избежание SQL-инъекций
+    data = {k: v for k, v in data.items() if k in _ALLOWED_USER_COLS}
     cols = list(data.keys())
     vals = list(data.values())
     placeholders = ", ".join("?" * len(vals))
@@ -542,7 +564,7 @@ async def db_pd_get_user(user_id: int) -> Optional[dict]:
             "SELECT * FROM pd_users WHERE user_id=?", (user_id,)
         ) as cur:
             row = await cur.fetchone()
-    return dict(row) if row else None
+            return dict(row) if row else None
 
 
 async def db_pd_upsert_user(user_id: int, subscribed: bool = None, threshold: int = None):
