@@ -9,8 +9,8 @@ BINGX_API_KEY      = os.getenv("BINGX_API_KEY",    "p1hIr0pmP9gVqO3rHeWVPjIjcdke
 BINGX_SECRET_KEY   = os.getenv("BINGX_SECRET_KEY", "cw7ZMgUeAKiKXjOH5Dl862AnjdXTCXYKnTh3zJxSLXA1DZOKSKtvATzK2OIHF3fxEEuulNtk27cv2KRreg")
 
 # ── Мониторинг ────────────────────────────────────────────────────────────────
-TOP_COINS_COUNT     = 50          # топ монет по объёму (50 для стабильности WS)
-MIN_VOLUME_24H_USDT = 500_000     # минимальный 24h объём для мониторинга
+TOP_COINS_COUNT     = 80          # топ монет по объёму (было 50 — PIXEL и др. могут не попасть)
+MIN_VOLUME_24H_USDT = 250_000     # минимальный 24h объём (было 500K — слишком ограничительно)
 CANDLE_BUFFER       = 200         # свечей в буфере на монету
 WS_RECONNECT_MAX    = 60          # максимальная задержка реконнекта (сек)
 HEARTBEAT_INTERVAL  = 5           # интервал pong (сек)
@@ -24,8 +24,8 @@ DOUBLE_COND_MEAN_M  = 1.15        # объём > mean_ewma * 1.15 (было 1.30
 DOUBLE_COND_MAX_M   = 0.45        # объём > rolling_max * 0.45 (было 0.60)
 
 # ── Ценовой спайк (оба условия обязательны) ──────────────────────────────────
-PRICE_SPIKE_1M      = 0.02        # >= 2% за 1 свечу
-PRICE_SPIKE_3M      = 0.035       # >= 3.5% за 3 свечи
+PRICE_SPIKE_1M      = 0.012       # >= 1.2% за 1 свечу (было 2% — слишком поздно, памп уже идёт)
+PRICE_SPIKE_3M      = 0.020       # >= 2.0% за 3 свечи (было 3.5%)
 
 # ── Стакан ────────────────────────────────────────────────────────────────────
 IMBALANCE_PUMP      = 0.68        # bid_vol / total > 68% → памп
