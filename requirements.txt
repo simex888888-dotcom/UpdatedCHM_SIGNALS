@@ -5,5 +5,16 @@ pandas==2.1.4
 numpy==1.26.3
 certifi==2024.2.2
 matplotlib
-pybit>=5.14.0
-libsql-experimental
+pybit==5.14.0
+# Памп/Дамп детектор
+websockets>=12.0
+scikit-learn>=1.4.0
+xgboost>=2.0.0
+
+# Polymarket AI-анализ (Groq)
+openai>=1.0.0
+
+# Polymarket — кастодиальные кошельки и торговля
+cryptography>=42.0.0
+eth-account>=0.10.0
+py-clob-client>=0.17.0
