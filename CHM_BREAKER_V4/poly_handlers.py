@@ -87,7 +87,7 @@ def _market_short(q: str, n: int = 40) -> str:
 def _market_card(market: dict, analysis: dict) -> str:
     q        = market.get("question", "—")
     orig_q   = market.get("question_original", "")   # оригинал если был переведён
-    end_date = market.get("endDate", "")[:10] or "—"
+    end_date = html.escape(market.get("endDate", "")[:10] or "—")
     yes_p    = analysis["yes_price"]
     no_p     = analysis["no_price"]
     vol      = analysis["volume_24h"]
@@ -95,7 +95,7 @@ def _market_card(market: dict, analysis: dict) -> str:
     rec      = analysis["recommendation"]
     conf     = analysis["confidence"]
     risk     = analysis.get("risk", "MEDIUM")
-    edge     = analysis.get("edge", "0%")
+    edge     = html.escape(str(analysis.get("edge", "0%")))
 
     # Поля глубокого анализа
     main_thesis         = analysis.get("main_thesis", "")
@@ -114,7 +114,7 @@ def _market_card(market: dict, analysis: dict) -> str:
         "BUY YES": "🟢 <b>СТАВИТЬ YES</b>",
         "BUY NO":  "🔴 <b>СТАВИТЬ NO</b>",
         "SKIP":    "⏭️ <b>ПРОПУСТИТЬ</b>",
-    }.get(rec, f"<b>{rec}</b>")
+    }.get(rec, f"<b>{html.escape(rec)}</b>")
 
     conf_map = {"HIGH": "Высокая 🟢", "MEDIUM": "Средняя 🟡", "LOW": "Низкая 🔴"}
     risk_map = {"HIGH": "Высокий 🔴", "MEDIUM": "Средний 🟡", "LOW": "Низкий 🟢"}
@@ -588,32 +588,30 @@ def register_poly_handlers(
                 translate_market(market),
                 poly.analyze_market(market),
             )
+            settings = await db.poly_get_settings(cb.from_user.id)
+            default_bet = settings.get("default_bet", 5.0)
+
+            # Можно ли торговать: есть кошелёк с балансом ИЛИ admin с POLY_PRIVATE_KEY
+            wallet, balance = await _get_user_wallet_balance(cb.from_user.id)
+            can_trade = (
+                (wallet_service.is_configured() and wallet is not None and balance >= 1.0)
+                or (is_admin(cb.from_user.id) and poly.is_trading_enabled())
+            )
+
+            text = _market_card(market, analysis)
+            # Telegram limit: 4096 chars. Trim if needed.
+            if len(text) > 4000:
+                text = text[:3990] + "\n<i>…</i>"
+            kb   = _market_kb(sk, market, analysis, default_bet, can_trade)
+            await _safe_edit(cb, text, kb)
         except Exception as e:
-            log.error(f"analyze_market {condition_id}: {e}")
+            log.error(f"cb_view_market {condition_id}: {e}", exc_info=True)
             await _safe_edit(
                 cb,
-                f"⚠️ Ошибка анализа маркета: <code>{str(e)[:200]}</code>",
+                f"⚠️ Ошибка анализа маркета: <code>{html.escape(str(e)[:200])}</code>",
                 _ik([_btn("🔄 Попробовать снова", f"pm:view:{sk}"),
                      _btn("🔙 К списку", "pm:trending:0")]),
             )
-            return
-
-        settings = await db.poly_get_settings(cb.from_user.id)
-        default_bet = settings.get("default_bet", 5.0)
-
-        # Можно ли торговать: есть кошелёк с балансом ИЛИ admin с POLY_PRIVATE_KEY
-        wallet, balance = await _get_user_wallet_balance(cb.from_user.id)
-        can_trade = (
-            (wallet_service.is_configured() and wallet is not None and balance >= 1.0)
-            or (is_admin(cb.from_user.id) and poly.is_trading_enabled())
-        )
-
-        text = _market_card(market, analysis)
-        # Telegram limit: 4096 chars. Trim if needed.
-        if len(text) > 4000:
-            text = text[:3990] + "\n<i>…</i>"
-        kb   = _market_kb(sk, market, analysis, default_bet, can_trade)
-        await _safe_edit(cb, text, kb)
 
     # ─── Подтверждение покупки ────────────────────────────────────────────
 
