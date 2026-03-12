@@ -10,6 +10,7 @@ Polygon-адрес, пополняет USDC и торгует прямо из б
   Прямой admin-кошелёк (POLY_PRIVATE_KEY) — только администраторы
 """
 
+import html
 import logging
 import time
 from typing import Optional
@@ -83,17 +84,17 @@ def _market_short(q: str, n: int = 40) -> str:
 
 
 def _market_card(market: dict, analysis: dict) -> str:
-    q        = market.get("question", "—")
-    end_date = market.get("endDate", "")[:10] or "—"
+    q        = html.escape(market.get("question", "—"))
+    end_date = html.escape(market.get("endDate", "")[:10] or "—")
     yes_p    = analysis["yes_price"]
     no_p     = analysis["no_price"]
     vol      = analysis["volume_24h"]
     liq      = analysis["liquidity"]
-    rec      = analysis["recommendation"]
-    conf     = analysis["confidence"]
-    reason   = analysis["reasoning"]
-    risk     = analysis.get("risk", "MEDIUM")
-    edge     = analysis.get("edge", "0%")
+    rec      = html.escape(str(analysis["recommendation"]))
+    conf     = html.escape(str(analysis["confidence"]))
+    reason   = html.escape(str(analysis["reasoning"]))
+    risk     = html.escape(str(analysis.get("risk", "MEDIUM")))
+    edge     = html.escape(str(analysis.get("edge", "0%")))
 
     NL = "\n"
     return (
@@ -103,9 +104,9 @@ def _market_card(market: dict, analysis: dict) -> str:
         f"📈 Объём 24ч: <b>{_fmt_usd(vol)}</b>" + NL +
         f"⏰ Закрытие: <b>{end_date}</b>" + NL + NL +
         "🤖 <b>AI-анализ:</b>" + NL +
-        f"Рекомендация: <b>{rec}</b> {_rec_emoji(rec)}" + NL +
-        f"Уверенность: <b>{conf}</b> {_conf_emoji(conf)}" + NL +
-        f"Риск: <b>{risk}</b> {_risk_emoji(risk)}" + NL +
+        f"Рекомендация: <b>{rec}</b> {_rec_emoji(analysis['recommendation'])}" + NL +
+        f"Уверенность: <b>{conf}</b> {_conf_emoji(analysis['confidence'])}" + NL +
+        f"Риск: <b>{risk}</b> {_risk_emoji(analysis.get('risk', 'MEDIUM'))}" + NL +
         f"<code>Edge: {edge}</code>" + NL + NL +
         "💭 <b>Мысли:</b>" + NL +
         f"<i>{reason}</i>"
