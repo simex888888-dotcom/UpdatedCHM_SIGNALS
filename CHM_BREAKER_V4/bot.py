@@ -93,47 +93,17 @@ logging.getLogger("aiohttp").setLevel(logging.WARNING)
 log = logging.getLogger("CHM.Main")
 
 
-async def notify_restart(bot: Bot, um: UserManager, admin_ids: list):
-    """Рассылка уведомления о перезапуске:
-    - всем пользователям из БД (кроме banned)
-    - администраторам всегда, даже если не в БД
-    """
-    markup = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="▶️ Открыть меню", callback_data="back_main"),
-    ]])
-    text = "🔄 <b>Бот был обновлён!</b>\n\nНажмите /start чтобы продолжить работу."
-
-    users     = await um.all_users()
-    notified  = set()   # чтобы не слать дважды
+async def notify_restart(bot: Bot, admin_ids: list):
+    """Уведомление о перезапуске — только администраторам."""
+    text = "🔄 <b>Бот обновлён</b> (новый код задеплоен)."
     sent = failed = 0
-
-    log.info("🔄 Пользователей в БД: " + str(len(users)))
-
-    # 1. Всем пользователям из БД
-    for user in users:
-        if user.sub_status not in ("trial", "active"):
-            continue
-        try:
-            await bot.send_message(user.user_id, text, parse_mode="HTML", reply_markup=markup)
-            notified.add(user.user_id)
-            sent += 1
-            await asyncio.sleep(0.05)
-        except Exception as e:
-            log.warning("notify_restart uid=" + str(user.user_id) + ": " + str(e))
-            failed += 1
-
-    # 2. Администраторам — всегда, даже если их нет в БД
     for admin_id in admin_ids:
-        if admin_id in notified:
-            continue
         try:
-            await bot.send_message(admin_id, text, parse_mode="HTML", reply_markup=markup)
+            await bot.send_message(admin_id, text, parse_mode="HTML")
             sent += 1
-            await asyncio.sleep(0.05)
         except Exception as e:
             log.warning("notify_restart admin=" + str(admin_id) + ": " + str(e))
             failed += 1
-
     log.info("🔄 Перезапуск: отправлено " + str(sent) + ", ошибок " + str(failed))
 
 
@@ -260,7 +230,7 @@ async def main():
         saved_hash   = await database.db_kv_get("bot_code_hash")
         if current_hash != saved_hash:
             log.info(f"🔄 Обнаружено обновление кода ({saved_hash} → {current_hash}), рассылка...")
-            await notify_restart(bot, um, config.ADMIN_IDS)
+            await notify_restart(bot, config.ADMIN_IDS)
             await database.db_kv_set("bot_code_hash", current_hash)
         else:
             log.info("♻️ Рестарт без изменений кода — рассылка пропущена.")
