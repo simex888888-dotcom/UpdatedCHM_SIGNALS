@@ -17,6 +17,35 @@
 import os
 
 
+def _is_writable(path: str) -> bool:
+    """Проверяет, можно ли создать файл в директории."""
+    probe = os.path.join(path, ".chm_write_probe")
+    try:
+        with open(probe, "w") as _f:
+            _f.write("")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+def _find_data_dir() -> str:
+    for candidate in ("/data", "/app/data", "/persistent"):
+        if os.path.isdir(candidate) and _is_writable(candidate):
+            return candidate
+    # Создаём /app/data если /app существует
+    app_data = "/app/data"
+    if os.path.isdir("/app"):
+        try:
+            os.makedirs(app_data, exist_ok=True)
+            if _is_writable(app_data):
+                return app_data
+        except OSError:
+            pass
+    # Последний вариант — рядом со скриптом
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 class Config:
 
     # ════════════════════════════════════════════════
@@ -53,38 +82,6 @@ class Config:
     #   Если хостинг сохраняет рабочую директорию между перезапусками
     #   (но не между редеплоями) — DB_PATH=/app/chm_bot.db.
     # ─────────────────────────────────────────────────────────────────────
-    def _is_writable(path: str) -> bool:
-        """Проверяет, можно ли создать файл в директории."""
-        probe = os.path.join(path, ".chm_write_probe")
-        try:
-            with open(probe, "w") as _f:
-                _f.write("")
-            os.remove(probe)
-            return True
-        except OSError:
-            return False
-
-    # Приоритет поиска постоянного хранилища:
-    # 1. /data           — Docker volume (VPS, docker-compose)
-    # 2. /app/data       — bothost.ru / Railway / Render (примонтированный том)
-    # 3. /persistent     — некоторые managed-хостинги
-    # 4. рядом со скриптом — fallback (ТЕРЯЕТСЯ при редеплое!)
-    def _find_data_dir() -> str:
-        for candidate in ("/data", "/app/data", "/persistent"):
-            if os.path.isdir(candidate) and _is_writable(candidate):
-                return candidate
-        # Создаём /app/data если /app существует
-        app_data = "/app/data"
-        if os.path.isdir("/app"):
-            try:
-                os.makedirs(app_data, exist_ok=True)
-                if _is_writable(app_data):
-                    return app_data
-            except OSError:
-                pass
-        # Последний вариант — рядом со скриптом
-        return os.path.dirname(os.path.abspath(__file__))
-
     _default_db = os.path.join(_find_data_dir(), "chm_bot.db")
     DB_PATH = os.getenv("DB_PATH", _default_db)
 
