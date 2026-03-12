@@ -51,11 +51,11 @@ def _arg(v) -> dict:
     if v is None:
         return {"type": "null", "value": None}
     if isinstance(v, bool):
-        return {"type": "integer", "value": 1 if v else 0}
+        return {"type": "integer", "value": "1" if v else "0"}
     if isinstance(v, int):
-        return {"type": "integer", "value": v}
+        return {"type": "integer", "value": str(v)}
     if isinstance(v, float):
-        return {"type": "float", "value": v}
+        return {"type": "float", "value": str(v)}
     return {"type": "text", "value": str(v)}
 
 

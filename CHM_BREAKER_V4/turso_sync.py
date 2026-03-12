@@ -80,11 +80,13 @@ def _arg(v) -> dict:
     if v is None:
         return {"type": "null", "value": None}
     if isinstance(v, bool):
-        return {"type": "integer", "value": 1 if v else 0}
+        # bool перед int — иначе True/False попадут в ветку int
+        return {"type": "integer", "value": "1" if v else "0"}
     if isinstance(v, int):
-        return {"type": "integer", "value": v}
+        # Turso HTTP API требует value как строку даже для integer/float
+        return {"type": "integer", "value": str(v)}
     if isinstance(v, float):
-        return {"type": "float", "value": v}
+        return {"type": "float", "value": str(v)}
     return {"type": "text", "value": str(v)}
 
 
