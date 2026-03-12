@@ -13,6 +13,7 @@ scanner_mid.py — мультисканнинг для 50-500 пользоват
 
 import asyncio
 import logging
+import math
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -220,10 +221,16 @@ def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
         "📋 <b>Факторы качества:</b>" + NL + NL.join(sig.reasons)
     ) if sig.reasons else ""
     def _fp(v: float) -> str:
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return str(v)
+        if v <= 0:      return "0"
         if v >= 10_000: return f"{v:,.0f}"
         if v >= 100:    return f"{v:,.1f}"
         if v >= 1:      return f"{v:.4f}".rstrip("0").rstrip(".")
-        return f"{v:.6f}".rstrip("0").rstrip(".")
+        decimals = -math.floor(math.log10(v)) + 3
+        return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
 
     return (
         header + NL + NL +

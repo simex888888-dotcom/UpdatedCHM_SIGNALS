@@ -14,6 +14,7 @@ Quality: 0–10 (фильтр по cfg.MIN_QUALITY)
 """
 
 import logging
+import math
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
@@ -846,11 +847,17 @@ class CHMIndicator:
 
     @staticmethod
     def _fmt_p(v: float) -> str:
-        """Форматирует цену без научной нотации."""
+        """Форматирует цену без научной нотации, сохраняя полную точность."""
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return str(v)
+        if v <= 0:      return "0"
         if v >= 10_000: return f"{v:,.0f}"
         if v >= 100:    return f"{v:,.1f}"
         if v >= 1:      return f"{v:.4f}".rstrip("0").rstrip(".")
-        return f"{v:.6f}".rstrip("0").rstrip(".")
+        decimals = -math.floor(math.log10(v)) + 3
+        return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
 
     def _build_human_explanation(self, signal: str, s_level: float,
                                  s_class: int, s_hits: int, s_type: str,
