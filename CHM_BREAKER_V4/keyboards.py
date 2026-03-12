@@ -463,7 +463,7 @@ def kb_notify(user: UserSettings) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         _noop("── Типы уведомлений ──────────────────────────────"),
         _btn(_check(user.notify_signal)   + " Сигнал входа",        "toggle_notify_signal"),
-        _btn(_check(user.notify_breakout) + " Пробой уровня (ранний)","toggle_notify_breakout"),
+        _btn(_check(user.notify_breakout) + " Пробой уровня (ранний)", "toggle_notify_breakout"),
         _back("menu_settings"),
     ])
 

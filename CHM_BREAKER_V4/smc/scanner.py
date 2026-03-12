@@ -201,6 +201,23 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
 
             if df_htf_data is None or df_mtf_data is None:
                 continue
+
+            # Сканер должен быть включён хотя бы в одном режиме
+            any_on = (
+                (user.active and user.scan_mode == "smc_both") or
+                getattr(user, "smc_long_active",  False) or
+                getattr(user, "smc_short_active", False)
+            )
+            if not any_on:
+                continue
+
+            # Фильтр направления из настроек SMC (ucfg.direction — главный)
+            if ucfg.direction != "BOTH" and sig.direction != ucfg.direction:
+                continue
+
+            # Антидубликат per-user
+            sig_hash = f"{user.user_id}_{symbol}_{sig.direction}_{sig.score}"
+            if time.time() - _sent_signals.get(sig_hash, 0) < _DEDUP_HOURS * 3600:
             if len(df_htf_data) < 30 or len(df_mtf_data) < 30:
                 continue
 

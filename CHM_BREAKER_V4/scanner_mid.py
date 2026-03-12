@@ -281,6 +281,7 @@ class MidScanner:
         # Глобальный тренд
         self._global_trend:     dict  = {}
         self._trend_updated_at: float = 0
+
         self._trend_ttl:        int   = 3600
 
         # Фундаментальный контекст (обновляется раз в цикл)
