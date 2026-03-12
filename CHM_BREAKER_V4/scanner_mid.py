@@ -31,6 +31,11 @@ from fetcher import OKXFetcher
 from indicator import CHMIndicator, SignalResult
 from keyboards import kb_contact_admin
 from watermark import wm_inject
+try:
+    import fundamental as _fund
+    _FUND_OK = True
+except ImportError:
+    _FUND_OK = False
 
 
 def _compute_correlation(df1, df2, periods: int = 30) -> float:
@@ -271,6 +276,9 @@ class MidScanner:
         self._trend_updated_at: float = 0
         self._trend_ttl:        int   = 3600
 
+        # Фундаментальный контекст (обновляется раз в цикл)
+        self._fund_block: str = ""
+
     # ── Индикатор ────────────────────────────────────
 
     def _indicator(self, job: ScanJob) -> CHMIndicator:
@@ -483,9 +491,16 @@ class MidScanner:
                 show_trade_btn = True
 
         try:
+            _base_text = signal_text(sig, cfg)
+            if self._fund_block:
+                _base_text += (
+                    "\n━━━━━━━━━━━━━━━━━━━━\n"
+                    "📌 <b>Фундаментал рынка:</b>\n" +
+                    self._fund_block + "\n"
+                )
             await self.bot.send_message(
                 user.user_id,
-                wm_inject(signal_text(sig, cfg), user.user_id),
+                wm_inject(_base_text, user.user_id),
                 parse_mode="HTML",
                 reply_markup=signal_compact_keyboard(
                     trade_id, sig.symbol, show_trade_btn=show_trade_btn
@@ -621,6 +636,13 @@ class MidScanner:
     async def _cycle(self):
         start = time.time()
         await self._update_trend_if_needed()
+
+        # Обновляем фундаментальный контекст один раз на цикл
+        if _FUND_OK:
+            try:
+                self._fund_block = await _fund.get_market_context_block()
+            except Exception as _fe:
+                log.debug("fundamental: " + str(_fe))
 
         users = await self.um.get_active_users()
         if not users:

@@ -10,6 +10,7 @@ Polygon-адрес, пополняет USDC и торгует прямо из б
   Прямой admin-кошелёк (POLY_PRIVATE_KEY) — только администраторы
 """
 
+import asyncio
 import logging
 import time
 from typing import Optional
@@ -26,7 +27,7 @@ import database as db
 import wallet_service
 from polymarket_service import (
     PolymarketService, analyze_market, _get_short_key, get_condition_id,
-    _parse_prices,
+    _parse_prices, translate_market, translate_question,
 )
 
 log = logging.getLogger("CHM.Poly")
@@ -413,8 +414,18 @@ def register_poly_handlers(
                              _ik([_btn("🔙 Polymarket", "pm:menu")]))
             return
 
+        # Переводим вопросы параллельно
+        translated_markets = await asyncio.gather(
+            *[translate_market(m) for m in markets],
+            return_exceptions=True,
+        )
+        translated_markets = [
+            m if not isinstance(m, Exception) else markets[i]
+            for i, m in enumerate(translated_markets)
+        ]
+
         rows = []
-        for m in markets:
+        for m in translated_markets:
             q        = _market_short(m.get("question", "—"), 40)
             sk       = _get_short_key(m.get("id", ""))
             analysis = analyze_market(m)
@@ -471,8 +482,18 @@ def register_poly_handlers(
             )
             return
 
+        # Переводим найденные маркеты
+        translated_markets_s = await asyncio.gather(
+            *[translate_market(m) for m in markets],
+            return_exceptions=True,
+        )
+        translated_markets_s = [
+            m if not isinstance(m, Exception) else markets[i]
+            for i, m in enumerate(translated_markets_s)
+        ]
+
         rows = []
-        for m in markets:
+        for m in translated_markets_s:
             q  = _market_short(m.get("question", "—"), 40)
             sk = _get_short_key(m.get("id", ""))
             analysis = analyze_market(m)
@@ -503,6 +524,7 @@ def register_poly_handlers(
             return
 
         await _safe_edit(cb, "⏳ <b>AI анализирует маркет...</b>", None)
+        market   = await translate_market(market)
         analysis = await poly.analyze_market(market)
         settings = await db.poly_get_settings(cb.from_user.id)
         default_bet = settings.get("default_bet", 5.0)
