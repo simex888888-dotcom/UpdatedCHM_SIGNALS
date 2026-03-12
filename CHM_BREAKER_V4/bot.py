@@ -140,16 +140,26 @@ async def notify_restart(bot: Bot, um: UserManager, admin_ids: list):
 async def main():
     config = Config()
 
-    # Резервная копия БД перед каждым запуском (5 ротаций)
+    import os as _os
+    _db_dir     = _os.path.dirname(_os.path.abspath(config.DB_PATH))
+    _db_writable = _os.access(_db_dir, _os.W_OK)
+    log.info("🚀 CHM BREAKER MID запускается...")
+    log.info(f"   SQLite:      {config.DB_PATH}  [{'writable' if _db_writable else '⚠️ NOT WRITABLE — check DB_PATH env var'}]")
+    log.info(f"   Воркеров:    {config.SCAN_WORKERS}")
+    log.info(f"   API conc.:   {config.API_CONCURRENCY}")
+    log.info(f"   Кэш монет:   {config.CACHE_MAX_SYMBOLS} символов")
+
+    # ─── ШАГ 1: Восстанавливаем локальный SQLite из Turso ────────────────────
+    # КРИТИЧНО: делаем это ДО backup и ДО init_db.
+    # После восстановления _restore_attempted=True → turso_push разблокируется.
+    await turso_sync.restore_from_turso_if_needed(config.DB_PATH)
+
+    # ─── ШАГ 2: Резервная копия БД (теперь уже восстановленной) ──────────────
     _backup_db(config.DB_PATH)
 
-    # init_db сначала — создаёт таблицы (нужны для turso_pull)
+    # ─── ШАГ 3: Инициализация SQLite (создаёт недостающие таблицы/колонки) ───
     log.info("⏳ Инициализация SQLite...")
     await database.init_db(config.DB_PATH)
-
-    # ─── Turso: восстанавливаем данные из облака (ПОСЛЕ init_db) ─────────────
-    # HTTP API читает данные из Turso и пишет в уже созданные таблицы.
-    await turso_sync.turso_pull(config.DB_PATH)
 
     log.info("⏳ Инициализация кэша...")
     cache.init_cache(max_symbols=config.CACHE_MAX_SYMBOLS)
@@ -244,15 +254,6 @@ async def main():
             await database.db_kv_set("bot_code_hash", current_hash)
         else:
             log.info("♻️ Рестарт без изменений кода — рассылка пропущена.")
-
-    import os as _os
-    _db_dir = _os.path.dirname(_os.path.abspath(config.DB_PATH))
-    _db_writable = _os.access(_db_dir, _os.W_OK)
-    log.info("🚀 CHM BREAKER MID запускается...")
-    log.info(f"   SQLite:      {config.DB_PATH}  [{'writable' if _db_writable else '⚠️ NOT WRITABLE — check DB_PATH env var'}]")
-    log.info(f"   Воркеров:    {config.SCAN_WORKERS}")
-    log.info(f"   API conc.:   {config.API_CONCURRENCY}")
-    log.info(f"   Кэш монет:   {config.CACHE_MAX_SYMBOLS} символов")
 
     async def _subs_backup_loop():
         """Периодически сохраняет subs_backup.txt рядом с БД (каждые 10 мин).
