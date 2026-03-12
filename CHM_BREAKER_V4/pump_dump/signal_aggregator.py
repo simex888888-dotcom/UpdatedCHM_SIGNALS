@@ -25,6 +25,9 @@ _debug_counter = 0   # счётчик событий для периодичес
 from pump_dump.pd_config import (
     LAYER_WEIGHTS, MIN_SIGNAL_SCORE, MIN_ACTIVE_LAYERS,
     ANTI_SPAM_MINUTES, MAX_ATR_PCT,
+    LVL1_ZSCORE_MIN, LVL1_SPAM_MINUTES,
+    LVL2_MIN_LAYERS, LVL2_MIN_SCORE, LVL2_SPAM_MINUTES,
+    LVL3_MIN_LAYERS, LVL3_MIN_SCORE, LVL3_SPAM_MINUTES,
 )
 from pump_dump.anomaly_detector  import AnomalyResult
 from pump_dump.orderbook_analyzer import OBResult
@@ -51,8 +54,268 @@ class SignalPayload:
     ts: float
 
 
-# Anti-spam: symbol → last_signal_ts
+# Anti-spam: symbol → last_signal_ts (финальный сигнал уровень 3)
 _last_signal_ts: dict[str, float] = {}
+
+# Anti-spam по уровням: level → symbol → timestamp
+_level_spam: dict[int, dict[str, float]] = {1: {}, 2: {}, 3: {}}
+
+_LEVEL_SPAM_MINUTES = {
+    1: LVL1_SPAM_MINUTES,
+    2: LVL2_SPAM_MINUTES,
+    3: LVL3_SPAM_MINUTES,
+}
+
+
+def is_spam(symbol: str, level: int) -> bool:
+    """Проверяет, был ли недавно отправлен сигнал данного уровня по символу."""
+    last = _level_spam.get(level, {}).get(symbol, 0)
+    return (time.time() - last) < _LEVEL_SPAM_MINUTES.get(level, 15) * 60
+
+
+def _mark_sent(symbol: str, level: int) -> None:
+    """Отмечает, что сигнал данного уровня был отправлен."""
+    _level_spam.setdefault(level, {})[symbol] = time.time()
+
+
+def _direction_simple(an: "AnomalyResult", buy_ratio: float) -> Optional[Literal["PUMP", "DUMP"]]:
+    """Определяет направление по объёму торгов и ценовому спайку (для ранних уровней)."""
+    if an.spike_dir is not None:
+        return an.spike_dir
+    if buy_ratio >= 0.60:
+        return "PUMP"
+    if buy_ratio <= 0.40:
+        return "DUMP"
+    return None
+
+
+def check_alert_level(
+    active: dict,
+    score: float,
+    an: "AnomalyResult",
+    ml: Optional["MLResult"],
+) -> Optional[int]:
+    """
+    Определяет уровень сигнала на основе активных слоёв и score.
+    Возвращает 1, 2, 3 или None.
+    Уровень 3 требует подтверждения ML если модель готова.
+    """
+    n = len(active)
+
+    # Уровень 3: финальный сигнал
+    if n >= LVL3_MIN_LAYERS and score >= LVL3_MIN_SCORE:
+        ml_ready = get_model().is_ready()
+        if ml_ready and (ml is None or ml.predicted == "NEUTRAL"):
+            pass  # ML не согласна — не уходим на уровень 3
+        else:
+            return 3
+
+    # Уровень 2: наблюдение
+    if n >= LVL2_MIN_LAYERS and score >= LVL2_MIN_SCORE:
+        return 2
+
+    # Уровень 1: внимание — только аномальный объём
+    if an.volume_anomaly and an.volume_zscore >= LVL1_ZSCORE_MIN:
+        return 1
+
+    return None
+
+
+def analyze_levels(
+    symbol: str,
+    price: float,
+    an: "AnomalyResult",
+    ob: "OBResult",
+    hs: "HiddenResult",
+    ind: "IndicatorResult",
+    buy_ratio: float,
+) -> list[tuple[int, str]]:
+    """
+    Анализирует все уровни сигналов для символа.
+    Возвращает список (level, formatted_text) для каждого нового уровня,
+    который нужно отправить.
+
+    Если уровень 3 готов — помечаем 1, 2, 3 как отправленные.
+    Если уровень 2 — помечаем 1 и 2.
+    Если уровень 1 — только 1.
+    """
+    # Не рассматриваем символы где памп уже идёт
+    if an.atr_pct > MAX_ATR_PCT:
+        return []
+
+    direction = _direction_simple(an, buy_ratio)
+    if direction is None:
+        return []
+
+    # Вычисляем слои и score
+    ml = get_model().predict(build_feature_vector(an, ob, hs, ind))
+    active, inactive, score = _score_layers(direction, an, ob, hs, ind, ml)
+
+    # ML penalty для уровня 3
+    ml_ready = get_model().is_ready()
+    if ml_ready and "ml" not in active:
+        score = max(0.0, score - 15.0)
+
+    level = check_alert_level(active, score, an, ml)
+    if level is None:
+        return []
+
+    results = []
+
+    if level == 3:
+        if not is_spam(symbol, 3):
+            text3 = _format_level3_from_parts(
+                symbol, direction, price, score, active, inactive, ml, an, ob, hs
+            )
+            results.append((3, text3))
+            _mark_sent(symbol, 1)
+            _mark_sent(symbol, 2)
+            _mark_sent(symbol, 3)
+            # Обновляем глобальный _last_signal_ts для совместимости с aggregate()
+            _last_signal_ts[symbol] = time.time()
+    elif level == 2:
+        if not is_spam(symbol, 2):
+            text2 = format_level2(symbol, direction, price, an, active, score)
+            results.append((2, text2))
+            _mark_sent(symbol, 1)
+            _mark_sent(symbol, 2)
+    elif level == 1:
+        if not is_spam(symbol, 1):
+            text1 = format_level1(symbol, direction, price, an)
+            results.append((1, text1))
+            _mark_sent(symbol, 1)
+
+    return results
+
+
+def format_level1(
+    symbol: str,
+    direction: Literal["PUMP", "DUMP"],
+    price: float,
+    an: "AnomalyResult",
+) -> str:
+    """Форматирует сообщение уровня 1 — ВНИМАНИЕ."""
+    emoji = "📈" if direction == "PUMP" else "📉"
+    dir_ru = "ПАМП" if direction == "PUMP" else "ДАМП"
+    mean_mult = an.volume_zscore / 2.0 if an.volume_zscore > 0 else 1.0
+    change_pct = an.price_change_1m * 100
+
+    lines = [
+        f"👀 <b>ВНИМАНИЕ — {emoji} {dir_ru}?</b>",
+        f"🪙 <b>${symbol}/USDT</b>  •  BingX Futures",
+        f"💰 Цена: <b>${price:,.4f}</b>",
+        f"📊 Объём: Z-score {an.volume_zscore:.1f} (в {mean_mult:.1f}x выше нормы)",
+        f"{'📈' if change_pct >= 0 else '📉'} Изменение: {change_pct:+.1f}% (1m)",
+        "⏳ Наблюдаю... жду подтверждения других слоёв",
+    ]
+    return "\n".join(lines)
+
+
+def format_level2(
+    symbol: str,
+    direction: Literal["PUMP", "DUMP"],
+    price: float,
+    an: "AnomalyResult",
+    active_layers: dict,
+    score: float,
+) -> str:
+    """Форматирует сообщение уровня 2 — НАБЛЮДЕНИЕ."""
+    emoji = "🔺" if direction == "PUMP" else "🔻"
+    dir_ru = "ПАМП" if direction == "PUMP" else "ДАМП"
+    change_pct = an.price_change_1m * 100
+
+    layer_labels = {
+        "volume":    "📦 Объём аномальный",
+        "price":     "📊 Ценовой спайк",
+        "cvd":       "🌊 CVD дивергенция",
+        "orderbook": "📖 Стакан дисбаланс",
+        "spread":    "↔️ Спред расширен",
+        "funding":   "💸 Funding аномалия",
+        "oi":        "📉 OI дивергенция",
+        "ml":        "🤖 ML подтверждение",
+    }
+
+    lines = [
+        f"⚠️ <b>НАБЛЮДЕНИЕ — {emoji} {dir_ru}</b>",
+        f"🪙 <b>${symbol}/USDT</b>  •  BingX Futures",
+        f"💰 Цена: <b>${price:,.4f}</b>",
+        f"{'📈' if change_pct >= 0 else '📉'} Изменение: {change_pct:+.1f}% (1m)",
+        "",
+        f"🔍 <b>Активных слоёв: {len(active_layers)}/8:</b>",
+    ]
+    items = list(active_layers.keys())
+    for i, key in enumerate(items):
+        prefix = "└" if i == len(items) - 1 else "├"
+        label = layer_labels.get(key, key)
+        lines.append(f"{prefix} {label} ✅")
+
+    lines += [
+        "",
+        f"🎯 Score: <b>{score:.0f}%</b>  (нужно {LVL3_MIN_SCORE}% для сигнала)",
+    ]
+    return "\n".join(lines)
+
+
+def _format_level3_from_parts(
+    symbol: str,
+    direction: str,
+    price: float,
+    score: float,
+    active: dict,
+    inactive: list,
+    ml,
+    an: "AnomalyResult",
+    ob: "OBResult",
+    hs: "HiddenResult",
+) -> str:
+    """Форматирует уровень 3 через существующий format_alert после создания SignalPayload."""
+    import datetime
+    NL = "\n"
+    emoji = "⚡️" if direction == "PUMP" else "💥"
+    dir_ru = "ПАМП" if direction == "PUMP" else "ДАМП"
+    sign = "📈" if direction == "PUMP" else "📉"
+
+    layer_labels = {
+        "volume":    "📦 Объём",
+        "price":     "📊 Цена",
+        "cvd":       "🌊 CVD",
+        "orderbook": "📖 Стакан",
+        "spread":    "↔️ Спред",
+        "funding":   "💸 Funding / L/S",
+        "oi":        "📉 Open Interest",
+        "ml":        "🤖 ML модель",
+    }
+
+    lines = [
+        f"{emoji} <b>HIGH CONFIDENCE {dir_ru} SIGNAL</b>" + NL,
+        f"🪙 <b>${symbol}</b>  •  BingX Futures",
+        f"💰 Цена: <b>${price:,.4f}</b>  {sign} "
+        f"<b>{an.price_change_1m*100:+.1f}%</b> (1m) / "
+        f"<b>{an.price_change_3m*100:+.1f}%</b> (3m)",
+        "",
+        f"🔍 <b>Активные сигналы ({len(active)}/8):</b>",
+    ]
+    items = list(active.items())
+    for i, (key, desc) in enumerate(items):
+        prefix = "└" if i == len(items) - 1 else "├"
+        label = layer_labels.get(key, key)
+        lines.append(f"{prefix} {label}:  {desc}")
+
+    if inactive:
+        lines += ["", f"⚠️ <b>Неактивно ({len(inactive)}/8):</b>"]
+        for i, item in enumerate(inactive):
+            prefix = "└" if i == len(inactive) - 1 else "├"
+            lines.append(f"{prefix} {item}")
+
+    ts_str = datetime.datetime.utcnow().strftime("%H:%M:%S UTC")
+    sym_url = symbol.replace("-", "")
+    lines += [
+        "",
+        f"🎯 <b>Уверенность: {score:.0f}%</b>",
+        f"⏰ {ts_str}",
+        f'🔗 <a href="https://bingx.com/en/futures/{sym_url}/">BingX</a>',
+    ]
+    return NL.join(lines)
 
 
 def aggregate(
