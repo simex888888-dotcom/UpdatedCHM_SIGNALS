@@ -52,7 +52,7 @@ class Config:
     #  🔑 TELEGRAM
     # ════════════════════════════════════════════════
 
-    TELEGRAM_TOKEN ="8735063327:AAE-uPE-p9DO0hq1EznAn6bVIKdierGkCQ4"
+    TELEGRAM_TOKEN ="8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k"
 
 
     # Твой Telegram ID — станешь администратором
