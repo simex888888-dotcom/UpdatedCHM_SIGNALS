@@ -183,22 +183,18 @@ async def _scan_cycle(bot, um, fetcher, analyzer,
             if sig is None:
                 continue
 
-            # Определяем какие направления активны для этого пользователя
-            both_on  = user.active and user.scan_mode == "smc_both"
-            long_on  = getattr(user, "smc_long_active",  False)
-            short_on = getattr(user, "smc_short_active", False)
-            if both_on:
-                pass   # принимаем любое направление
-            elif long_on and not short_on:
-                if sig.direction != "LONG":
-                    continue
-            elif short_on and not long_on:
-                if sig.direction != "SHORT":
-                    continue
-            elif long_on and short_on:
-                pass   # оба включены — принимаем всё
-            else:
-                continue  # ни один режим не включён
+            # Сканер должен быть включён хотя бы в одном режиме
+            any_on = (
+                (user.active and user.scan_mode == "smc_both") or
+                getattr(user, "smc_long_active",  False) or
+                getattr(user, "smc_short_active", False)
+            )
+            if not any_on:
+                continue
+
+            # Фильтр направления из настроек SMC (ucfg.direction — главный)
+            if ucfg.direction != "BOTH" and sig.direction != ucfg.direction:
+                continue
 
             # Антидубликат per-user
             sig_hash = f"{user.user_id}_{symbol}_{sig.direction}_{sig.score}"
