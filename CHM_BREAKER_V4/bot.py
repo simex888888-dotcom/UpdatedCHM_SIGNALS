@@ -149,17 +149,26 @@ async def main():
     log.info(f"   API conc.:   {config.API_CONCURRENCY}")
     log.info(f"   Кэш монет:   {config.CACHE_MAX_SYMBOLS} символов")
 
-    # ─── ШАГ 1: Восстанавливаем локальный SQLite из Turso ────────────────────
-    # КРИТИЧНО: делаем это ДО backup и ДО init_db.
-    # После восстановления _restore_attempted=True → turso_push разблокируется.
-    await turso_sync.restore_from_turso_if_needed(config.DB_PATH)
-
-    # ─── ШАГ 2: Резервная копия БД (теперь уже восстановленной) ──────────────
+    # ─── ШАГ 1: Бэкап локального SQLite (до любых изменений) ────────────────
     _backup_db(config.DB_PATH)
 
-    # ─── ШАГ 3: Инициализация SQLite (создаёт недостающие таблицы/колонки) ───
+    # ─── ШАГ 2: Инициализация SQLite — создаём правильную схему (типы!) ─────
+    # ВАЖНО: init_db ПЕРЕД restore, иначе restore создаёт таблицы с col TEXT
+    # для всех колонок (включая INTEGER/REAL), и данные читаются как строки.
     log.info("⏳ Инициализация SQLite...")
     await database.init_db(config.DB_PATH)
+
+    # ─── ШАГ 3: Восстанавливаем данные из Turso (в уже правильную схему) ────
+    # Если Turso пустой — оставляем локальную БД как есть.
+    # После вызова _restore_attempted=True → turso_push разблокируется.
+    turso_had_data = await turso_sync.restore_from_turso_if_needed(config.DB_PATH)
+
+    # ─── ШАГ 4: Если Turso был пустым, пушим локальные данные сразу ──────────
+    # Без этого первый пуш произойдёт через SYNC_INTERVAL (300с).
+    # Если контейнер рестартует раньше — данные так и не попадут в Turso.
+    if not turso_had_data and turso_sync.is_configured():
+        log.info("⬆️  Turso: облако пустое — выполняем первичный пуш локальных данных...")
+        await turso_sync.turso_push(config.DB_PATH)
 
     log.info("⏳ Инициализация кэша...")
     cache.init_cache(max_symbols=config.CACHE_MAX_SYMBOLS)

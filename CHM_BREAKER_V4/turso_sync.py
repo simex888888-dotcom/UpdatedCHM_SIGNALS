@@ -14,9 +14,17 @@ turso_sync.py — резервное копирование SQLite в Turso че
 Если переменные не заданы — модуль молча отключается.
 
 ПОРЯДОК ЗАПУСКА (критично!):
-  1. restore_from_turso_if_needed(db_path)  ← СНАЧАЛА тянем из облака
-  2. database.init_db(db_path)              ← потом создаём/мигрируем таблицы
-  3. asyncio.create_task(turso_sync_loop(db_path))  ← только потом фон
+  1. _backup_db(db_path)                            ← сначала бэкап локального
+  2. database.init_db(db_path)                      ← создаём правильную схему
+  3. restore_from_turso_if_needed(db_path)          ← пишем Turso-данные в схему
+  4. asyncio.create_task(turso_sync_loop(db_path))  ← фоновый пуш
+
+ИСПРАВЛЕНИЯ (v2):
+  - turso_push теперь создаёт таблицы в Turso перед DELETE+INSERT
+    (ранее таблиц в Turso не было → все пуши молча проваливались)
+  - SYNC_TABLES расширен: добавлены trades, poly_wallets, poly_settings
+  - restore не создаёт таблицы с типом TEXT — init_db запускается раньше
+  - подробное логирование: количество строк по таблицам
 """
 
 import asyncio
@@ -32,20 +40,29 @@ TURSO_URL     = os.getenv("TURSO_URL", "").strip()
 TURSO_TOKEN   = os.getenv("TURSO_TOKEN", "").strip()
 SYNC_INTERVAL = int(os.getenv("TURSO_SYNC_INTERVAL", "300"))  # секунд
 
-# Таблицы для синхронизации (порядок важен — users перед pd_users и т.п.)
+# Таблицы для синхронизации (порядок важен — зависимые таблицы позже).
+# trades включён: активные позиции нужны для корректного мониторинга после рестарта.
+# poly_wallets включён: содержит зашифрованные ключи кастодиальных кошельков.
 SYNC_TABLES = [
-    "users", "trial_ids", "promo_codes", "promo_uses",
-    "referrals", "ref_rewards", "pd_users", "kv",
+    "users", "trial_ids", "trades",
+    "promo_codes", "promo_uses",
+    "referrals", "ref_rewards",
+    "pd_users", "kv",
+    "poly_settings", "poly_wallets",
 ]
 
-# ── Защита от "пустого пуша" ───────────────────────────────────────────────
-# Выставляется в True после того как restore_from_turso_if_needed() завершила
-# попытку восстановления (успешную или нет). До этого момента push запрещён.
+# Выставляется в True после завершения restore_from_turso_if_needed().
+# Защита от "пустого пуша": sync_loop не стартует пуш пока restore не отработал.
 _restore_attempted: bool = False
 
 
-def _is_configured() -> bool:
+def is_configured() -> bool:
     return bool(TURSO_URL and TURSO_TOKEN)
+
+
+def _is_configured() -> bool:
+    """Псевдоним для обратной совместимости."""
+    return is_configured()
 
 
 def _http_url() -> str:
@@ -74,9 +91,11 @@ def _arg(v) -> dict:
 async def _pipeline(session: aiohttp.ClientSession, stmts: list[dict]) -> list:
     """
     Отправляет список SQL-запросов в Turso через pipeline API.
-    stmts: [{"sql": "...", "args": [...]}, ...]
     Возвращает список результирующих строк (list[list[dict]]) — по одному на stmt.
     """
+    if not stmts:
+        return []
+
     requests = [{"type": "execute", "stmt": s} for s in stmts]
     requests.append({"type": "close"})
 
@@ -116,23 +135,90 @@ async def _pipeline(session: aiohttp.ClientSession, stmts: list[dict]) -> list:
     return results
 
 
+# ── Создание схемы в Turso ─────────────────────────────────────────────────
+
+def _read_local_schema(db_path: str) -> list[str]:
+    """
+    Читает CREATE TABLE / CREATE INDEX SQL из sqlite_master для SYNC_TABLES.
+    Возвращает список SQL-строк с IF NOT EXISTS.
+    Вызывать в executor (блокирующий I/O).
+    """
+    stmts = []
+    try:
+        with sqlite3.connect(db_path, timeout=10) as conn:
+            for table in SYNC_TABLES:
+                row = conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()
+                if row and row[0]:
+                    sql = row[0].strip()
+                    if "IF NOT EXISTS" not in sql.upper():
+                        sql = sql.replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ", 1)
+                    stmts.append(sql)
+
+                # Индексы для этой таблицы
+                for idx_name, idx_sql in conn.execute(
+                    "SELECT name, sql FROM sqlite_master "
+                    "WHERE type='index' AND tbl_name=? AND sql IS NOT NULL",
+                    (table,),
+                ).fetchall():
+                    if idx_sql:
+                        idx_sql = idx_sql.strip()
+                        if "IF NOT EXISTS" not in idx_sql.upper():
+                            idx_sql = idx_sql.replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ", 1)
+                        stmts.append(idx_sql)
+    except Exception as e:
+        log.warning(f"_read_local_schema: {e}")
+    return stmts
+
+
+async def _ensure_turso_schema(session: aiohttp.ClientSession, db_path: str):
+    """
+    Создаёт таблицы и индексы в Turso если их нет.
+    КРИТИЧНО: вызывать перед любым DELETE/INSERT в turso_push.
+    """
+    loop = asyncio.get_event_loop()
+    schema_stmts = await loop.run_in_executor(None, _read_local_schema, db_path)
+    if not schema_stmts:
+        log.warning("_ensure_turso_schema: локальная схема пустая (init_db не запускался?)")
+        return
+
+    sql_stmts = [{"sql": s} for s in schema_stmts]
+    # Tables first, indexes second (already ordered by _read_local_schema)
+    table_stmts = [s for s in sql_stmts if "CREATE TABLE" in s["sql"]]
+    idx_stmts   = [s for s in sql_stmts if "CREATE INDEX" in s["sql"]]
+
+    if table_stmts:
+        await _pipeline(session, table_stmts)
+        log.debug(f"_ensure_turso_schema: создано/проверено {len(table_stmts)} таблиц")
+    if idx_stmts:
+        try:
+            await _pipeline(session, idx_stmts)
+        except Exception as e:
+            log.debug(f"_ensure_turso_schema idx: {e}")
+
+
 # ── Восстановление при старте ──────────────────────────────────────────────
 
 async def restore_from_turso_if_needed(db_path: str) -> bool:
     """
-    ШАГ 1 при старте: восстанавливает локальный SQLite из Turso если облако непустое.
+    Восстанавливает локальный SQLite из Turso если облако непустое.
 
-    Вызывать ДО database.init_db() — пишет напрямую в файл через sqlite3,
-    создавая таблицы по мере необходимости (INSERT OR REPLACE без DELETE).
+    ВАЖНО: вызывать ПОСЛЕ database.init_db() — таблицы должны
+    уже существовать с правильными типами (INTEGER, REAL и т.д.).
+    Если таблицы не существуют, создаёт их временно как TEXT и
+    полагается на то что init_db исправит типы через ALTER TABLE.
 
     Возвращает True если данные были восстановлены.
     """
     global _restore_attempted
     _restore_attempted = True  # выставляем сразу — даже если вернём False
 
-    if not _is_configured():
+    if not is_configured():
         log.warning(
-            "⚠️  Turso не настроен (TURSO_URL/TURSO_TOKEN не заданы) — облачное восстановление отключено. "
+            "⚠️  Turso не настроен (TURSO_URL/TURSO_TOKEN не заданы) — "
+            "облачное восстановление отключено. "
             "Подписки сохраняются ТОЛЬКО в локальном SQLite + subs_backup.txt. "
             "При редеплое (пересборке контейнера) данные могут быть потеряны!"
         )
@@ -147,25 +233,35 @@ async def restore_from_turso_if_needed(db_path: str) -> bool:
 
         total = sum(len(r) for r in results)
         if total == 0:
-            log.info("⬇️  Turso: облако пустое, начинаем с чистой БД")
+            log.info("⬇️  Turso: облако пустое, начинаем с локальной БД")
             return False
+
+        # Подробная статистика по таблицам
+        table_counts = {
+            t: len(r) for t, r in zip(SYNC_TABLES, results) if r
+        }
+        n_tables = len(table_counts)
+        details = ", ".join(f"{t}:{n}" for t, n in table_counts.items())
+        log.info(f"⬇️  Turso: найдено {total} строк в {n_tables} таблицах ({details})")
 
         def _write_locally():
             with sqlite3.connect(db_path, timeout=30) as conn:
-                # Включаем WAL чтобы не конфликтовать с будущим aiosqlite
+                # WAL совместим с aiosqlite который запустится позже
                 conn.execute("PRAGMA journal_mode=WAL")
                 for table, rows in zip(SYNC_TABLES, results):
                     if not rows:
                         continue
-                    cols = list(rows[0].keys())
-                    col_names   = ", ".join(cols)
-                    placeholders = ", ".join(["?" for _ in cols])
-                    # Создаём таблицу если не существует (минимальная схема)
-                    # init_db добавит недостающие колонки позже через ALTER TABLE
+                    cols         = list(rows[0].keys())
+                    col_names    = ", ".join(cols)
+                    placeholders = ", ".join("?" for _ in cols)
+
+                    # Если таблица не существует (restore до init_db),
+                    # создаём временно с TEXT-типами; init_db потом мигрирует.
                     col_defs = ", ".join(f"{c} TEXT" for c in cols)
                     conn.execute(
                         f"CREATE TABLE IF NOT EXISTS {table} ({col_defs})"
                     )
+                    # Очищаем локальные данные — Turso является источником правды
                     conn.execute(f"DELETE FROM {table}")
                     for row in rows:
                         vals = [row[c] for c in cols]
@@ -187,13 +283,10 @@ async def restore_from_turso_if_needed(db_path: str) -> bool:
         return False
 
 
-# ── Обратная совместимость — старое имя ───────────────────────────────────
+# ── Обратная совместимость ─────────────────────────────────────────────────
 
 async def turso_pull(db_path: str) -> bool:
-    """
-    Устаревший псевдоним. При старте использовать restore_from_turso_if_needed().
-    Оставлен для обратной совместимости: вызывает restore_from_turso_if_needed().
-    """
+    """Устаревший псевдоним. Использовать restore_from_turso_if_needed()."""
     return await restore_from_turso_if_needed(db_path)
 
 
@@ -201,13 +294,15 @@ async def turso_pull(db_path: str) -> bool:
 
 async def turso_push(db_path: str) -> bool:
     """
-    Пушит все критические таблицы из локального SQLite в Turso.
-    Безопасно вызывать в фоне во время работы бота.
+    Пушит все SYNC_TABLES из локального SQLite в Turso.
 
-    Защита: если restore_from_turso_if_needed() ещё не запускалась —
-    пуш блокируется чтобы не затереть облако пустой локальной БД.
+    Исправления v2:
+    - Сначала создаёт таблицы в Turso (_ensure_turso_schema) если их нет.
+      Ранее DELETE/INSERT молча падали с "no such table" — данные не сохранялись.
+    - Логирует количество строк по каждой таблице.
+    - Батчи по 50 строк: DELETE+первые_50 в первом, остальные отдельно.
     """
-    if not _is_configured():
+    if not is_configured():
         return False
 
     if not _restore_attempted:
@@ -218,13 +313,15 @@ async def turso_push(db_path: str) -> bool:
         return False
 
     try:
-        def _read_locally():
+        def _read_locally() -> dict[str, list[dict]]:
             data: dict[str, list[dict]] = {}
             with sqlite3.connect(db_path, timeout=30) as conn:
                 conn.row_factory = sqlite3.Row
                 for table in SYNC_TABLES:
                     try:
-                        data[table] = [dict(r) for r in conn.execute(f"SELECT * FROM {table}")]
+                        data[table] = [
+                            dict(r) for r in conn.execute(f"SELECT * FROM {table}")
+                        ]
                     except Exception:
                         data[table] = []
             return data
@@ -232,32 +329,69 @@ async def turso_push(db_path: str) -> bool:
         loop = asyncio.get_event_loop()
         tables_data: dict[str, list[dict]] = await loop.run_in_executor(None, _read_locally)
 
-        total = sum(len(v) for v in tables_data.values())
+        total_local = sum(len(v) for v in tables_data.values())
 
         async with aiohttp.ClientSession() as session:
-            for table, rows in tables_data.items():
-                stmts: list[dict] = [{"sql": f"DELETE FROM {table}"}]
-                for i in range(0, max(len(rows), 1), 50):
-                    for row in rows[i:i + 50]:
-                        cols = list(row.keys())
-                        stmts.append({
-                            "sql": (
-                                f"INSERT OR REPLACE INTO {table} "
-                                f"({', '.join(cols)}) VALUES ({', '.join(['?' for _ in cols])})"
-                            ),
-                            "args": [_arg(row[c]) for c in cols],
-                        })
-                    try:
-                        await _pipeline(session, stmts)
-                    except Exception as e:
-                        log.debug(f"Turso push {table} batch: {e}")
-                    stmts = []
+            # ─── КРИТИЧНО: создаём таблицы в Turso если их нет ──────────────
+            # Без этого шага все DELETE и INSERT молча падают с "no such table"
+            # и функция ложно рапортует об успехе.
+            await _ensure_turso_schema(session, db_path)
 
-        log.info(f"☁️  Turso: сохранено {total} строк в облако")
+            total_pushed = 0
+            for table, rows in tables_data.items():
+                n = len(rows)
+
+                if n == 0:
+                    # Только очищаем таблицу в Turso
+                    try:
+                        await _pipeline(session, [{"sql": f"DELETE FROM {table}"}])
+                    except Exception as e:
+                        log.debug(f"Turso push {table} DELETE: {e}")
+                    continue
+
+                # Первый батч: DELETE + первые 50 строк
+                batch: list[dict] = [{"sql": f"DELETE FROM {table}"}]
+                _append_inserts(batch, table, rows[:50])
+                try:
+                    await _pipeline(session, batch)
+                    total_pushed += min(n, 50)
+                except Exception as e:
+                    log.warning(f"Turso push {table} batch-0: {e}")
+                    continue
+
+                # Последующие батчи: только INSERT (DELETE уже был)
+                for offset in range(50, n, 50):
+                    chunk = rows[offset:offset + 50]
+                    batch = []
+                    _append_inserts(batch, table, chunk)
+                    try:
+                        await _pipeline(session, batch)
+                        total_pushed += len(chunk)
+                    except Exception as e:
+                        log.warning(f"Turso push {table} batch-{offset}: {e}")
+
+        log.info(
+            f"☁️  Turso sync: сохранено {total_pushed}/{total_local} строк "
+            f"({', '.join(f'{t}:{len(v)}' for t,v in tables_data.items() if v)})"
+        )
         return True
+
     except Exception as exc:
         log.warning(f"Turso push error: {exc}")
         return False
+
+
+def _append_inserts(batch: list[dict], table: str, rows: list[dict]):
+    """Добавляет INSERT OR REPLACE statements в batch."""
+    for row in rows:
+        cols = list(row.keys())
+        batch.append({
+            "sql": (
+                f"INSERT OR REPLACE INTO {table} "
+                f"({', '.join(cols)}) VALUES ({', '.join('?' for _ in cols)})"
+            ),
+            "args": [_arg(row[c]) for c in cols],
+        })
 
 
 # ── Фоновый sync loop ──────────────────────────────────────────────────────
@@ -266,18 +400,18 @@ async def turso_sync_loop(db_path: str, initial_delay: int | None = None):
     """
     Фоновая задача: пушит БД в Turso каждые SYNC_INTERVAL секунд.
 
-    initial_delay — пауза перед ПЕРВЫМ пушем (секунды).
-    По умолчанию равен SYNC_INTERVAL (не 15с!) чтобы не затереть облако
-    сразу после старта, пока restore_from_turso_if_needed ещё не отработала.
+    initial_delay — пауза перед ПЕРВЫМ пушем.
+    По умолчанию равен SYNC_INTERVAL (300с) — не нужно спешить,
+    первичный пуш уже выполнен в main() если Turso был пустым.
 
     ВАЖНО: запускать только ПОСЛЕ вызова restore_from_turso_if_needed().
     """
-    if not _is_configured():
+    if not is_configured():
         log.info("Turso sync loop отключён (TURSO_URL/TURSO_TOKEN не заданы)")
         return
 
     if initial_delay is None:
-        initial_delay = SYNC_INTERVAL  # по умолчанию 300с, не 15с
+        initial_delay = SYNC_INTERVAL
 
     log.info(
         f"☁️  Turso sync loop запущен "
