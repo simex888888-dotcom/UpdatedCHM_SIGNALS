@@ -2690,30 +2690,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await cb.answer()
         await safe_edit(cb, "🎯 <b>Цели ШОРТ</b>", kb_short_targets(user))
 
-    @dp.callback_query(F.data.startswith("short_set_tp1_"))
-    async def short_set_tp1(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        v = float(cb.data.replace("short_set_tp1_", ""))
-        await cb.answer("✅ TP1 " + str(v) + "R")
-        _update_short_field(user, "tp1_rr", v); await um.save(user)
-        await safe_edit(cb, "🎯 <b>Цели ШОРТ</b>", kb_short_targets(user))
-
-    @dp.callback_query(F.data.startswith("short_set_tp2_"))
-    async def short_set_tp2(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        v = float(cb.data.replace("short_set_tp2_", ""))
-        await cb.answer("✅ TP2 " + str(v) + "R")
-        _update_short_field(user, "tp2_rr", v); await um.save(user)
-        await safe_edit(cb, "🎯 <b>Цели ШОРТ</b>", kb_short_targets(user))
-
-    @dp.callback_query(F.data.startswith("short_set_tp3_"))
-    async def short_set_tp3(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        v = float(cb.data.replace("short_set_tp3_", ""))
-        await cb.answer("✅ TP3 " + str(v) + "R")
-        _update_short_field(user, "tp3_rr", v); await um.save(user)
-        await safe_edit(cb, "🎯 <b>Цели ШОРТ</b>", kb_short_targets(user))
-
     @dp.callback_query(F.data == "menu_short_volume")
     async def menu_short_volume(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
@@ -3089,7 +3065,19 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def menu_notify(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         await cb.answer()
-        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user, "menu_settings"))
+
+    @dp.callback_query(F.data == "menu_notify_long")
+    async def menu_notify_long(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user, "menu_long_settings"))
+
+    @dp.callback_query(F.data == "menu_notify_short")
+    async def menu_notify_short(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user, "menu_short_settings"))
 
     @dp.callback_query(F.data == "toggle_notify")
     async def toggle_notify(cb: CallbackQuery):
@@ -3315,28 +3303,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.message.answer("Сигнал не найден"); return
         kb = signal_compact_keyboard(signal)
         txt = "📊 <b>Сигнал #" + str(signal_id) + "</b>"
-        await safe_edit(cb, txt, kb)
-
-    # ─── РЕЗУЛЬТАТЫ СДЕЛОК ────────────────────────────
-
-    @dp.callback_query(F.data.startswith("res_"))
-    async def res_handler(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        parts = cb.data.split("_")
-        # res_{result}_{signal_id}   e.g. res_win_123, res_loss_123, res_be_123
-        if len(parts) < 3:
-            await cb.answer(); return
-        result = parts[1]   # win / loss / be / tp1 / tp2 / tp3
-        signal_id = int(parts[2])
-        await cb.answer("✅ Записано: " + result)
-        rr_map = {"tp1": 1.0, "tp2": 2.0, "tp3": 3.0, "win": 2.0, "loss": -1.0, "be": 0.0}
-        rr = rr_map.get(result, 0.0)
-        await db.add_trade_record(user.user_id, signal_id, result, rr)
-        signal = await db.get_signal(signal_id)
-        kb = signal_compact_keyboard(signal) if signal else None
-        txt = "✅ <b>Результат записан:</b> " + result.upper() + " (" + str(rr) + "R)"
-        if signal:
-            txt = "📊 " + str(signal.get("symbol", "")) + "\n" + txt
         await safe_edit(cb, txt, kb)
 
     # ─── ПОМОЩЬ ───────────────────────────────────────
