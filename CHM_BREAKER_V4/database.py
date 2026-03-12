@@ -228,6 +228,7 @@ CREATE TABLE IF NOT EXISTS kv (
 CREATE TABLE IF NOT EXISTS poly_settings (
     user_id     INTEGER PRIMARY KEY,
     default_bet REAL    DEFAULT 5.0,
+    digest_on   INTEGER DEFAULT 1,
     created_at  REAL    DEFAULT 0
 );
 
@@ -246,6 +247,35 @@ CREATE TABLE IF NOT EXISTS poly_bets (
 );
 
 CREATE INDEX IF NOT EXISTS idx_poly_bets_user ON poly_bets(user_id);
+
+-- Кастодиальные кошельки пользователей (Polygon)
+CREATE TABLE IF NOT EXISTS poly_wallets (
+    user_id       INTEGER PRIMARY KEY,
+    address       TEXT    NOT NULL UNIQUE,
+    encrypted_key TEXT    NOT NULL,
+    created_at    REAL    DEFAULT 0
+);
+
+-- Ценовые алерты
+CREATE TABLE IF NOT EXISTS poly_alerts (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id    INTEGER NOT NULL,
+    market_id  TEXT    NOT NULL,
+    question   TEXT    NOT NULL,
+    yes_price  REAL    NOT NULL,   -- цена YES в момент создания алерта
+    threshold  REAL    NOT NULL,   -- порог срабатывания в %
+    active     INTEGER DEFAULT 1,
+    created_at REAL    DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_poly_alerts_user ON poly_alerts(user_id, active);
+
+-- Лог дайджестов (предотвращает повторную отправку)
+CREATE TABLE IF NOT EXISTS poly_digest_log (
+    user_id INTEGER NOT NULL,
+    date    TEXT    NOT NULL,   -- формат YYYY-MM-DD
+    PRIMARY KEY (user_id, date)
+);
 """
 
 
@@ -291,8 +321,10 @@ async def init_db(path: str):
             "UPDATE pd_users SET pd_threshold=50 WHERE pd_threshold=70",
             # Polymarket таблицы (для существующих БД без миграции через SCHEMA)
             """CREATE TABLE IF NOT EXISTS poly_settings (
-                user_id INTEGER PRIMARY KEY, default_bet REAL DEFAULT 5.0, created_at REAL DEFAULT 0
+                user_id INTEGER PRIMARY KEY, default_bet REAL DEFAULT 5.0,
+                digest_on INTEGER DEFAULT 1, created_at REAL DEFAULT 0
             )""",
+            "ALTER TABLE poly_settings ADD COLUMN digest_on INTEGER DEFAULT 1",
             """CREATE TABLE IF NOT EXISTS poly_bets (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
                 market_id TEXT DEFAULT '', question TEXT DEFAULT '', side TEXT DEFAULT '',
@@ -300,6 +332,21 @@ async def init_db(path: str):
                 order_id TEXT DEFAULT '', status TEXT DEFAULT 'filled', created_at REAL DEFAULT 0
             )""",
             "CREATE INDEX IF NOT EXISTS idx_poly_bets_user ON poly_bets(user_id)",
+            """CREATE TABLE IF NOT EXISTS poly_wallets (
+                user_id INTEGER PRIMARY KEY, address TEXT NOT NULL UNIQUE,
+                encrypted_key TEXT NOT NULL, created_at REAL DEFAULT 0
+            )""",
+            """CREATE TABLE IF NOT EXISTS poly_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
+                market_id TEXT NOT NULL, question TEXT NOT NULL,
+                yes_price REAL NOT NULL, threshold REAL NOT NULL,
+                active INTEGER DEFAULT 1, created_at REAL DEFAULT 0
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_poly_alerts_user ON poly_alerts(user_id, active)",
+            """CREATE TABLE IF NOT EXISTS poly_digest_log (
+                user_id INTEGER NOT NULL, date TEXT NOT NULL,
+                PRIMARY KEY (user_id, date)
+            )""",
         ]
         for sql in migrations:
             try:
@@ -989,6 +1036,18 @@ async def poly_save_settings(user_id: int, default_bet: float):
             await db.commit()
 
 
+async def poly_save_digest(user_id: int, digest_on: int):
+    """Сохраняет настройку дайджеста (0 или 1)."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "INSERT INTO poly_settings(user_id, default_bet, digest_on, created_at) VALUES(?,5.0,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET digest_on=excluded.digest_on",
+                (user_id, digest_on, time.time()),
+            )
+            await db.commit()
+
+
 async def poly_save_bet(
     user_id: int, market_id: str, question: str, side: str,
     amount: float, shares: float, price: float, order_id: str,
@@ -1014,3 +1073,107 @@ async def poly_get_bets(user_id: int, limit: int = 10) -> list[dict]:
         ) as cur:
             rows = await cur.fetchall()
             return [dict(r) for r in rows]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  КАСТОДИАЛЬНЫЕ КОШЕЛЬКИ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def poly_wallet_get(user_id: int) -> Optional[dict]:
+    """Возвращает кошелёк пользователя или None если не создан."""
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM poly_wallets WHERE user_id=?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            return dict(row) if row else None
+
+
+async def poly_wallet_create(user_id: int, address: str, encrypted_key: str):
+    """Сохраняет новый кошелёк пользователя."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO poly_wallets(user_id, address, encrypted_key, created_at)"
+                " VALUES(?,?,?,?)",
+                (user_id, address, encrypted_key, time.time()),
+            )
+            await db.commit()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ЦЕНОВЫЕ АЛЕРТЫ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def poly_alert_add(
+    user_id: int, market_id: str, question: str,
+    yes_price: float, threshold: float,
+) -> int:
+    """Создаёт ценовой алерт. Возвращает id."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            cur = await db.execute(
+                "INSERT INTO poly_alerts(user_id, market_id, question, yes_price, threshold, created_at)"
+                " VALUES(?,?,?,?,?,?)",
+                (user_id, market_id, question, yes_price, threshold, time.time()),
+            )
+            await db.commit()
+            return cur.lastrowid
+
+
+async def poly_alert_get_user(user_id: int) -> list[dict]:
+    """Все активные алерты пользователя."""
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM poly_alerts WHERE user_id=? AND active=1 ORDER BY created_at DESC",
+            (user_id,),
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def poly_alert_delete(alert_id: int):
+    """Деактивирует алерт."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "UPDATE poly_alerts SET active=0 WHERE id=?", (alert_id,)
+            )
+            await db.commit()
+
+
+async def poly_alerts_all_active() -> list[dict]:
+    """Все активные алерты всех пользователей (для планировщика)."""
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM poly_alerts WHERE active=1"
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  ДАЙДЖЕСТ ЛОГ
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def poly_digest_sent_today(user_id: int, date: str) -> bool:
+    """Проверяет, был ли дайджест отправлен сегодня."""
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            "SELECT 1 FROM poly_digest_log WHERE user_id=? AND date=?", (user_id, date)
+        ) as cur:
+            return (await cur.fetchone()) is not None
+
+
+async def poly_digest_mark_sent(user_id: int, date: str):
+    """Помечает дайджест как отправленный."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO poly_digest_log(user_id, date) VALUES(?,?)",
+                (user_id, date),
+            )
+            await db.commit()

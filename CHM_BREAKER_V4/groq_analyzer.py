@@ -45,7 +45,7 @@ def _get_client() -> AsyncOpenAI:
 _SYSTEM_PROMPT = """Ты — эксперт по предсказательным рынкам Polymarket.
 Анализируй кратко и точно. Отвечай строго в JSON без лишнего текста.
 Учитывай текущую вероятность, объём торгов, ликвидность и дату закрытия.
-Язык поля reasoning: русский."""
+Язык всех текстовых полей: русский."""
 
 
 def _build_prompt(data: dict) -> str:
@@ -60,7 +60,7 @@ def _build_prompt(data: dict) -> str:
         '{\n'
         '  "recommendation": "BUY YES" | "BUY NO" | "SKIP",\n'
         '  "confidence":     "HIGH" | "MEDIUM" | "LOW",\n'
-        '  "reasoning":      "2-3 предложения на русском",\n'
+        '  "reasoning":      "1-2 предложения: ПОЧЕМУ именно такое решение — ключевой аргумент",\n'
         '  "edge":           "примерный % преимущества или 0%",\n'
         '  "risk":           "HIGH" | "MEDIUM" | "LOW"\n'
         '}'
