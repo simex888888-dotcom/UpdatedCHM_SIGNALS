@@ -14,6 +14,7 @@ Quality: 0–10 (фильтр по cfg.MIN_QUALITY)
 """
 
 import logging
+import math
 import numpy as np
 import pandas as pd
 from dataclasses import dataclass, field
@@ -846,11 +847,17 @@ class CHMIndicator:
 
     @staticmethod
     def _fmt_p(v: float) -> str:
-        """Форматирует цену без научной нотации."""
+        """Форматирует цену без научной нотации, сохраняя полную точность."""
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return str(v)
+        if v <= 0:      return "0"
         if v >= 10_000: return f"{v:,.0f}"
         if v >= 100:    return f"{v:,.1f}"
         if v >= 1:      return f"{v:.4f}".rstrip("0").rstrip(".")
-        return f"{v:.6f}".rstrip("0").rstrip(".")
+        decimals = -math.floor(math.log10(v)) + 3
+        return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
 
     def _build_human_explanation(self, signal: str, s_level: float,
                                  s_class: int, s_hits: int, s_type: str,
@@ -1203,7 +1210,7 @@ class CHMIndicator:
         entry = c_now
         if signal == "LONG":
             zone_bottom = s_level - zone_buf
-            sl = zone_bottom - atr_now * 0.5
+            sl = zone_bottom - atr_now * 1.5   # 1.5 ATR ниже зоны — за структуру
             # Safeguard: не дальше cfg.MAX_RISK_PCT
             sl = max(sl, entry * (1.0 - cfg.MAX_RISK_PCT / 100))
             if sl >= entry:
@@ -1211,7 +1218,7 @@ class CHMIndicator:
                 return None
         else:
             zone_top = s_level + zone_buf
-            sl = zone_top + atr_now * 0.5
+            sl = zone_top + atr_now * 1.5      # 1.5 ATR выше зоны — за структуру
             sl = min(sl, entry * (1.0 + cfg.MAX_RISK_PCT / 100))
             if sl <= entry:
                 log.debug(f"{symbol}: SHORT SL={sl:.4f} <= entry={entry:.4f} — отмена")
@@ -1219,6 +1226,30 @@ class CHMIndicator:
 
         risk = abs(entry - sl)
         if risk <= 0:
+            return None
+
+        # ══════════════════════════════════════════════════════════════════
+        # ФИЛЬТР СТОПА (ATR + минимум по типу монеты)
+        # ══════════════════════════════════════════════════════════════════
+        _MEMCOIN_KW = ("FLOKI","PEPE","SHIB","DOGE","WIF","BONK","NEIRO",
+                       "MEME","SATS","TURBO","CATS","ACT","BOME","BOOK")
+        _sym_up   = symbol.upper()
+        is_memcoin = any(k in _sym_up for k in _MEMCOIN_KW)
+        is_major   = "BTC" in _sym_up or "ETH" in _sym_up
+
+        risk_pct_raw = risk / entry * 100
+        if is_major and risk_pct_raw < 0.4:
+            log.debug(f"{symbol}: stop {risk_pct_raw:.2f}% < 0.4% (BTC/ETH min) — пропуск")
+            return None
+        if is_memcoin and risk_pct_raw < 1.5:
+            log.debug(f"{symbol}: stop {risk_pct_raw:.2f}% < 1.5% (мемкоин min) — пропуск")
+            return None
+        if not is_major and not is_memcoin and risk_pct_raw < 0.8:
+            log.debug(f"{symbol}: stop {risk_pct_raw:.2f}% < 0.8% (альт min) — пропуск")
+            return None
+        # ATR-проверка: стоп должен быть хотя бы 0.3×ATR (базовый шум)
+        if atr_now > 0 and risk < atr_now * 0.3:
+            log.debug(f"{symbol}: stop {risk:.5f} < 0.3×ATR({atr_now:.5f}) — пропуск")
             return None
 
         # ══════════════════════════════════════════════════════════════════
@@ -1391,16 +1422,29 @@ class CHMIndicator:
             quality -= 2
             reasons.append(f"⚠️ {session} — низкая ликвидность")
 
+        # Взвешенный R:R фильтр
+        if rr_score < 1.2:
+            log.debug(f"{symbol}: rr_score={rr_score:.2f} < 1.2 — блок")
+            return None
+        if rr_score < 1.8:
+            quality -= 1
+            reasons.append(f"⚠️ Взвешенный R:R: {rr_score:.2f} (ниже 1.8)")
+
         # Зажим в [0, 10]
         quality = max(0, min(10, quality))
+
+        # Мемкоин: максимум ⭐⭐⭐
+        if is_memcoin and quality > 3:
+            quality = 3
+            reasons.append("⚠️ Мемкоин: ограничение ⭐⭐⭐ (повышенный риск)")
 
         # ── Финальный чеклист ─────────────────────────────────────────────
         has_pattern  = bool(bull_pat if signal == "LONG" else bear_pat)
         is_fakeout   = "Fakeout" in s_type or "SFP" in s_type
         checklist = [
-            s_class <= 2 or (s_class == 3 and quality >= 4),  # уровень
+            True,                                                # уровень (фильтр quality в scanner_mid)
             approach_ok,                                         # подход
-            has_pattern or is_fakeout or vol_ratio > 1.5,       # реакция
+            has_pattern or is_fakeout or vol_ratio > 1.2,       # реакция: снижен порог объёма
             rr_actual >= cfg.MIN_RR,                             # R:R
             test_count <= cfg.MAX_LEVEL_TESTS - 1,              # тесты
         ]

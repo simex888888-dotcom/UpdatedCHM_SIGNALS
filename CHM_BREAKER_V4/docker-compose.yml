@@ -1,0 +1,18 @@
+version: "3.9"
+
+services:
+  chm_bot:
+    build: .
+    restart: always
+    environment:
+      - DB_PATH=/data/chm_bot.db
+    volumes:
+      # ── ПОСТОЯННОЕ ХРАНИЛИЩЕ ──────────────────────────────────────────────
+      # Все данные пользователей, подписки, настройки, сделки сохраняются
+      # в ./data/ на хост-машине — не теряются при редеплое и перезапуске.
+      - ./data:/data
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "5"
