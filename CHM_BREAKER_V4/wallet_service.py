@@ -83,6 +83,104 @@ async def get_usdc_balance(address: str) -> float:
         return 0.0
 
 
+async def get_matic_balance(address: str) -> float:
+    """Читает баланс MATIC на Polygon через JSON-RPC."""
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "eth_getBalance",
+        "params": [address, "latest"],
+        "id": 1,
+    }
+    try:
+        async with aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=10)
+        ) as s:
+            async with s.post(_POLYGON_RPC, json=payload) as r:
+                resp = await r.json(content_type=None)
+        result = resp.get("result", "0x0") or "0x0"
+        return int(result, 16) / 1e18
+    except Exception as exc:
+        log.warning(f"get_matic_balance({address[:10]}…): {exc}")
+        return 0.0
+
+
+async def transfer_usdc(
+    from_address: str,
+    private_key: str,
+    to_address: str,
+    amount_usdc: float,
+) -> str:
+    """
+    Переводит USDC (Polygon) с кастодиального кошелька на внешний адрес.
+    Возвращает хэш транзакции (0x...).
+    Требует наличия MATIC на кошельке для оплаты газа.
+    """
+    from eth_account import Account
+
+    amount_units = int(round(amount_usdc * 1_000_000))  # 6 decimals
+
+    # transfer(address,uint256) selector = 0xa9059cbb
+    to_padded     = to_address.lower().removeprefix("0x").zfill(64)
+    amount_hex    = hex(amount_units)[2:].zfill(64)
+    calldata      = "0xa9059cbb" + to_padded + amount_hex
+
+    timeout = aiohttp.ClientTimeout(total=15)
+    async with aiohttp.ClientSession(timeout=timeout) as s:
+
+        async def _rpc(method, params, id_=1):
+            async with s.post(_POLYGON_RPC, json={
+                "jsonrpc": "2.0", "method": method, "params": params, "id": id_,
+            }) as r:
+                return await r.json(content_type=None)
+
+        nonce_r  = await _rpc("eth_getTransactionCount", [from_address, "latest"])
+        nonce    = int(nonce_r["result"], 16)
+
+        gp_r     = await _rpc("eth_gasPrice", [])
+        gas_price = int(int(gp_r["result"], 16) * 1.3)  # +30% буфер
+
+        est_r    = await _rpc("eth_estimateGas", [{
+            "from": from_address,
+            "to":   _USDC_CONTRACT,
+            "data": "0x" + calldata,
+        }])
+        if "error" in est_r:
+            raise RuntimeError(f"Gas estimation error: {est_r['error'].get('message', est_r['error'])}")
+        gas_limit = int(int(est_r["result"], 16) * 1.3)
+
+        chain_r  = await _rpc("eth_chainId", [])
+        chain_id = int(chain_r["result"], 16)
+
+    tx = {
+        "nonce":    nonce,
+        "gasPrice": gas_price,
+        "gas":      gas_limit,
+        "to":       _USDC_CONTRACT,
+        "value":    0,
+        "data":     "0x" + calldata,
+        "chainId":  chain_id,
+    }
+    account = Account.from_key(private_key)
+    signed  = account.sign_transaction(tx)
+    raw_hex = "0x" + signed.raw_transaction.hex()
+
+    timeout2 = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout2) as s:
+        send_r = await s.post(_POLYGON_RPC, json={
+            "jsonrpc": "2.0",
+            "method":  "eth_sendRawTransaction",
+            "params":  [raw_hex],
+            "id": 1,
+        })
+        resp = await send_r.json(content_type=None)
+
+    if "error" in resp:
+        msg = resp["error"].get("message", str(resp["error"]))
+        raise RuntimeError(f"Transaction rejected: {msg}")
+
+    return resp["result"]  # tx hash
+
+
 def is_configured() -> bool:
     """Проверяет, задан ли WALLET_ENCRYPTION_KEY."""
     return bool(os.getenv("WALLET_ENCRYPTION_KEY"))
