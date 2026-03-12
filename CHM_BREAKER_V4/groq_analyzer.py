@@ -44,6 +44,7 @@ def _get_client() -> AsyncOpenAI:
         _client = AsyncOpenAI(
             api_key=os.getenv("GROQ_API_KEY", ""),
             base_url="https://api.groq.com/openai/v1",
+            timeout=25.0,  # не ждём больше 25 секунд
         )
     return _client
 
