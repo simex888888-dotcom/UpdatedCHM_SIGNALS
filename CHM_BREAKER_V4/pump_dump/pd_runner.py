@@ -24,7 +24,7 @@ from pump_dump import (
 from pump_dump.market_monitor  import MarketMonitor, MarketEvent
 from pump_dump.ml_model        import get_model, build_feature_vector
 from pump_dump.pd_handlers     import set_current_scores
-from pump_dump.signal_aggregator import format_alert
+from pump_dump.signal_aggregator import format_alert, analyze_levels
 from watermark import wm_inject
 
 log = logging.getLogger("CHM.PD.Runner")
@@ -99,14 +99,53 @@ class PDRunner:
         self._scores[sym] = round(raw_score, 1)
         set_current_scores({sym: self._scores[sym]})
 
-        # Агрегируем для принятия решения об отправке
-        signal = aggregator.aggregate(sym, event.last_price, an, ob, hs, ind)
-        if signal is None:
-            return
+        # ── Многоуровневые предупреждения (1, 2, 3) ──────────────────────────
+        total_vol = (event.trades_buy_vol or 0) + (event.trades_sell_vol or 0)
+        buy_ratio = (event.trades_buy_vol / total_vol) if total_vol > 0 else 0.5
 
-        log.info(f"🎯 PD сигнал: {sym} {signal.direction} {signal.score:.0f}%")
-        await self._broadcast_signal(signal)
-        await self._save_signal(signal, features)
+        level_alerts = analyze_levels(
+            sym, event.last_price, an, ob, hs, ind, buy_ratio
+        )
+        for level, text in level_alerts:
+            if level == 3:
+                log.info(f"🎯 PD уровень 3 (ФИНАЛЬНЫЙ): {sym} {raw_score:.0f}%")
+                # Сохраняем в БД через aggregate() для обратной совместимости
+                signal = aggregator.aggregate(sym, event.last_price, an, ob, hs, ind)
+                if signal is not None:
+                    await self._save_signal(signal, features)
+            elif level == 2:
+                log.info(f"⚠️ PD уровень 2 (НАБЛЮДЕНИЕ): {sym}")
+            else:
+                log.debug(f"👀 PD уровень 1 (ВНИМАНИЕ): {sym}")
+            await self._broadcast_level(level, text, raw_score)
+
+    # ── Рассылка по уровню ───────────────────────────────────────────────────
+
+    async def _broadcast_level(self, level: int, text: str, score: float):
+        """Рассылает предупреждение заданного уровня подписанным пользователям.
+
+        Уровень 1 и 2 — ранние предупреждения, порог подписки ниже.
+        Уровень 3 — финальный сигнал, те же пользователи что и раньше.
+        """
+        # Для уровней 1/2 используем минимальный порог (0), чтобы получали все подписчики
+        threshold = int(score) if level == 3 else 0
+        users = await db.db_pd_subscribers(min_threshold=threshold)
+        if not users:
+            return
+        for uid in users:
+            try:
+                wm_text = wm_inject(text, uid)
+                await self.bot.send_message(
+                    uid, wm_text,
+                    parse_mode="HTML",
+                    protect_content=True,
+                    disable_web_page_preview=True,
+                )
+                await asyncio.sleep(0.05)
+            except TelegramForbiddenError:
+                await db.db_pd_upsert_user(uid, subscribed=False)
+            except Exception as e:
+                log.debug(f"PD broadcast level{level} {uid}: {e}")
 
     # ── Рассылка сигнала ─────────────────────────────────────────────────────
 
