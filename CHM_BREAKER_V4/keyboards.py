@@ -92,14 +92,6 @@ def _watch_coin_label(user) -> str:
     return "🎯 Мониторить одну монету — все / выбрать"
 
 
-def _quick_start_label(user: UserSettings) -> str:
-    strategy = getattr(user, "strategy", "LEVELS")
-    if strategy == "SMC":
-        both_on = getattr(user, "smc_long_active", False) and getattr(user, "smc_short_active", False)
-    else:
-        both_on = user.long_active and user.short_active
-    return "🟢 Сканер работает — остановить" if both_on else "🚀 БЫСТРЫЙ СТАРТ — включить все сканеры"
-
 
 def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
     strategy = getattr(user, "strategy", "LEVELS")
@@ -108,44 +100,38 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
         short_s = "🟢" if getattr(user, "smc_short_active", False) else "⚫"
         both_s  = "🟢" if (getattr(user, "smc_long_active", False) and getattr(user, "smc_short_active", False)) else "⚫"
         return InlineKeyboardMarkup(inline_keyboard=[
-            _btn(_quick_start_label(user),                                         "quick_start"),
-            _btn(long_s  + " 📈 SMC ЛОНГ — только лонговые сигналы",             "mode_smc_long"),
-            _btn(short_s + " 📉 SMC ШОРТ — только шортовые сигналы",             "mode_smc_short"),
-            _btn(both_s  + " ⚡ SMC ОБА — все SMC сигналы",                       "mode_smc_both"),
-            _btn("🎯 Стратегия: 🧠 SMC — сменить",                                "show_strategy"),
-            [
-                InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
-                InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
-            ],
-            _btn(_watch_coin_label(user),                                          "watch_coin_menu"),
-            _btn("🔍 Анализ монеты — разовый сигнал по запросу",                  "analyze_coin"),
-            _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",                "auto_trade_menu"),
-            _btn("🎰 Памп/Дамп детектор (BingX)",                              "pd_menu"),
-            _btn("🎲 Polymarket — prediction market / AI ставки",              "pm:menu"),
-            _btn("👥 Реферальная программа — пригласить друга",                 "my_referral"),
-            _btn("❓ Справка — что делает каждая кнопка",                          "help_show"),
+            [InlineKeyboardButton(text=long_s  + " 📈 SMC ЛОНГ", callback_data="mode_smc_long"),
+             InlineKeyboardButton(text=short_s + " 📉 SMC ШОРТ", callback_data="mode_smc_short")],
+            _btn(both_s + " ⚡ SMC ОБА — все SMC сигналы", "mode_smc_both"),
+            _btn("🎯 Стратегия: 🧠 SMC — сменить", "show_strategy"),
+            [InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
+             InlineKeyboardButton(text="📈 График",         callback_data="my_chart")],
+            _btn(_watch_coin_label(user), "watch_coin_menu"),
+            _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
+            [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
+             InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
+            _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
+            [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
+             InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
         ])
     # ── LEVELS (default) ──
     long_s  = "🟢" if user.long_active  else "⚫"
     short_s = "🟢" if user.short_active else "⚫"
     both_s  = "🟢" if (user.active and user.scan_mode == "both") else "⚫"
     return InlineKeyboardMarkup(inline_keyboard=[
-        _btn(_quick_start_label(user),                                     "quick_start"),
-        _btn(long_s  + " 📈 ЛОНГ сканер  — только сигналы в лонг",       "mode_long"),
-        _btn(short_s + " 📉 ШОРТ сканер  — только сигналы в шорт",       "mode_short"),
-        _btn(both_s  + " ⚡ ОБА — лонги и шорты одновременно",             "mode_both"),
-        _btn("🎯 Стратегия: 📊 Уровни — сменить",                          "show_strategy"),
-        [
-            InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
-            InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
-        ],
-        _btn(_watch_coin_label(user),                                      "watch_coin_menu"),
-        _btn("🔍 Анализ монеты — разовый сигнал по запросу",               "analyze_coin"),
-        _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",             "auto_trade_menu"),
-        _btn("🎰 Памп/Дамп детектор (BingX)",                              "pd_menu"),
-        _btn("🎲 Polymarket — prediction market / AI ставки",              "pm:menu"),
-        _btn("👥 Реферальная программа — пригласить друга",                "my_referral"),
-        _btn("❓ Справка — что делает каждая кнопка",                       "help_show"),
+        [InlineKeyboardButton(text=long_s  + " 📈 ЛОНГ", callback_data="mode_long"),
+         InlineKeyboardButton(text=short_s + " 📉 ШОРТ", callback_data="mode_short")],
+        _btn(both_s + " ⚡ ОБА — лонги и шорты одновременно", "mode_both"),
+        _btn("🎯 Стратегия: 📊 Уровни — сменить", "show_strategy"),
+        [InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
+         InlineKeyboardButton(text="📈 График",         callback_data="my_chart")],
+        _btn(_watch_coin_label(user), "watch_coin_menu"),
+        _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
+        [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
+         InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
+        _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
+        [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
+         InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
     ])
 
 
@@ -684,8 +670,6 @@ def help_text() -> str:
         "❓ <b>СПРАВКА — CHM BREAKER BOT</b>\n\n"
 
         "━━ <b>ГЛАВНЫЕ КНОПКИ</b> ━━━━━━━━━━━━━━━━━━\n"
-        "🚀 <b>БЫСТРЫЙ СТАРТ</b> — запускает ЛОНГ + ШОРТ сканеры одной кнопкой.\n"
-        "   Повторное нажатие останавливает оба сканера.\n"
         "📈 <b>ЛОНГ / 📉 ШОРТ</b> — раздельные настройки для каждого направления.\n"
         "   Используй если нужны разные параметры на лонг и шорт.\n"
         "⚡ <b>ОБА</b> — единые настройки сразу для лонга и шорта (рекомендуется).\n"
