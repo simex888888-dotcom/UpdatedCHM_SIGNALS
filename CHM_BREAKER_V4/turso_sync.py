@@ -429,9 +429,9 @@ async def turso_sync_loop(db_path: str, initial_delay: int | None = None):
     """
     Фоновая задача: пушит БД в Turso каждые SYNC_INTERVAL секунд.
 
-    initial_delay — пауза перед ПЕРВЫМ пушем.
-    По умолчанию равен SYNC_INTERVAL (300с) — не нужно спешить,
-    первичный пуш уже выполнен в main() если Turso был пустым.
+    initial_delay — пауза перед ПЕРВЫМ пушем цикла.
+    По умолчанию 60с — первичный пуш уже выполнен в main() при старте,
+    цикл нужен для последующей синхронизации изменений.
 
     ВАЖНО: запускать только ПОСЛЕ вызова restore_from_turso_if_needed().
     """
@@ -440,7 +440,7 @@ async def turso_sync_loop(db_path: str, initial_delay: int | None = None):
         return
 
     if initial_delay is None:
-        initial_delay = SYNC_INTERVAL
+        initial_delay = 60  # первичный пуш уже выполнен в main()
 
     log.info(
         f"☁️  Turso sync loop запущен "
