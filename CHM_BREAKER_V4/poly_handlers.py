@@ -504,20 +504,29 @@ def register_poly_handlers(
             return
 
         await _safe_edit(cb, "⏳ <b>AI анализирует маркет...</b>", None)
-        analysis = await poly.analyze_market(market)
-        settings = await db.poly_get_settings(cb.from_user.id)
-        default_bet = settings.get("default_bet", 5.0)
+        try:
+            analysis = await poly.analyze_market(market)
+            settings = await db.poly_get_settings(cb.from_user.id)
+            default_bet = settings.get("default_bet", 5.0)
 
-        # Можно ли торговать: есть кошелёк с балансом ИЛИ admin с POLY_PRIVATE_KEY
-        wallet, balance = await _get_user_wallet_balance(cb.from_user.id)
-        can_trade = (
-            (wallet_service.is_configured() and wallet is not None and balance >= 1.0)
-            or (is_admin(cb.from_user.id) and poly.is_trading_enabled())
-        )
+            # Можно ли торговать: есть кошелёк с балансом ИЛИ admin с POLY_PRIVATE_KEY
+            wallet, balance = await _get_user_wallet_balance(cb.from_user.id)
+            can_trade = (
+                (wallet_service.is_configured() and wallet is not None and balance >= 1.0)
+                or (is_admin(cb.from_user.id) and poly.is_trading_enabled())
+            )
 
-        text = _market_card(market, analysis)
-        kb   = _market_kb(sk, market, analysis, default_bet, can_trade)
-        await _safe_edit(cb, text, kb)
+            text = _market_card(market, analysis)
+            kb   = _market_kb(sk, market, analysis, default_bet, can_trade)
+            await _safe_edit(cb, text, kb)
+        except Exception as e:
+            log.error(f"cb_view_market {condition_id}: {e}", exc_info=True)
+            await _safe_edit(
+                cb,
+                f"⚠️ Ошибка анализа маркета: <code>{html.escape(str(e)[:200])}</code>",
+                _ik([_btn("🔄 Попробовать снова", f"pm:view:{sk}"),
+                     _btn("🔙 К списку", "pm:trending:0")]),
+            )
 
     # ─── Подтверждение покупки ────────────────────────────────────────────
 
