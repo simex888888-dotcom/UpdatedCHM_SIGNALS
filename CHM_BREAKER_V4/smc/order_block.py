@@ -160,10 +160,11 @@ def get_order_blocks(df: pd.DataFrame,
     bull_ob = bear_ob = dict(_EMPTY_OB)
 
     if bos["detected"]:
-        if bos["direction"] == "BULLISH":
-            bull_ob = find_bullish_ob(df, bos["price"], min_impulse_pct, max_age_candles)
-        else:
-            bear_ob = find_bearish_ob(df, bos["price"], min_impulse_pct, max_age_candles)
+        # Ищем оба OB относительно уровня BOS:
+        # bull_ob — зона ниже уровня BOS (откат для LONG)
+        # bear_ob — зона выше уровня BOS (откат для SHORT)
+        bull_ob = find_bullish_ob(df, bos["price"], min_impulse_pct, max_age_candles)
+        bear_ob = find_bearish_ob(df, bos["price"], min_impulse_pct, max_age_candles)
     else:
         # Без BOS ищем оба OB
         last_high = df["high"].iloc[-1]

@@ -22,26 +22,26 @@ class SMCConfig:
     BOS_CONFIRMATION:   bool  = True
     CHOCH_ENABLED:      bool  = True
     # Liquidity
-    EQUAL_THRESHOLD_PCT: float = 0.05
-    SWEEP_WICK_RATIO:    float = 0.6
-    SWEEP_CLOSE_REQUIRED: bool = True
+    EQUAL_THRESHOLD_PCT: float = 0.1   # было 0.05 — шире кластеризация уровней
+    SWEEP_WICK_RATIO:    float = 0.3   # было 0.6 — реальные фитили редко ≥60%
+    SWEEP_CLOSE_REQUIRED: bool = False  # было True — не требуем закрытия обратно
     # Order Block
-    OB_MIN_IMPULSE_PCT:  float = 0.3
-    OB_MAX_AGE_CANDLES:  int   = 50
-    OB_MITIGATED_INVALID: bool = True
+    OB_MIN_IMPULSE_PCT:  float = 0.1   # было 0.3 — менее строгий импульс
+    OB_MAX_AGE_CANDLES:  int   = 80    # было 50 — ищем OB глубже
+    OB_MITIGATED_INVALID: bool = False  # было True — не убиваем OB при пробое
     OB_USE_BREAKER:      bool  = True
     # FVG
     FVG_ENABLED:         bool  = True
-    FVG_MIN_GAP_PCT:     float = 0.1
+    FVG_MIN_GAP_PCT:     float = 0.05  # было 0.1 — ловим более мелкие FVG
     FVG_INVERSED:        bool  = True
     FVG_PARTIAL_INVALID: bool  = False
     # Premium/Discount
     PD_ENABLED:          bool  = True
-    PD_BUFFER_PCT:       float = 2.0
+    PD_BUFFER_PCT:       float = 1.0   # было 2.0 — меньше мёртвая зона Equilibrium
     # Signal
-    MIN_CONFIRMATIONS:   int   = 3
-    MIN_RR:              float = 2.0
-    SL_BUFFER_PCT:       float = 0.15
+    MIN_CONFIRMATIONS:   int   = 2     # было 3 — достаточно 2/5 подтверждений
+    MIN_RR:              float = 1.5   # было 2.0 — разумный минимум
+    SL_BUFFER_PCT:       float = 0.5
     TP1_RATIO:           float = 0.33
     TP2_RATIO:           float = 0.50
     TP3_RATIO:           float = 0.17
@@ -63,13 +63,15 @@ class SMCAnalyzer:
         """
         cfg = self.cfg
         result: dict = {
-            "symbol":    symbol,
-            "structure": {},
-            "liquidity": {},
-            "ob":        {},
-            "fvg":       {},
-            "pd_zone":   {},
-            "error":     None,
+            "symbol":        symbol,
+            "structure":     {},
+            "liquidity":     {},
+            "ob":            {},
+            "fvg":           {},
+            "pd_zone":       {},
+            "error":         None,
+            "atr":           0.0,
+            "current_price": 0.0,
         }
         try:
             # ── Шаг 1: Market Structure (HTF) ─────────────────────────────
@@ -84,8 +86,8 @@ class SMCAnalyzer:
             # ── Шаг 2: Liquidity Sweeps (HTF) ─────────────────────────────
             liquidity = find_liquidity_sweeps(
                 df_htf,
-                structure["swing_highs"],
-                structure["swing_lows"],
+                structure.get("swing_highs", []),
+                structure.get("swing_lows",  []),
                 threshold_pct    = cfg.EQUAL_THRESHOLD_PCT,
                 close_required   = cfg.SWEEP_CLOSE_REQUIRED,
                 wick_ratio       = cfg.SWEEP_WICK_RATIO,
@@ -93,9 +95,12 @@ class SMCAnalyzer:
             result["liquidity"] = liquidity
 
             # ── Шаг 3: Order Blocks (MTF) ─────────────────────────────────
+            _bos_safe = structure.get("bos", {
+                "detected": False, "direction": "", "price": 0.0
+            })
             ob = get_order_blocks(
                 df_mtf,
-                structure["bos"],
+                _bos_safe,
                 min_impulse_pct    = cfg.OB_MIN_IMPULSE_PCT,
                 max_age_candles    = cfg.OB_MAX_AGE_CANDLES,
                 mitigated_invalid  = cfg.OB_MITIGATED_INVALID,
@@ -117,11 +122,22 @@ class SMCAnalyzer:
                        "bull_found": False, "bear_found": False}
             result["fvg"] = fvg
 
+            # ── ATR (MTF) ──────────────────────────────────────────────────
+            try:
+                h = df_mtf["high"]; l = df_mtf["low"]
+                pc = df_mtf["close"].shift(1)
+                tr = pd.concat([(h - l), (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1)
+                atr_s = tr.ewm(span=14, adjust=False).mean()
+                result["atr"] = float(atr_s.iloc[-1]) if len(atr_s) > 0 else 0.0
+            except Exception:
+                result["atr"] = 0.0
+
             # ── Шаг 5: Premium / Discount ─────────────────────────────────
             last_sh = structure.get("last_swing_high")
             last_sl = structure.get("last_swing_low")
             if last_sh and last_sl and cfg.PD_ENABLED:
                 current_price = float(df_mtf["close"].iloc[-1])
+                result["current_price"] = current_price
                 pd_zone = get_premium_discount(
                     last_sh["price"], last_sl["price"],
                     current_price, cfg.PD_BUFFER_PCT,
@@ -131,9 +147,9 @@ class SMCAnalyzer:
             result["pd_zone"] = pd_zone
 
             log.debug(
-                f"{symbol}: trend={structure['trend']} "
-                f"bos={structure['bos']['detected']} "
-                f"pd={pd_zone['zone']}"
+                f"{symbol}: trend={structure.get('trend', '?')} "
+                f"bos={structure.get('bos', {}).get('detected', False)} "
+                f"pd={pd_zone.get('zone', '?')}"
             )
         except Exception as e:
             log.error(f"{symbol}: SMC analyze error: {e}")
