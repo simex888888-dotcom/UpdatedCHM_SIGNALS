@@ -11,6 +11,7 @@ Polygon-адрес, пополняет USDC и торгует прямо из б
 """
 
 import asyncio
+import html
 import logging
 import time
 from typing import Optional
@@ -118,12 +119,12 @@ def _market_card(market: dict, analysis: dict) -> str:
     conf_map = {"HIGH": "Высокая 🟢", "MEDIUM": "Средняя 🟡", "LOW": "Низкая 🔴"}
     risk_map = {"HIGH": "Высокий 🔴", "MEDIUM": "Средний 🟡", "LOW": "Низкий 🟢"}
 
-    # Базовая часть
+    # Базовая часть (экранируем названия маркетов — могут содержать < > &)
     text = (
-        f"📊 <b>{q}</b>" + NL
+        f"📊 <b>{html.escape(q)}</b>" + NL
     )
     if orig_q and orig_q != q:
-        text += f"<i>🔤 {orig_q}</i>" + NL
+        text += f"<i>🔤 {html.escape(orig_q)}</i>" + NL
     text += (
         NL +
         f"💲 YES: <b>{_fmt_pct(yes_p)}</b>  |  NO: <b>{_fmt_pct(no_p)}</b>" + NL +
@@ -138,21 +139,24 @@ def _market_card(market: dict, analysis: dict) -> str:
         "━━━━━━━━━━━━━━━━━━━━" + NL
     )
 
-    # Глубокий анализ
+    # Глубокий анализ — экранируем AI-текст чтобы не сломать HTML-разметку
+    def _e(s: str) -> str:
+        return html.escape(s)
+
     if main_thesis:
-        text += NL + "🧠 <b>Главный тезис:</b>" + NL + f"<i>{main_thesis}</i>" + NL
+        text += NL + "🧠 <b>Главный тезис:</b>" + NL + f"<i>{_e(main_thesis)}</i>" + NL
 
     if probability_verdict:
-        text += NL + "⚖️ <b>Оценка рынка:</b>" + NL + f"<i>{probability_verdict}</i>" + NL
+        text += NL + "⚖️ <b>Оценка рынка:</b>" + NL + f"<i>{_e(probability_verdict)}</i>" + NL
 
     if yes_scenario:
-        text += NL + "✅ <b>YES победит если:</b>" + NL + f"<i>{yes_scenario}</i>" + NL
+        text += NL + "✅ <b>YES победит если:</b>" + NL + f"<i>{_e(yes_scenario)}</i>" + NL
 
     if no_scenario:
-        text += NL + "❌ <b>NO победит если:</b>" + NL + f"<i>{no_scenario}</i>" + NL
+        text += NL + "❌ <b>NO победит если:</b>" + NL + f"<i>{_e(no_scenario)}</i>" + NL
 
     if key_risk:
-        text += NL + "🚨 <b>Ключевой риск:</b>" + NL + f"<i>{key_risk}</i>" + NL
+        text += NL + "🚨 <b>Ключевой риск:</b>" + NL + f"<i>{_e(key_risk)}</i>" + NL
 
     return text
 
@@ -200,11 +204,12 @@ def _market_kb(
 async def _safe_edit(cb: CallbackQuery, text: str, kb: Optional[InlineKeyboardMarkup] = None):
     try:
         await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    except Exception:
+    except Exception as e1:
+        log.debug(f"_safe_edit edit_text failed: {e1}")
         try:
             await cb.message.answer(text, parse_mode="HTML", reply_markup=kb)
-        except Exception:
-            pass
+        except Exception as e2:
+            log.warning(f"_safe_edit answer also failed: {e2} | text[:100]={text[:100]}")
 
 
 async def _get_user_wallet_balance(user_id: int) -> tuple[Optional[dict], float]:
