@@ -201,7 +201,7 @@ def register_poly_handlers(
         wallet, balance = await _get_user_wallet_balance(user_id)
         NL = "\n"
 
-        if not wallet and wallet_service.is_configured():
+        if not wallet:
             # Онбординг: кошелька нет
             text = (
                 "📊 <b>Polymarket — Prediction Market</b>" + NL + NL +
