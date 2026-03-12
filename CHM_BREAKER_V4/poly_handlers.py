@@ -13,6 +13,7 @@ Polygon-адрес, пополняет USDC и торгует прямо из б
 import asyncio
 import html
 import logging
+import re
 import time
 from typing import Optional
 
@@ -25,6 +26,7 @@ from aiogram.types import (
 )
 
 import database as db
+import turso_sync
 import wallet_service
 from polymarket_service import (
     PolymarketService, analyze_market, _get_short_key, get_condition_id,
@@ -41,9 +43,10 @@ _BET_COOLDOWN = 3.0
 # ─── FSM ──────────────────────────────────────────────────────────────────────
 
 class PolyState(StatesGroup):
-    waiting_search   = State()
-    waiting_amount   = State()
-    waiting_bet_size = State()
+    waiting_search          = State()
+    waiting_amount          = State()
+    waiting_bet_size        = State()
+    waiting_wallet_restore  = State()  # ввод адреса для восстановления кошелька
 
 
 # ─── Хелперы ──────────────────────────────────────────────────────────────────
@@ -263,6 +266,7 @@ def register_poly_handlers(
             )
             kb = _ik(
                 [_btn("🚀 Создать кошелёк", "pm:create_wallet")],
+                [_btn("🔑 Восстановить кошелёк", "pm:restore_wallet")],
                 [_btn("🔥 Смотреть маркеты", "pm:trending:0")],
                 [_btn("🔙 Главное меню", "back_main")],
             )
@@ -360,6 +364,179 @@ def register_poly_handlers(
             [_btn("❓ Как купить USDC?", "pm:howto_usdc")],
         )
         await _safe_edit(cb, text, kb)
+
+    # ─── Восстановление кошелька ───────────────────────────────────────────
+
+    @dp.callback_query(F.data == "pm:restore_wallet")
+    async def cb_restore_wallet_prompt(cb: CallbackQuery, state: FSMContext):
+        """Шаг 1: предлагаем ввести адрес."""
+        await cb.answer()
+        if not wallet_service.is_configured():
+            await cb.answer(
+                "⚠️ WALLET_ENCRYPTION_KEY не задан — восстановление невозможно.",
+                show_alert=True,
+            )
+            return
+
+        existing = await db.poly_wallet_get(cb.from_user.id)
+        if existing:
+            await _safe_edit(
+                cb,
+                f"👛 Кошелёк уже привязан:\n<code>{existing['address']}</code>",
+                _ik([_btn("🔙 Polymarket", "pm:menu")]),
+            )
+            return
+
+        await state.set_state(PolyState.waiting_wallet_restore)
+        NL = "\n"
+        text = (
+            "🔑 <b>Восстановление кошелька</b>" + NL + NL +
+            "Введи адрес своего Polygon-кошелька (0x…)," + NL +
+            "который был выдан этой системой ранее." + NL + NL +
+            "Бот найдёт его в облаке и восстановит связку." + NL + NL +
+            "<i>Адрес выглядит примерно так:</i>" + NL +
+            "<code>0xAbC1234...def5678</code>"
+        )
+        await _safe_edit(
+            cb, text,
+            _ik([_btn("❌ Отмена", "pm:menu")]),
+        )
+
+    @dp.message(PolyState.waiting_wallet_restore)
+    async def msg_restore_wallet(msg: Message, state: FSMContext):
+        """Шаг 2: получаем адрес, ищем в Turso, восстанавливаем."""
+        await state.clear()
+        address = (msg.text or "").strip()
+
+        # Валидация: Ethereum-совместимый адрес
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", address):
+            await msg.answer(
+                "❌ Неверный формат адреса.\n"
+                "Адрес должен начинаться с <code>0x</code> и содержать 40 hex-символов.",
+                parse_mode="HTML",
+                reply_markup=_ik([_btn("🔙 Polymarket", "pm:menu")]),
+            )
+            return
+
+        await msg.answer("⏳ Ищем кошелёк в облаке…", parse_mode="HTML")
+
+        # Ищем в Turso по user_id
+        turso_row = await turso_sync.turso_lookup_wallet(msg.from_user.id)
+
+        NL = "\n"
+        if turso_row is None:
+            # Turso не настроен или кошелька нет
+            if turso_sync.is_configured():
+                text = (
+                    "☁️ Кошелёк не найден в облаке." + NL + NL +
+                    "Возможно, он был создан после последней синхронизации." + NL +
+                    "Обратитесь к администратору или создайте новый кошелёк."
+                )
+            else:
+                text = (
+                    "⚠️ Облако (Turso) не настроено." + NL +
+                    "Восстановление через облако недоступно." + NL +
+                    "Обратитесь к администратору."
+                )
+            await msg.answer(
+                text, parse_mode="HTML",
+                reply_markup=_ik(
+                    [_btn("🚀 Создать новый кошелёк", "pm:create_wallet")],
+                    [_btn("🔙 Polymarket", "pm:menu")],
+                ),
+            )
+            return
+
+        turso_address = turso_row.get("address", "")
+        encrypted_key = turso_row.get("encrypted_key", "")
+
+        if turso_address.lower() != address.lower():
+            # Адрес не совпадает — показываем что нашли, даём выбор
+            short = f"{turso_address[:8]}…{turso_address[-6:]}"
+            text = (
+                f"⚠️ Адрес не совпадает." + NL + NL +
+                f"Ты ввёл:       <code>{html.escape(address)}</code>" + NL +
+                f"В облаке найден: <code>{html.escape(short)}</code>" + NL + NL +
+                "Возможно, ты перепутал адрес. Восстановить найденный кошелёк?"
+            )
+            # Сохраняем данные во временный kv для подтверждения
+            await db.db_kv_set(
+                f"wallet_restore_{msg.from_user.id}",
+                f"{turso_address}|||{encrypted_key}",
+            )
+            await msg.answer(
+                text, parse_mode="HTML",
+                reply_markup=_ik(
+                    [_btn("✅ Да, восстановить найденный", f"pm:restore_confirm:{msg.from_user.id}")],
+                    [_btn("❌ Нет, отмена", "pm:menu")],
+                ),
+            )
+            return
+
+        # Адрес совпадает — восстанавливаем
+        if not encrypted_key:
+            await msg.answer(
+                "❌ Приватный ключ не найден в облаке (encrypted_key пустой).\n"
+                "Обратитесь к администратору.",
+                parse_mode="HTML",
+                reply_markup=_ik([_btn("🔙 Polymarket", "pm:menu")]),
+            )
+            return
+
+        await db.poly_wallet_restore(msg.from_user.id, turso_address, encrypted_key)
+        balance = await wallet_service.get_usdc_balance(turso_address)
+        bal_str = f"${balance:.2f} USDC" if balance > 0 else "0 USDC"
+
+        text = (
+            "✅ <b>Кошелёк восстановлен!</b>" + NL + NL +
+            f"Адрес: <code>{html.escape(turso_address)}</code>" + NL +
+            f"Баланс: <b>{bal_str}</b>"
+        )
+        await msg.answer(
+            text, parse_mode="HTML",
+            reply_markup=_ik(
+                [_btn("🔥 Смотреть маркеты", "pm:trending:0")],
+                [_btn("🔙 Polymarket", "pm:menu")],
+            ),
+        )
+
+    @dp.callback_query(F.data.startswith("pm:restore_confirm:"))
+    async def cb_restore_confirm(cb: CallbackQuery):
+        """Подтверждение восстановления когда введённый адрес не совпал с Turso."""
+        await cb.answer()
+        uid = cb.from_user.id
+        kv_val = await db.db_kv_get(f"wallet_restore_{uid}")
+        if not kv_val or "|||" not in kv_val:
+            await cb.answer("⚠️ Сессия истекла, попробуйте снова.", show_alert=True)
+            return
+
+        turso_address, encrypted_key = kv_val.split("|||", 1)
+        await db.db_kv_set(f"wallet_restore_{uid}", "")  # очищаем временную запись
+
+        if not encrypted_key:
+            await _safe_edit(
+                cb,
+                "❌ Приватный ключ не найден в облаке.\nОбратитесь к администратору.",
+                _ik([_btn("🔙 Polymarket", "pm:menu")]),
+            )
+            return
+
+        await db.poly_wallet_restore(uid, turso_address, encrypted_key)
+        balance = await wallet_service.get_usdc_balance(turso_address)
+        bal_str = f"${balance:.2f} USDC" if balance > 0 else "0 USDC"
+        NL = "\n"
+        text = (
+            "✅ <b>Кошелёк восстановлен!</b>" + NL + NL +
+            f"Адрес: <code>{html.escape(turso_address)}</code>" + NL +
+            f"Баланс: <b>{bal_str}</b>"
+        )
+        await _safe_edit(
+            cb, text,
+            _ik(
+                [_btn("🔥 Смотреть маркеты", "pm:trending:0")],
+                [_btn("🔙 Polymarket", "pm:menu")],
+            ),
+        )
 
     @dp.callback_query(F.data == "pm:howto_usdc")
     async def cb_howto(cb: CallbackQuery):

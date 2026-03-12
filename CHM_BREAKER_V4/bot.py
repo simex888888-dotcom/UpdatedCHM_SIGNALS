@@ -163,11 +163,12 @@ async def main():
     # После вызова _restore_attempted=True → turso_push разблокируется.
     turso_had_data = await turso_sync.restore_from_turso_if_needed(config.DB_PATH)
 
-    # ─── ШАГ 4: Если Turso был пустым, пушим локальные данные сразу ──────────
-    # Без этого первый пуш произойдёт через SYNC_INTERVAL (300с).
-    # Если контейнер рестартует раньше — данные так и не попадут в Turso.
-    if not turso_had_data and turso_sync.is_configured():
-        log.info("⬆️  Turso: облако пустое — выполняем первичный пуш локальных данных...")
+    # ─── ШАГ 4: Всегда пушим при старте ─────────────────────────────────────
+    # turso_push защищён флагом _restore_attempted — не выполнится до restore.
+    # Без безусловного пуша при частых рестартах (< SYNC_INTERVAL=300с)
+    # данные никогда не попадают в Turso (kv:1 — типичный симптом).
+    if turso_sync.is_configured():
+        log.info("⬆️  Turso: первичный пуш при старте...")
         await turso_sync.turso_push(config.DB_PATH)
 
     log.info("⏳ Инициализация кэша...")

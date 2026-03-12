@@ -29,6 +29,7 @@ turso_sync.py — резервное копирование SQLite в Turso че
 
 import asyncio
 import logging
+from typing import Optional
 import os
 import sqlite3
 
@@ -285,6 +286,32 @@ async def restore_from_turso_if_needed(db_path: str) -> bool:
         return False
 
 
+# ── Точечные запросы к Turso (для UI восстановления) ──────────────────────
+
+async def turso_lookup_wallet(user_id: int) -> Optional[dict]:
+    """
+    Ищет кошелёк пользователя в Turso по user_id.
+    Возвращает {'address': '0x...', 'encrypted_key': '...'} или None.
+
+    Используется при ручном восстановлении кошелька через бота:
+    пользователь вводит свой адрес → бот сверяет с Turso → восстанавливает.
+    """
+    if not is_configured():
+        return None
+    try:
+        async with aiohttp.ClientSession() as session:
+            results = await _pipeline(session, [{
+                "sql": "SELECT address, encrypted_key FROM poly_wallets WHERE user_id=?",
+                "args": [_arg(user_id)],
+            }])
+        if results and results[0]:
+            return results[0][0]
+        return None
+    except Exception as e:
+        log.warning(f"turso_lookup_wallet({user_id}): {e}")
+        return None
+
+
 # ── Обратная совместимость ─────────────────────────────────────────────────
 
 async def turso_pull(db_path: str) -> bool:
@@ -402,9 +429,9 @@ async def turso_sync_loop(db_path: str, initial_delay: int | None = None):
     """
     Фоновая задача: пушит БД в Turso каждые SYNC_INTERVAL секунд.
 
-    initial_delay — пауза перед ПЕРВЫМ пушем.
-    По умолчанию равен SYNC_INTERVAL (300с) — не нужно спешить,
-    первичный пуш уже выполнен в main() если Turso был пустым.
+    initial_delay — пауза перед ПЕРВЫМ пушем цикла.
+    По умолчанию 60с — первичный пуш уже выполнен в main() при старте,
+    цикл нужен для последующей синхронизации изменений.
 
     ВАЖНО: запускать только ПОСЛЕ вызова restore_from_turso_if_needed().
     """
@@ -413,7 +440,7 @@ async def turso_sync_loop(db_path: str, initial_delay: int | None = None):
         return
 
     if initial_delay is None:
-        initial_delay = SYNC_INTERVAL
+        initial_delay = 60  # первичный пуш уже выполнен в main()
 
     log.info(
         f"☁️  Turso sync loop запущен "
