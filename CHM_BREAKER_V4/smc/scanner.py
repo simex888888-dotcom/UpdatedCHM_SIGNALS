@@ -22,6 +22,11 @@ from .signal_builder import build_smc_signal, SMCSignalResult
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import database as db
 from watermark import wm_inject
+try:
+    import fundamental as _fund
+    _FUND_OK = True
+except ImportError:
+    _FUND_OK = False
 
 log = logging.getLogger("CHM.SMC.Scanner")
 
@@ -45,7 +50,7 @@ def _fp(v: float) -> str:
     return f"{v:.6f}".rstrip("0").rstrip(".")
 
 
-def _signal_text_smc(sig: SMCSignalResult) -> str:
+def _signal_text_smc(sig: SMCSignalResult, fund_block: str = "") -> str:
     NL = "\n"
     is_long = sig.direction == "LONG"
     dir_line = ("🟢 <b>LONG — ПОКУПКА</b>" if is_long
@@ -58,6 +63,12 @@ def _signal_text_smc(sig: SMCSignalResult) -> str:
         confirmations_block += mark + " " + label + NL
 
     def pct(t): return abs((t - sig.entry) / sig.entry * 100)
+
+    fund_section = (
+        NL + "━━━━━━━━━━━━━━━━━━━━" + NL +
+        "📌 <b>Фундаментал рынка:</b>" + NL +
+        fund_block + NL
+    ) if fund_block else ""
 
     return (
         dir_line + "  " + sig.grade + NL +
@@ -72,7 +83,8 @@ def _signal_text_smc(sig: SMCSignalResult) -> str:
         "📋 ПОДТВЕРЖДЕНИЯ (" + str(sig.score) + "/5):" + NL +
         confirmations_block + NL +
         "🧠 ЛОГИКА ВХОДА:" + NL +
-        sig.narrative + NL + NL +
+        sig.narrative +
+        fund_section + NL +
         "⚡ <i>CHM Laboratory — SMC Strategy</i>"
     )
 
@@ -131,6 +143,14 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
     ]
     if not smc_users:
         return
+
+    # Загружаем фундаментальный контекст один раз на весь цикл
+    _fund_block = ""
+    if _FUND_OK:
+        try:
+            _fund_block = await _fund.get_market_context_block()
+        except Exception as _fe:
+            log.debug(f"fundamental: {_fe}")
 
     log.info(f"SMC scan: {len(smc_users)} SMC users")
 
@@ -306,7 +326,7 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
                     else:
                         show_trade_btn = True
 
-                text = wm_inject(_signal_text_smc(sig), user.user_id)
+                text = wm_inject(_signal_text_smc(sig, _fund_block), user.user_id)
                 try:
                     await bot.send_message(
                         user.user_id, text,

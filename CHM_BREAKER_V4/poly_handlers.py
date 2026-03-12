@@ -10,6 +10,7 @@ Polygon-адрес, пополняет USDC и торгует прямо из б
   Прямой admin-кошелёк (POLY_PRIVATE_KEY) — только администраторы
 """
 
+import asyncio
 import html
 import logging
 import time
@@ -27,7 +28,7 @@ import database as db
 import wallet_service
 from polymarket_service import (
     PolymarketService, analyze_market, _get_short_key, get_condition_id,
-    _parse_prices,
+    _parse_prices, translate_market, translate_question,
 )
 
 log = logging.getLogger("CHM.Poly")
@@ -84,33 +85,80 @@ def _market_short(q: str, n: int = 40) -> str:
 
 
 def _market_card(market: dict, analysis: dict) -> str:
-    q        = html.escape(market.get("question", "—"))
+    q        = market.get("question", "—")
+    orig_q   = market.get("question_original", "")   # оригинал если был переведён
     end_date = html.escape(market.get("endDate", "")[:10] or "—")
     yes_p    = analysis["yes_price"]
     no_p     = analysis["no_price"]
     vol      = analysis["volume_24h"]
     liq      = analysis["liquidity"]
-    rec      = html.escape(str(analysis["recommendation"]))
-    conf     = html.escape(str(analysis["confidence"]))
-    reason   = html.escape(str(analysis["reasoning"]))
-    risk     = html.escape(str(analysis.get("risk", "MEDIUM")))
+    rec      = analysis["recommendation"]
+    conf     = analysis["confidence"]
+    risk     = analysis.get("risk", "MEDIUM")
     edge     = html.escape(str(analysis.get("edge", "0%")))
 
+    # Поля глубокого анализа
+    main_thesis         = analysis.get("main_thesis", "")
+    probability_verdict = analysis.get("probability_verdict", "")
+    yes_scenario        = analysis.get("yes_scenario", "")
+    no_scenario         = analysis.get("no_scenario", "")
+    key_risk            = analysis.get("key_risk", "")
+    # Fallback: если старые поля
+    if not main_thesis:
+        main_thesis = analysis.get("reasoning", "")
+
     NL = "\n"
-    return (
-        f"📊 <b>{q}</b>" + NL + NL +
-        f"YES: <b>{_fmt_pct(yes_p)}</b> (${yes_p:.2f})  |  NO: <b>{_fmt_pct(no_p)}</b> (${no_p:.2f})" + NL +
-        f"💧 Ликвидность: <b>{_fmt_usd(liq)}</b>" + NL +
-        f"📈 Объём 24ч: <b>{_fmt_usd(vol)}</b>" + NL +
-        f"⏰ Закрытие: <b>{end_date}</b>" + NL + NL +
-        "🤖 <b>AI-анализ:</b>" + NL +
-        f"Рекомендация: <b>{rec}</b> {_rec_emoji(analysis['recommendation'])}" + NL +
-        f"Уверенность: <b>{conf}</b> {_conf_emoji(analysis['confidence'])}" + NL +
-        f"Риск: <b>{risk}</b> {_risk_emoji(analysis.get('risk', 'MEDIUM'))}" + NL +
-        f"<code>Edge: {edge}</code>" + NL + NL +
-        "💭 <b>Мысли:</b>" + NL +
-        f"<i>{reason}</i>"
+
+    # Строим рекомендационную строку
+    rec_line = {
+        "BUY YES": "🟢 <b>СТАВИТЬ YES</b>",
+        "BUY NO":  "🔴 <b>СТАВИТЬ NO</b>",
+        "SKIP":    "⏭️ <b>ПРОПУСТИТЬ</b>",
+    }.get(rec, f"<b>{html.escape(rec)}</b>")
+
+    conf_map = {"HIGH": "Высокая 🟢", "MEDIUM": "Средняя 🟡", "LOW": "Низкая 🔴"}
+    risk_map = {"HIGH": "Высокий 🔴", "MEDIUM": "Средний 🟡", "LOW": "Низкий 🟢"}
+
+    # Базовая часть (экранируем названия маркетов — могут содержать < > &)
+    text = (
+        f"📊 <b>{html.escape(q)}</b>" + NL
     )
+    if orig_q and orig_q != q:
+        text += f"<i>🔤 {html.escape(orig_q)}</i>" + NL
+    text += (
+        NL +
+        f"💲 YES: <b>{_fmt_pct(yes_p)}</b>  |  NO: <b>{_fmt_pct(no_p)}</b>" + NL +
+        f"💧 Ликвидность: <b>{_fmt_usd(liq)}</b>  |  📈 Объём 24ч: <b>{_fmt_usd(vol)}</b>" + NL +
+        f"⏰ Закрытие: <b>{end_date}</b>" + NL +
+        NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL +
+        f"🎯 Рекомендация: {rec_line}" + NL +
+        f"💡 Уверенность: {conf_map.get(conf, conf)}  |  "
+        f"⚠️ Риск: {risk_map.get(risk, risk)}" + NL +
+        f"📐 Edge: <code>{edge}</code>" + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL
+    )
+
+    # Глубокий анализ — экранируем AI-текст чтобы не сломать HTML-разметку
+    def _e(s: str) -> str:
+        return html.escape(s)
+
+    if main_thesis:
+        text += NL + "🧠 <b>Главный тезис:</b>" + NL + f"<i>{_e(main_thesis)}</i>" + NL
+
+    if probability_verdict:
+        text += NL + "⚖️ <b>Оценка рынка:</b>" + NL + f"<i>{_e(probability_verdict)}</i>" + NL
+
+    if yes_scenario:
+        text += NL + "✅ <b>YES победит если:</b>" + NL + f"<i>{_e(yes_scenario)}</i>" + NL
+
+    if no_scenario:
+        text += NL + "❌ <b>NO победит если:</b>" + NL + f"<i>{_e(no_scenario)}</i>" + NL
+
+    if key_risk:
+        text += NL + "🚨 <b>Ключевой риск:</b>" + NL + f"<i>{_e(key_risk)}</i>" + NL
+
+    return text
 
 
 def _get_token_ids(market: dict) -> dict:
@@ -156,11 +204,12 @@ def _market_kb(
 async def _safe_edit(cb: CallbackQuery, text: str, kb: Optional[InlineKeyboardMarkup] = None):
     try:
         await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
-    except Exception:
+    except Exception as e1:
+        log.debug(f"_safe_edit edit_text failed: {e1}")
         try:
             await cb.message.answer(text, parse_mode="HTML", reply_markup=kb)
-        except Exception:
-            pass
+        except Exception as e2:
+            log.warning(f"_safe_edit answer also failed: {e2} | text[:100]={text[:100]}")
 
 
 async def _get_user_wallet_balance(user_id: int) -> tuple[Optional[dict], float]:
@@ -491,21 +540,54 @@ def register_poly_handlers(
 
     @dp.callback_query(F.data.startswith("pm:view:"))
     async def cb_view_market(cb: CallbackQuery):
-        await cb.answer()
-        sk = int(cb.data.split(":")[2])
-        condition_id = get_condition_id(sk)
-        if not condition_id:
-            await cb.answer("⚠️ Маркет не найден.", show_alert=True)
+        # Не отвечаем сразу — сначала проверяем данные, потом отвечаем один раз
+        try:
+            sk = int(cb.data.split(":")[2])
+        except (ValueError, IndexError):
+            await cb.answer("⚠️ Некорректный запрос.", show_alert=True)
             return
 
-        market = await poly.get_market_by_id(condition_id)
+        condition_id = get_condition_id(sk)
+        if not condition_id:
+            # Маркет не найден в памяти — бот был перезапущен, список устарел
+            await cb.answer(
+                "⚠️ Список маркетов устарел. Обновите список.",
+                show_alert=True,
+            )
+            try:
+                await cb.message.edit_reply_markup(
+                    reply_markup=_ik([_btn("🔄 Обновить список", "pm:trending:0"),
+                                      _btn("🔙 Polymarket", "pm:menu")])
+                )
+            except Exception:
+                pass
+            return
+
+        await cb.answer()  # снимаем спиннер только после проверки
+
+        try:
+            market = await poly.get_market_by_id(condition_id)
+        except Exception as e:
+            log.warning(f"get_market_by_id {condition_id}: {e}")
+            market = None
+
         if not market:
-            await cb.answer("⚠️ Не удалось загрузить маркет.", show_alert=True)
+            await _safe_edit(
+                cb,
+                "⚠️ Не удалось загрузить маркет.\n<i>Polymarket API недоступен.</i>",
+                _ik([_btn("🔄 Попробовать снова", f"pm:view:{sk}"),
+                     _btn("🔙 К списку", "pm:trending:0")]),
+            )
             return
 
         await _safe_edit(cb, "⏳ <b>AI анализирует маркет...</b>", None)
+
         try:
-            analysis = await poly.analyze_market(market)
+            # Запускаем перевод и анализ параллельно — оба идут в Groq независимо
+            market, analysis = await asyncio.gather(
+                translate_market(market),
+                poly.analyze_market(market),
+            )
             settings = await db.poly_get_settings(cb.from_user.id)
             default_bet = settings.get("default_bet", 5.0)
 
@@ -517,6 +599,9 @@ def register_poly_handlers(
             )
 
             text = _market_card(market, analysis)
+            # Telegram limit: 4096 chars. Trim if needed.
+            if len(text) > 4000:
+                text = text[:3990] + "\n<i>…</i>"
             kb   = _market_kb(sk, market, analysis, default_bet, can_trade)
             await _safe_edit(cb, text, kb)
         except Exception as e:

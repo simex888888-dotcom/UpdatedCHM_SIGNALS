@@ -12,14 +12,17 @@ turso_sync.py — резервное копирование SQLite в Turso че
   TURSO_TOKEN  = eyJ...токен из Turso Dashboard...
 
 Если переменные не заданы — модуль молча отключается.
+
+ПОРЯДОК ЗАПУСКА (критично!):
+  1. restore_from_turso_if_needed(db_path)  ← СНАЧАЛА тянем из облака
+  2. database.init_db(db_path)              ← потом создаём/мигрируем таблицы
+  3. asyncio.create_task(turso_sync_loop(db_path))  ← только потом фон
 """
 
 import asyncio
-import json
 import logging
 import os
 import sqlite3
-from functools import partial
 
 import aiohttp
 
@@ -34,6 +37,11 @@ SYNC_TABLES = [
     "users", "trial_ids", "promo_codes", "promo_uses",
     "referrals", "ref_rewards", "pd_users", "kv",
 ]
+
+# ── Защита от "пустого пуша" ───────────────────────────────────────────────
+# Выставляется в True после того как restore_from_turso_if_needed() завершила
+# попытку восстановления (успешную или нет). До этого момента push запрещён.
+_restore_attempted: bool = False
 
 
 def _is_configured() -> bool:
@@ -108,15 +116,26 @@ async def _pipeline(session: aiohttp.ClientSession, stmts: list[dict]) -> list:
     return results
 
 
-async def turso_pull(db_path: str) -> bool:
+# ── Восстановление при старте ──────────────────────────────────────────────
+
+async def restore_from_turso_if_needed(db_path: str) -> bool:
     """
-    Восстанавливает таблицы из Turso в локальный SQLite.
-    Вызывать ПОСЛЕ database.init_db() — таблицы уже должны существовать.
+    ШАГ 1 при старте: восстанавливает локальный SQLite из Turso если облако непустое.
+
+    Вызывать ДО database.init_db() — пишет напрямую в файл через sqlite3,
+    создавая таблицы по мере необходимости (INSERT OR REPLACE без DELETE).
+
+    Возвращает True если данные были восстановлены.
     """
+    global _restore_attempted
+    _restore_attempted = True  # выставляем сразу — даже если вернём False
+
     if not _is_configured():
-        log.warning("⚠️  Turso не настроен (TURSO_URL/TURSO_TOKEN не заданы) — облачное восстановление отключено. "
-                    "Подписки сохраняются ТОЛЬКО в локальном SQLite + subs_backup.txt. "
-                    "При редеплое (пересборке контейнера) данные могут быть потеряны!")
+        log.warning(
+            "⚠️  Turso не настроен (TURSO_URL/TURSO_TOKEN не заданы) — облачное восстановление отключено. "
+            "Подписки сохраняются ТОЛЬКО в локальном SQLite + subs_backup.txt. "
+            "При редеплое (пересборке контейнера) данные могут быть потеряны!"
+        )
         return False
 
     log.info("⬇️  Turso: загружаем БД из облака...")
@@ -133,17 +152,26 @@ async def turso_pull(db_path: str) -> bool:
 
         def _write_locally():
             with sqlite3.connect(db_path, timeout=30) as conn:
+                # Включаем WAL чтобы не конфликтовать с будущим aiosqlite
+                conn.execute("PRAGMA journal_mode=WAL")
                 for table, rows in zip(SYNC_TABLES, results):
                     if not rows:
                         continue
                     cols = list(rows[0].keys())
-                    col_names = ", ".join(cols)
+                    col_names   = ", ".join(cols)
                     placeholders = ", ".join(["?" for _ in cols])
+                    # Создаём таблицу если не существует (минимальная схема)
+                    # init_db добавит недостающие колонки позже через ALTER TABLE
+                    col_defs = ", ".join(f"{c} TEXT" for c in cols)
+                    conn.execute(
+                        f"CREATE TABLE IF NOT EXISTS {table} ({col_defs})"
+                    )
                     conn.execute(f"DELETE FROM {table}")
                     for row in rows:
                         vals = [row[c] for c in cols]
                         conn.execute(
-                            f"INSERT OR REPLACE INTO {table} ({col_names}) VALUES ({placeholders})",
+                            f"INSERT OR REPLACE INTO {table} ({col_names}) "
+                            f"VALUES ({placeholders})",
                             vals,
                         )
                 conn.commit()
@@ -153,21 +181,43 @@ async def turso_pull(db_path: str) -> bool:
 
         log.info(f"✅ Turso: восстановлено {total} строк из облака")
         return True
+
     except Exception as exc:
-        log.warning(f"Turso pull error: {exc}")
+        log.warning(f"Turso restore error: {exc}")
         return False
 
+
+# ── Обратная совместимость — старое имя ───────────────────────────────────
+
+async def turso_pull(db_path: str) -> bool:
+    """
+    Устаревший псевдоним. При старте использовать restore_from_turso_if_needed().
+    Оставлен для обратной совместимости: вызывает restore_from_turso_if_needed().
+    """
+    return await restore_from_turso_if_needed(db_path)
+
+
+# ── Push ───────────────────────────────────────────────────────────────────
 
 async def turso_push(db_path: str) -> bool:
     """
     Пушит все критические таблицы из локального SQLite в Turso.
     Безопасно вызывать в фоне во время работы бота.
+
+    Защита: если restore_from_turso_if_needed() ещё не запускалась —
+    пуш блокируется чтобы не затереть облако пустой локальной БД.
     """
     if not _is_configured():
         return False
 
+    if not _restore_attempted:
+        log.warning(
+            "⚠️  Turso push заблокирован: restore_from_turso_if_needed() "
+            "не была вызвана при старте. Пуш пропущен."
+        )
+        return False
+
     try:
-        # Читаем локальный SQLite в executor чтобы не блокировать event loop
         def _read_locally():
             data: dict[str, list[dict]] = {}
             with sqlite3.connect(db_path, timeout=30) as conn:
@@ -187,8 +237,7 @@ async def turso_push(db_path: str) -> bool:
         async with aiohttp.ClientSession() as session:
             for table, rows in tables_data.items():
                 stmts: list[dict] = [{"sql": f"DELETE FROM {table}"}]
-                # Батчи по 50 строк чтобы не превысить лимит запроса
-                for i in range(0, len(rows), 50):
+                for i in range(0, max(len(rows), 1), 50):
                     for row in rows[i:i + 50]:
                         cols = list(row.keys())
                         stmts.append({
@@ -198,7 +247,6 @@ async def turso_push(db_path: str) -> bool:
                             ),
                             "args": [_arg(row[c]) for c in cols],
                         })
-                    # Флашим батч
                     try:
                         await _pipeline(session, stmts)
                     except Exception as e:
@@ -212,18 +260,30 @@ async def turso_push(db_path: str) -> bool:
         return False
 
 
-async def turso_sync_loop(db_path: str):
+# ── Фоновый sync loop ──────────────────────────────────────────────────────
+
+async def turso_sync_loop(db_path: str, initial_delay: int | None = None):
     """
     Фоновая задача: пушит БД в Turso каждые SYNC_INTERVAL секунд.
-    Первый пуш через 15 секунд после старта (не через SYNC_INTERVAL)
-    чтобы данные попали в облако до возможного SIGKILL.
+
+    initial_delay — пауза перед ПЕРВЫМ пушем (секунды).
+    По умолчанию равен SYNC_INTERVAL (не 15с!) чтобы не затереть облако
+    сразу после старта, пока restore_from_turso_if_needed ещё не отработала.
+
+    ВАЖНО: запускать только ПОСЛЕ вызова restore_from_turso_if_needed().
     """
     if not _is_configured():
         log.info("Turso sync loop отключён (TURSO_URL/TURSO_TOKEN не заданы)")
         return
 
-    log.info(f"☁️  Turso sync loop запущен (интервал {SYNC_INTERVAL}с, первый пуш через 15с)")
-    await asyncio.sleep(15)
+    if initial_delay is None:
+        initial_delay = SYNC_INTERVAL  # по умолчанию 300с, не 15с
+
+    log.info(
+        f"☁️  Turso sync loop запущен "
+        f"(интервал {SYNC_INTERVAL}с, первый пуш через {initial_delay}с)"
+    )
+    await asyncio.sleep(initial_delay)
     await turso_push(db_path)
     while True:
         await asyncio.sleep(SYNC_INTERVAL)
