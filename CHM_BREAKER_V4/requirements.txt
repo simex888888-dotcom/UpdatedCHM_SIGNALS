@@ -14,6 +14,7 @@ xgboost>=2.0.0
 # Polymarket AI-анализ (Groq)
 openai>=1.0.0
 
-# Polymarket (опционально — только для реальной торговли через POLY_PRIVATE_KEY)
-# Раскомментируй если нужна торговля:
-# py-clob-client>=0.17.0
+# Polymarket — кастодиальные кошельки и торговля
+cryptography>=42.0.0
+eth-account>=0.10.0
+py-clob-client>=0.17.0
