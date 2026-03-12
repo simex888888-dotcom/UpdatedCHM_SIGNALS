@@ -79,14 +79,18 @@ def _http_url() -> str:
 def _arg(v) -> dict:
     """Конвертирует Python-значение в Turso API arg.
 
-    Turso HTTP API v2 /v2/pipeline: value для integer/float — JSON-число (не строка).
+    Turso HTTP API v2 /v2/pipeline quirks (проверено на практике):
+      integer → value: строка  ("445677777")   ← число вызывает 400
+      float   → value: число   (1850036198.39) ← строка вызывает 400
+      text    → value: строка
+      null    → value: null
     """
     if v is None:
         return {"type": "null", "value": None}
     if isinstance(v, bool):
-        return {"type": "integer", "value": 1 if v else 0}
+        return {"type": "integer", "value": "1" if v else "0"}
     if isinstance(v, int):
-        return {"type": "integer", "value": v}
+        return {"type": "integer", "value": str(v)}
     if isinstance(v, float):
         return {"type": "float", "value": v}
     return {"type": "text", "value": str(v)}
