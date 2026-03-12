@@ -12,6 +12,14 @@ from typing import Optional
 
 log = logging.getLogger("CHM.DB")
 
+# Импорт отложен до первого вызова чтобы избежать circular import при старте
+def _request_turso_push():
+    try:
+        import turso_sync
+        turso_sync.request_push()
+    except Exception:
+        pass
+
 _db_path: str = "chm_bot.db"
 _lock = asyncio.Lock()   # SQLite не любит параллельные записи
 
@@ -429,6 +437,7 @@ async def db_upsert_user(data: dict):
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(sql, vals)
             await db.commit()
+    _request_turso_push()
 
 
 async def db_get_active_users() -> list[dict]:
@@ -1009,6 +1018,7 @@ async def db_kv_set(key: str, value: str):
             "INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)", (key, value)
         )
         await db.commit()
+    _request_turso_push()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1100,6 +1110,7 @@ async def poly_wallet_create(user_id: int, address: str, encrypted_key: str):
                 (user_id, address, encrypted_key, time.time()),
             )
             await db.commit()
+    _request_turso_push()
 
 
 async def poly_wallet_restore(user_id: int, address: str, encrypted_key: str):
@@ -1116,6 +1127,7 @@ async def poly_wallet_restore(user_id: int, address: str, encrypted_key: str):
                 (user_id, address, encrypted_key, time.time()),
             )
             await db.commit()
+    _request_turso_push()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
