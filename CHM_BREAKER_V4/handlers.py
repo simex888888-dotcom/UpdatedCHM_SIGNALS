@@ -3375,57 +3375,57 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         has, reason = user.check_access()
         if not has:
-            await cb.answer("❌ Нет доступа", show_alert=True); return
+            await cb.message.answer("❌ Нет доступа. Требуется активная подписка."); return
         await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data == "toggle_auto_trade")
     async def toggle_auto_trade(cb: CallbackQuery):
+        await cb.answer()  # ACK сразу — до любых await, чтобы не словить "query is too old"
         user = await um.get_or_create(cb.from_user.id)
         has, _ = user.check_access()
         if not has:
-            await cb.answer("❌ Нет доступа", show_alert=True); return
+            await cb.message.answer("❌ Нет доступа к авто-трейдингу."); return
         if not getattr(user, "bybit_api_key", ""):
-            await cb.answer("⚠️ Сначала настрой API ключи!", show_alert=True); return
+            await cb.message.answer("⚠️ Сначала настрой API ключи!\n\nПерейди: 💹 Авто-трейдинг → 🔑 Настроить Bybit API"); return
         user.auto_trade = not user.auto_trade
         await um.save(user)
-        await cb.answer("💹 Авто-трейд: " + ("✅ вкл" if user.auto_trade else "❌ выкл"))
         await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.in_({"set_at_mode_confirm", "set_at_mode_auto"}))
     async def set_at_mode(cb: CallbackQuery):
+        await cb.answer()
         user = await um.get_or_create(cb.from_user.id)
         user.auto_trade_mode = "confirm" if cb.data == "set_at_mode_confirm" else "auto"
         await um.save(user)
-        await cb.answer("Режим: " + user.auto_trade_mode)
         await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_risk_"))
     async def set_at_risk(cb: CallbackQuery):
+        await cb.answer()
         user = await um.get_or_create(cb.from_user.id)
         try:
             user.trade_risk_pct = float(cb.data.split("_")[-1])
         except ValueError:
-            await cb.answer("Ошибка"); return
+            return
         await um.save(user)
-        await cb.answer(f"Риск: {user.trade_risk_pct}%")
         await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_lev_"))
     async def set_at_lev(cb: CallbackQuery):
+        await cb.answer()
         user = await um.get_or_create(cb.from_user.id)
         try:
             user.trade_leverage = int(cb.data.split("_")[-1])
         except ValueError:
-            await cb.answer("Ошибка"); return
+            return
         await um.save(user)
-        await cb.answer(f"Плечо: x{user.trade_leverage}")
         await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_maxtr_"))
     async def set_at_maxtr(cb: CallbackQuery, state: FSMContext):
+        await cb.answer()
         val = cb.data.split("_")[-1]
         if val == "custom":
-            await cb.answer()
             await state.set_state(MaxTradesState.waiting)
             await cb.message.answer(
                 "✏️ <b>Введи лимит открытых сделок</b>\n\n"
@@ -3438,9 +3438,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         try:
             user.max_trades_limit = int(val)
         except ValueError:
-            await cb.answer("Ошибка"); return
+            return
         await um.save(user)
-        await cb.answer(f"Лимит сделок: {user.max_trades_limit}")
         await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.message(MaxTradesState.waiting)
@@ -3470,7 +3469,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         has, _ = user.check_access()
         if not has:
-            await cb.answer("❌ Нет доступа", show_alert=True); return
+            await cb.message.answer("❌ Нет доступа. Требуется активная подписка."); return
         await state.set_state(SetupBybitState.api_key)
         await cb.message.answer(
             "🔑 <b>Настройка Bybit API</b>\n\n"
@@ -3541,7 +3540,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         api_key    = getattr(user, "bybit_api_key",    "")
         api_secret = getattr(user, "bybit_api_secret", "")
         if not api_key:
-            await cb.answer("❌ Ключи не настроены", show_alert=True); return
+            await cb.message.answer("❌ Ключи не настроены. Введи их через 🔑 Настроить Bybit API"); return
         wait = await cb.message.answer("⏳ Проверяю соединение...")
         try:
             import bybit_trader
@@ -3576,12 +3575,13 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.callback_query(F.data.startswith("exec_trade_"))
     async def exec_trade(cb: CallbackQuery):
         """Пользователь нажал '✅ Открыть сделку на Bybit'."""
-        await cb.answer()
+        await cb.answer()  # ACK сразу — до любых await
         trade_id = cb.data[len("exec_trade_"):]
         user = await um.get_or_create(cb.from_user.id)
         has, _ = user.check_access()
         if not has:
-            await cb.answer("❌ Нет доступа", show_alert=True); return
+            await cb.message.answer("❌ Нет доступа. Требуется активная подписка.")
+            return
 
         api_key    = getattr(user, "bybit_api_key",    "")
         api_secret = getattr(user, "bybit_api_secret", "")
@@ -3595,17 +3595,25 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
         trade = await db.db_get_trade(trade_id)
         if not trade:
-            await cb.answer("❌ Сделка не найдена", show_alert=True); return
+            await cb.message.answer("❌ Сделка не найдена или устарела.")
+            return
+
+        # Защита от двойного нажатия: order_id уже есть — сделка уже открыта
+        if trade.get("order_id", ""):
+            await cb.answer("⚠️ Сделка уже была открыта на Bybit!", show_alert=True)
+            return
 
         max_trades = getattr(user, "max_trades_limit", 5)
-        open_count = await db.db_count_open_trades(user.user_id)
-        if open_count >= max_trades:
-            await cb.answer(
-                f"⛔ Лимит сделок достигнут ({open_count}/{max_trades}). "
-                f"Дождись закрытия открытых позиций.",
-                show_alert=True,
-            )
-            return
+        # max_trades=0 означает «без лимита» — не проверяем
+        if max_trades > 0:
+            open_count = await db.db_count_open_trades(user.user_id)
+            if open_count >= max_trades:
+                await cb.message.answer(
+                    f"⛔ <b>Лимит сделок достигнут</b> ({open_count}/{max_trades})\n\n"
+                    f"Дождись закрытия открытых позиций.",
+                    parse_mode="HTML",
+                )
+                return
 
         wait = await cb.message.answer("⏳ Открываю позицию на Bybit...")
         try:
@@ -3622,6 +3630,13 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 tp2=float(trade.get("tp2") or 0),
                 tp3=float(trade.get("tp3") or 0),
             )
+            # Сохраняем order_id и pos_idx — критично для BE-монитора и дедупликации
+            if result.get("ok"):
+                await db.db_update_trade_bybit(
+                    trade_id,
+                    result.get("order_id", ""),
+                    result.get("pos_idx", 0),
+                )
             text = bybit_trader.format_trade_result(
                 result,
                 trade["direction"],

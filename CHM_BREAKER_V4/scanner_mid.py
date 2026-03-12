@@ -479,6 +479,13 @@ class MidScanner:
                         risk_pct, leverage,
                         tp2=tp2, tp3=tp3,
                     )
+                    # Сохраняем order_id и pos_idx — критично для BE-монитора
+                    if result.get("ok"):
+                        await db.db_update_trade_bybit(
+                            trade_id,
+                            result.get("order_id", ""),
+                            result.get("pos_idx", 0),
+                        )
                     trade_msg = bybit_trader.format_trade_result(
                         result, sig.direction, sig.symbol,
                         sig.entry, sig.sl, tp1, risk_pct, leverage,
@@ -745,13 +752,14 @@ class MidScanner:
 
     @staticmethod
     def _trade_result_from_exit(trade: dict, exit_price: float) -> tuple[str, float]:
-        """Определяет результат сделки (TP1/TP2/TP3/SL) по цене выхода."""
+        """Определяет результат сделки (TP1/TP2/TP3/SL/BE) по цене выхода."""
         direction = trade.get("direction", "LONG")
         entry     = float(trade.get("entry", 0))
         sl        = float(trade.get("sl",    0))
         tp1       = float(trade.get("tp1",   0))
         tp2       = float(trade.get("tp2",   0))
         tp3       = float(trade.get("tp3",   0))
+        be_set    = bool(trade.get("be_set", 0))
         risk      = abs(entry - sl)
         if risk <= 0 or entry <= 0:
             return "CLOSED", 0.0
@@ -763,6 +771,8 @@ class MidScanner:
                 return "TP2", round((tp2 - entry) / risk, 2)
             if tp1 > 0 and exit_price >= tp1 * (1 - tol):
                 return "TP1", round((tp1 - entry) / risk, 2)
+            if be_set and exit_price >= entry * (1 - tol):
+                return "BE", 0.0
             return "SL",  round((entry - exit_price) / risk, 2)
         else:
             if tp3 > 0 and exit_price <= tp3 * (1 + tol):
@@ -771,6 +781,8 @@ class MidScanner:
                 return "TP2", round((entry - tp2) / risk, 2)
             if tp1 > 0 and exit_price <= tp1 * (1 + tol):
                 return "TP1", round((entry - tp1) / risk, 2)
+            if be_set and exit_price <= entry * (1 + tol):
+                return "BE", 0.0
             return "SL",  round((exit_price - entry) / risk, 2)
 
     async def _check_breakevens(self):
@@ -846,7 +858,7 @@ class MidScanner:
                         trade["trade_id"], result_str, result_rr
                     )
                     sym_label = trade["symbol"].replace("-USDT-SWAP", "").replace("-USDT", "")
-                    emoji = "✅" if result_str.startswith("TP") else ("🛑" if result_str == "SL" else "📋")
+                    emoji = "✅" if result_str.startswith("TP") else ("🛑" if result_str == "SL" else ("♻️" if result_str == "BE" else "📋"))
                     rr_text = f"  R:R {result_rr:+.2f}" if result_rr != 0 else ""
                     try:
                         await self.bot.send_message(

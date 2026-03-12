@@ -52,13 +52,12 @@ class Config:
     #  🔑 TELEGRAM
     # ════════════════════════════════════════════════
 
-    TELEGRAM_TOKEN = ("8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k")
+    TELEGRAM_TOKEN ="8735063327:AAE-uPE-p9DO0hq1EznAn6bVIKdierGkCQ4"
+
 
     # Твой Telegram ID — станешь администратором
     # Узнать: написать @userinfobot
-    # Пример: export ADMIN_IDS="123456789,987654321"
     ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "445677777,705020259,7107654772").split(",")]
-
     # ════════════════════════════════════════════════
     #  🗄  SQLITE — путь к БД (persistent volume)
     # ════════════════════════════════════════════════

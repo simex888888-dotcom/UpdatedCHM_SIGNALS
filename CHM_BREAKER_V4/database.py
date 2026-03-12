@@ -324,6 +324,7 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN watch_coin TEXT DEFAULT ''",
             "ALTER TABLE trades ADD COLUMN be_set INTEGER DEFAULT 0",
             "ALTER TABLE trades ADD COLUMN pos_idx INTEGER DEFAULT 0",
+            "ALTER TABLE trades ADD COLUMN order_id TEXT DEFAULT ''",
             # Снижаем порог существующих пользователей с дефолтного 70 → 50
             # чтобы они начали получать сигналы (MIN_SIGNAL_SCORE теперь 40%)
             "UPDATE pd_users SET pd_threshold=50 WHERE pd_threshold=70",
@@ -561,6 +562,17 @@ async def db_update_trade_pos_idx(trade_id: str, pos_idx: int):
             await db.execute(
                 "UPDATE trades SET pos_idx=? WHERE trade_id=?",
                 (pos_idx, trade_id)
+            )
+            await db.commit()
+
+
+async def db_update_trade_bybit(trade_id: str, order_id: str, pos_idx: int):
+    """Сохраняет order_id и pos_idx после успешного открытия позиции на Bybit."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "UPDATE trades SET order_id=?, pos_idx=? WHERE trade_id=?",
+                (order_id, pos_idx, trade_id)
             )
             await db.commit()
 
