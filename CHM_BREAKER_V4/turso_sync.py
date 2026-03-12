@@ -39,7 +39,7 @@ log = logging.getLogger("CHM.Turso")
 
 TURSO_URL     = os.getenv("TURSO_URL", "").strip()
 TURSO_TOKEN   = os.getenv("TURSO_TOKEN", "").strip()
-SYNC_INTERVAL = int(os.getenv("TURSO_SYNC_INTERVAL", "300"))  # секунд
+SYNC_INTERVAL = int(os.getenv("TURSO_SYNC_INTERVAL", "30"))  # секунд
 
 # Таблицы для синхронизации (порядок важен — зависимые таблицы позже).
 # trades включён: активные позиции нужны для корректного мониторинга после рестарта.
@@ -55,6 +55,19 @@ SYNC_TABLES = [
 # Выставляется в True после завершения restore_from_turso_if_needed().
 # Защита от "пустого пуша": sync_loop не стартует пуш пока restore не отработал.
 _restore_attempted: bool = False
+
+# Event для немедленного пуша: request_push() → sync_loop реагирует без ожидания
+_push_requested: asyncio.Event = asyncio.Event()
+
+
+def request_push() -> None:
+    """
+    Запрашивает немедленный пуш в Turso (с дебаунсом через Event).
+    Вызывается после важных записей: регистрация, смена подписки, API-ключи, настройки.
+    Если Turso не настроен — no-op.
+    """
+    if is_configured() and _restore_attempted:
+        _push_requested.set()
 
 
 def is_configured() -> bool:
@@ -454,5 +467,10 @@ async def turso_sync_loop(db_path: str, initial_delay: int | None = None):
     await asyncio.sleep(initial_delay)
     await turso_push(db_path)
     while True:
-        await asyncio.sleep(SYNC_INTERVAL)
+        # Ждём либо request_push() Event, либо истечения SYNC_INTERVAL
+        try:
+            await asyncio.wait_for(_push_requested.wait(), timeout=SYNC_INTERVAL)
+        except asyncio.TimeoutError:
+            pass
+        _push_requested.clear()
         await turso_push(db_path)
