@@ -85,6 +85,7 @@ def _market_short(q: str, n: int = 40) -> str:
 
 def _market_card(market: dict, analysis: dict) -> str:
     q        = market.get("question", "—")
+    orig_q   = market.get("question_original", "")   # оригинал если был переведён
     end_date = market.get("endDate", "")[:10] or "—"
     yes_p    = analysis["yes_price"]
     no_p     = analysis["no_price"]
@@ -92,25 +93,68 @@ def _market_card(market: dict, analysis: dict) -> str:
     liq      = analysis["liquidity"]
     rec      = analysis["recommendation"]
     conf     = analysis["confidence"]
-    reason   = analysis["reasoning"]
     risk     = analysis.get("risk", "MEDIUM")
     edge     = analysis.get("edge", "0%")
 
+    # Поля глубокого анализа
+    main_thesis         = analysis.get("main_thesis", "")
+    probability_verdict = analysis.get("probability_verdict", "")
+    yes_scenario        = analysis.get("yes_scenario", "")
+    no_scenario         = analysis.get("no_scenario", "")
+    key_risk            = analysis.get("key_risk", "")
+    # Fallback: если старые поля
+    if not main_thesis:
+        main_thesis = analysis.get("reasoning", "")
+
     NL = "\n"
-    return (
-        f"📊 <b>{q}</b>" + NL + NL +
-        f"YES: <b>{_fmt_pct(yes_p)}</b> (${yes_p:.2f})  |  NO: <b>{_fmt_pct(no_p)}</b> (${no_p:.2f})" + NL +
-        f"💧 Ликвидность: <b>{_fmt_usd(liq)}</b>" + NL +
-        f"📈 Объём 24ч: <b>{_fmt_usd(vol)}</b>" + NL +
-        f"⏰ Закрытие: <b>{end_date}</b>" + NL + NL +
-        "🤖 <b>AI-анализ:</b>" + NL +
-        f"Рекомендация: <b>{rec}</b> {_rec_emoji(rec)}" + NL +
-        f"Уверенность: <b>{conf}</b> {_conf_emoji(conf)}" + NL +
-        f"Риск: <b>{risk}</b> {_risk_emoji(risk)}" + NL +
-        f"<code>Edge: {edge}</code>" + NL + NL +
-        "💭 <b>Мысли:</b>" + NL +
-        f"<i>{reason}</i>"
+
+    # Строим рекомендационную строку
+    rec_line = {
+        "BUY YES": "🟢 <b>СТАВИТЬ YES</b>",
+        "BUY NO":  "🔴 <b>СТАВИТЬ NO</b>",
+        "SKIP":    "⏭️ <b>ПРОПУСТИТЬ</b>",
+    }.get(rec, f"<b>{rec}</b>")
+
+    conf_map = {"HIGH": "Высокая 🟢", "MEDIUM": "Средняя 🟡", "LOW": "Низкая 🔴"}
+    risk_map = {"HIGH": "Высокий 🔴", "MEDIUM": "Средний 🟡", "LOW": "Низкий 🟢"}
+
+    # Базовая часть
+    text = (
+        f"📊 <b>{q}</b>" + NL
     )
+    if orig_q and orig_q != q:
+        text += f"<i>🔤 {orig_q}</i>" + NL
+    text += (
+        NL +
+        f"💲 YES: <b>{_fmt_pct(yes_p)}</b>  |  NO: <b>{_fmt_pct(no_p)}</b>" + NL +
+        f"💧 Ликвидность: <b>{_fmt_usd(liq)}</b>  |  📈 Объём 24ч: <b>{_fmt_usd(vol)}</b>" + NL +
+        f"⏰ Закрытие: <b>{end_date}</b>" + NL +
+        NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL +
+        f"🎯 Рекомендация: {rec_line}" + NL +
+        f"💡 Уверенность: {conf_map.get(conf, conf)}  |  "
+        f"⚠️ Риск: {risk_map.get(risk, risk)}" + NL +
+        f"📐 Edge: <code>{edge}</code>" + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL
+    )
+
+    # Глубокий анализ
+    if main_thesis:
+        text += NL + "🧠 <b>Главный тезис:</b>" + NL + f"<i>{main_thesis}</i>" + NL
+
+    if probability_verdict:
+        text += NL + "⚖️ <b>Оценка рынка:</b>" + NL + f"<i>{probability_verdict}</i>" + NL
+
+    if yes_scenario:
+        text += NL + "✅ <b>YES победит если:</b>" + NL + f"<i>{yes_scenario}</i>" + NL
+
+    if no_scenario:
+        text += NL + "❌ <b>NO победит если:</b>" + NL + f"<i>{no_scenario}</i>" + NL
+
+    if key_risk:
+        text += NL + "🚨 <b>Ключевой риск:</b>" + NL + f"<i>{key_risk}</i>" + NL
+
+    return text
 
 
 def _get_token_ids(market: dict) -> dict:

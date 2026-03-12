@@ -306,19 +306,25 @@ class PolymarketService:
         return float(data.get("mid", 0.5))
 
     async def analyze_market(self, market: dict) -> dict:
-        """AI-анализ через Groq с fallback на rule-based."""
+        """Глубокий AI-анализ через Groq с fallback на rule-based."""
         yes_price, no_price = _parse_prices(market)
         volume_24h = float(market.get("volume24hr", 0) or 0)
         liquidity  = float(market.get("liquidityNum", 0) or 0)
         end_date   = (market.get("endDate") or "неизвестно")[:10]
 
+        # Передаём описание и категорию для более глубокого анализа
+        description = str(market.get("description") or "").strip()
+        category    = str(market.get("category")    or "").strip()
+
         data = {
-            "question":   market.get("question", ""),
-            "yes_price":  yes_price,
-            "no_price":   no_price,
-            "volume_24h": volume_24h,
-            "liquidity":  liquidity,
-            "end_date":   end_date,
+            "question":    market.get("question", ""),
+            "yes_price":   yes_price,
+            "no_price":    no_price,
+            "volume_24h":  volume_24h,
+            "liquidity":   liquidity,
+            "end_date":    end_date,
+            "description": description,
+            "category":    category,
         }
 
         try:
