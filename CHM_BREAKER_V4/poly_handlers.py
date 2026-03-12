@@ -578,8 +578,11 @@ def register_poly_handlers(
         await _safe_edit(cb, "⏳ <b>AI анализирует маркет...</b>", None)
 
         try:
-            market   = await translate_market(market)
-            analysis = await poly.analyze_market(market)
+            # Запускаем перевод и анализ параллельно — оба идут в Groq независимо
+            market, analysis = await asyncio.gather(
+                translate_market(market),
+                poly.analyze_market(market),
+            )
         except Exception as e:
             log.error(f"analyze_market {condition_id}: {e}")
             await _safe_edit(
