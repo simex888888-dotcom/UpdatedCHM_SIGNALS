@@ -1102,6 +1102,22 @@ async def poly_wallet_create(user_id: int, address: str, encrypted_key: str):
             await db.commit()
 
 
+async def poly_wallet_restore(user_id: int, address: str, encrypted_key: str):
+    """
+    Восстанавливает кошелёк пользователя (INSERT OR REPLACE).
+    Используется для восстановления из Turso после редеплоя.
+    В отличие от poly_wallet_create, перезаписывает существующую запись.
+    """
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "INSERT OR REPLACE INTO poly_wallets(user_id, address, encrypted_key, created_at)"
+                " VALUES(?,?,?,?)",
+                (user_id, address, encrypted_key, time.time()),
+            )
+            await db.commit()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  ЦЕНОВЫЕ АЛЕРТЫ
 # ═══════════════════════════════════════════════════════════════════════════════

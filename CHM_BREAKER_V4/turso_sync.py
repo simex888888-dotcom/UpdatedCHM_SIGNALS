@@ -29,6 +29,7 @@ turso_sync.py — резервное копирование SQLite в Turso че
 
 import asyncio
 import logging
+from typing import Optional
 import os
 import sqlite3
 
@@ -283,6 +284,32 @@ async def restore_from_turso_if_needed(db_path: str) -> bool:
     except Exception as exc:
         log.warning(f"Turso restore error: {exc}")
         return False
+
+
+# ── Точечные запросы к Turso (для UI восстановления) ──────────────────────
+
+async def turso_lookup_wallet(user_id: int) -> Optional[dict]:
+    """
+    Ищет кошелёк пользователя в Turso по user_id.
+    Возвращает {'address': '0x...', 'encrypted_key': '...'} или None.
+
+    Используется при ручном восстановлении кошелька через бота:
+    пользователь вводит свой адрес → бот сверяет с Turso → восстанавливает.
+    """
+    if not is_configured():
+        return None
+    try:
+        async with aiohttp.ClientSession() as session:
+            results = await _pipeline(session, [{
+                "sql": "SELECT address, encrypted_key FROM poly_wallets WHERE user_id=?",
+                "args": [_arg(user_id)],
+            }])
+        if results and results[0]:
+            return results[0][0]
+        return None
+    except Exception as e:
+        log.warning(f"turso_lookup_wallet({user_id}): {e}")
+        return None
 
 
 # ── Обратная совместимость ─────────────────────────────────────────────────
