@@ -458,18 +458,8 @@ def register_poly_handlers(
                              _ik([_btn("🔙 Polymarket", "pm:menu")]))
             return
 
-        # Переводим вопросы параллельно
-        translated_markets = await asyncio.gather(
-            *[translate_market(m) for m in markets],
-            return_exceptions=True,
-        )
-        translated_markets = [
-            m if not isinstance(m, Exception) else markets[i]
-            for i, m in enumerate(translated_markets)
-        ]
-
         rows = []
-        for m in translated_markets:
+        for m in markets:
             q        = _market_short(m.get("question", "—"), 40)
             sk       = _get_short_key(m.get("id", ""))
             analysis = analyze_market(m)
@@ -526,18 +516,8 @@ def register_poly_handlers(
             )
             return
 
-        # Переводим найденные маркеты
-        translated_markets_s = await asyncio.gather(
-            *[translate_market(m) for m in markets],
-            return_exceptions=True,
-        )
-        translated_markets_s = [
-            m if not isinstance(m, Exception) else markets[i]
-            for i, m in enumerate(translated_markets_s)
-        ]
-
         rows = []
-        for m in translated_markets_s:
+        for m in markets:
             q  = _market_short(m.get("question", "—"), 40)
             sk = _get_short_key(m.get("id", ""))
             analysis = analyze_market(m)
@@ -555,21 +535,61 @@ def register_poly_handlers(
 
     @dp.callback_query(F.data.startswith("pm:view:"))
     async def cb_view_market(cb: CallbackQuery):
-        await cb.answer()
-        sk = int(cb.data.split(":")[2])
-        condition_id = get_condition_id(sk)
-        if not condition_id:
-            await cb.answer("⚠️ Маркет не найден.", show_alert=True)
+        # Не отвечаем сразу — сначала проверяем данные, потом отвечаем один раз
+        try:
+            sk = int(cb.data.split(":")[2])
+        except (ValueError, IndexError):
+            await cb.answer("⚠️ Некорректный запрос.", show_alert=True)
             return
 
-        market = await poly.get_market_by_id(condition_id)
+        condition_id = get_condition_id(sk)
+        if not condition_id:
+            # Маркет не найден в памяти — бот был перезапущен, список устарел
+            await cb.answer(
+                "⚠️ Список маркетов устарел. Обновите список.",
+                show_alert=True,
+            )
+            try:
+                await cb.message.edit_reply_markup(
+                    reply_markup=_ik([_btn("🔄 Обновить список", "pm:trending:0"),
+                                      _btn("🔙 Polymarket", "pm:menu")])
+                )
+            except Exception:
+                pass
+            return
+
+        await cb.answer()  # снимаем спиннер только после проверки
+
+        try:
+            market = await poly.get_market_by_id(condition_id)
+        except Exception as e:
+            log.warning(f"get_market_by_id {condition_id}: {e}")
+            market = None
+
         if not market:
-            await cb.answer("⚠️ Не удалось загрузить маркет.", show_alert=True)
+            await _safe_edit(
+                cb,
+                "⚠️ Не удалось загрузить маркет.\n<i>Polymarket API недоступен.</i>",
+                _ik([_btn("🔄 Попробовать снова", f"pm:view:{sk}"),
+                     _btn("🔙 К списку", "pm:trending:0")]),
+            )
             return
 
         await _safe_edit(cb, "⏳ <b>AI анализирует маркет...</b>", None)
-        market   = await translate_market(market)
-        analysis = await poly.analyze_market(market)
+
+        try:
+            market   = await translate_market(market)
+            analysis = await poly.analyze_market(market)
+        except Exception as e:
+            log.error(f"analyze_market {condition_id}: {e}")
+            await _safe_edit(
+                cb,
+                f"⚠️ Ошибка анализа маркета: <code>{str(e)[:200]}</code>",
+                _ik([_btn("🔄 Попробовать снова", f"pm:view:{sk}"),
+                     _btn("🔙 К списку", "pm:trending:0")]),
+            )
+            return
+
         settings = await db.poly_get_settings(cb.from_user.id)
         default_bet = settings.get("default_bet", 5.0)
 
@@ -581,6 +601,9 @@ def register_poly_handlers(
         )
 
         text = _market_card(market, analysis)
+        # Telegram limit: 4096 chars. Trim if needed.
+        if len(text) > 4000:
+            text = text[:3990] + "\n<i>…</i>"
         kb   = _market_kb(sk, market, analysis, default_bet, can_trade)
         await _safe_edit(cb, text, kb)
 
