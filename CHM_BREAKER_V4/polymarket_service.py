@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 from typing import Optional
 
@@ -28,6 +29,11 @@ log = logging.getLogger("CHM.Poly")
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 CLOB_BASE  = "https://clob.polymarket.com"
 CHAIN_ID   = 137   # Polygon mainnet
+
+# ─── Кэш переводов ────────────────────────────────────────────────────────────
+# original question → (timestamp, translated)
+_translation_cache: dict[str, tuple[float, str]] = {}
+_TRANS_TTL = 86400   # 24 часа (вопросы не меняются)
 
 # ─── Локальный кэш маркетов ──────────────────────────────────────────────────
 # condition_id (str) → market dict.  Живёт 15 минут.
@@ -148,6 +154,80 @@ def analyze_market(market: dict) -> dict:
     }
 
 
+# ─── Перевод вопроса на русский ───────────────────────────────────────────────
+
+async def translate_question(question: str) -> str:
+    """
+    Переводит вопрос маркета на русский через Groq llama-3.3-70b.
+    Возвращает оригинал если Groq недоступен или ключ не задан.
+    Результат кэшируется на 24 часа.
+    """
+    if not question or not question.strip():
+        return question
+
+    # Проверяем кэш
+    cached = _translation_cache.get(question)
+    if cached and time.time() - cached[0] < _TRANS_TTL:
+        return cached[1]
+
+    # Если вопрос уже на русском — не переводим
+    # (эвристика: >30% кириллических символов)
+    cyr_count = sum(1 for c in question if "\u0400" <= c <= "\u04ff")
+    if cyr_count / max(len(question), 1) > 0.3:
+        _translation_cache[question] = (time.time(), question)
+        return question
+
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    if not groq_key:
+        return question
+
+    try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(
+            api_key=groq_key,
+            base_url="https://api.groq.com/openai/v1",
+        )
+        response = await client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Переведи вопрос с prediction market на русский язык. "
+                        "Отвечай ТОЛЬКО переводом, без пояснений и кавычек. "
+                        "Сохраняй смысл и имена собственные (биткоин, Трамп и т.д. — по-русски)."
+                    ),
+                },
+                {"role": "user", "content": question},
+            ],
+            temperature=0.1,
+            max_tokens=120,
+        )
+        translated = response.choices[0].message.content.strip()
+        # Убираем кавычки если модель их добавила
+        translated = re.sub(r'^["\'"«»]+|["\'"«»]+$', "", translated).strip()
+        if translated:
+            _translation_cache[question] = (time.time(), translated)
+            return translated
+    except Exception as e:
+        log.debug(f"translate_question: {e}")
+
+    return question
+
+
+async def translate_market(market: dict) -> dict:
+    """
+    Возвращает копию market с переведённым полем 'question'.
+    """
+    q = market.get("question", "")
+    translated = await translate_question(q)
+    if translated != q:
+        market = dict(market)
+        market["question"] = translated
+        market["question_original"] = q
+    return market
+
+
 # ─── Сервис ───────────────────────────────────────────────────────────────────
 
 class PolymarketService:
@@ -226,19 +306,25 @@ class PolymarketService:
         return float(data.get("mid", 0.5))
 
     async def analyze_market(self, market: dict) -> dict:
-        """AI-анализ через Groq с fallback на rule-based."""
+        """Глубокий AI-анализ через Groq с fallback на rule-based."""
         yes_price, no_price = _parse_prices(market)
         volume_24h = float(market.get("volume24hr", 0) or 0)
         liquidity  = float(market.get("liquidityNum", 0) or 0)
         end_date   = (market.get("endDate") or "неизвестно")[:10]
 
+        # Передаём описание и категорию для более глубокого анализа
+        description = str(market.get("description") or "").strip()
+        category    = str(market.get("category")    or "").strip()
+
         data = {
-            "question":   market.get("question", ""),
-            "yes_price":  yes_price,
-            "no_price":   no_price,
-            "volume_24h": volume_24h,
-            "liquidity":  liquidity,
-            "end_date":   end_date,
+            "question":    market.get("question", ""),
+            "yes_price":   yes_price,
+            "no_price":    no_price,
+            "volume_24h":  volume_24h,
+            "liquidity":   liquidity,
+            "end_date":    end_date,
+            "description": description,
+            "category":    category,
         }
 
         try:
