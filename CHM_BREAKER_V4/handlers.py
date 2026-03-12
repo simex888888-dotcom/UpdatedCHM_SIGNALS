@@ -5,6 +5,7 @@ handlers.py v5 — CHM BREAKER BOT
 """
 import html as _html
 import io
+import math
 import time
 import matplotlib
 matplotlib.use('Agg')
@@ -856,18 +857,22 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
 
 
 def _fmt_price(v) -> str:
-    """Форматирует цену без научной нотации."""
+    """Форматирует цену без научной нотации, сохраняя полную точность."""
     try:
         v = float(v)
     except (TypeError, ValueError):
         return str(v)
+    if v <= 0:
+        return "0"
     if v >= 10_000:
         return f"{v:,.0f}"
     if v >= 100:
         return f"{v:,.1f}"
     if v >= 1:
         return f"{v:.4f}".rstrip("0").rstrip(".")
-    return f"{v:.6f}".rstrip("0").rstrip(".")
+    # Для малых чисел: 4 значимые цифры без scientific notation
+    decimals = -math.floor(math.log10(v)) + 3
+    return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
 
 
 def _pct_diff(a, b) -> str:
