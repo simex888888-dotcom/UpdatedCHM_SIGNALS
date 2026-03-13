@@ -1424,6 +1424,61 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
         await safe_edit(cb, main_text(user, trend), kb_main(user))
 
+    # ─── СТРАТЕГИЯ ГЕРЧИКА ────────────────────────────
+
+    @dp.callback_query(F.data == "gerchik_menu")
+    async def cb_gerchik_menu(cb: CallbackQuery):
+        """Открывает меню стратегии Герчика."""
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        from keyboards import kb_gerchik_menu
+        active = getattr(user, "gerchik_active", False)
+        status_line = "🟢 Сканер <b>включён</b>" if active else "🔴 Сканер <b>выключен</b>"
+        text = (
+            "🎯 <b>Стратегия Герчика</b>\n\n"
+            "Уровневая торговля по методу Александра Герчика:\n"
+            "• Поиск уровней поддержки и сопротивления\n"
+            "• Паттерн входа: <b>БСУ → БПУ-1 → БПУ-2</b>\n"
+            "• Фильтр ATR (не входить если прошли ≥75% дневного диапазона)\n"
+            "• Выход по частям: 55% на TP1 (3R), 45% на TP2 (4R)\n"
+            "• Стоп переносится в безубыток после TP1\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"Статус: {status_line}"
+        )
+        await safe_edit(cb, text, kb_gerchik_menu(user))
+
+    @dp.callback_query(F.data == "toggle_gerchik")
+    async def cb_toggle_gerchik(cb: CallbackQuery):
+        """Включает / выключает сканер Герчика."""
+        user = await um.get_or_create(cb.from_user.id)
+        has, _ = user.check_access()
+        if not has:
+            await cb.answer("❌ Требуется активная подписка.", show_alert=True)
+            return
+
+        await cb.answer()
+        user.gerchik_active = not getattr(user, "gerchik_active", False)
+        await um.save(user)
+
+        from keyboards import kb_gerchik_menu
+        status_line = "🟢 Сканер <b>включён</b>" if user.gerchik_active else "🔴 Сканер <b>выключен</b>"
+        text = (
+            "🎯 <b>Стратегия Герчика</b>\n\n"
+            "Уровневая торговля по методу Александра Герчика:\n"
+            "• Поиск уровней поддержки и сопротивления\n"
+            "• Паттерн входа: <b>БСУ → БПУ-1 → БПУ-2</b>\n"
+            "• Фильтр ATR (не входить если прошли ≥75% дневного диапазона)\n"
+            "• Выход по частям: 55% на TP1 (3R), 45% на TP2 (4R)\n"
+            "• Стоп переносится в безубыток после TP1\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"Статус: {status_line}"
+        )
+        log.info(
+            f"Герчик {'включён' if user.gerchik_active else 'выключен'} "
+            f"uid={user.user_id}"
+        )
+        await safe_edit(cb, text, kb_gerchik_menu(user))
+
     # ─── АНАЛИЗ МОНЕТЫ ПО ЗАПРОСУ ────────────────────
 
     async def _do_analyze(msg_or_cb, user: UserSettings, symbol: str):
