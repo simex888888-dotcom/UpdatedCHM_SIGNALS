@@ -47,6 +47,8 @@ class PolyState(StatesGroup):
     waiting_amount          = State()
     waiting_bet_size        = State()
     waiting_wallet_restore  = State()  # ввод адреса для восстановления кошелька
+    waiting_withdraw_addr   = State()  # ввод адреса получателя при выводе
+    waiting_withdraw_amt    = State()  # ввод суммы вывода
 
 
 # ─── Хелперы ──────────────────────────────────────────────────────────────────
@@ -597,8 +599,9 @@ def register_poly_handlers(
         await _safe_edit(cb, text, kb)
 
     @dp.callback_query(F.data == "pm:wallet_info")
-    async def cb_wallet_info(cb: CallbackQuery):
+    async def cb_wallet_info(cb: CallbackQuery, state: FSMContext):
         await cb.answer()
+        await state.clear()
         wallet = await db.poly_wallet_get(cb.from_user.id)
         if not wallet:
             await cb.answer("⚠️ Кошелёк не создан.", show_alert=True)
@@ -613,9 +616,199 @@ def register_poly_handlers(
         )
         kb = _ik(
             [_btn("🔄 Обновить баланс", "pm:check_balance")],
+            [_btn("💸 Вывести USDC", "pm:withdraw")],
             [_btn("🔙 Polymarket", "pm:menu")],
         )
         await _safe_edit(cb, text, kb)
+
+    # ─── Вывод USDC ───────────────────────────────────────────────────────
+
+    _MIN_WITHDRAW = 0.50  # минимальная сумма вывода в USDC
+    _MIN_MATIC    = 0.01  # минимальный MATIC на балансе для газа
+
+    @dp.callback_query(F.data == "pm:withdraw")
+    async def cb_withdraw_start(cb: CallbackQuery, state: FSMContext):
+        await cb.answer()
+        wallet = await db.poly_wallet_get(cb.from_user.id)
+        if not wallet:
+            await cb.answer("⚠️ Кошелёк не создан.", show_alert=True)
+            return
+        if not wallet_service.is_configured():
+            await cb.answer("⚠️ Функция вывода не настроена (WALLET_ENCRYPTION_KEY).", show_alert=True)
+            return
+
+        balance = await wallet_service.get_usdc_balance(wallet["address"])
+        if balance < _MIN_WITHDRAW:
+            await cb.answer(
+                f"❌ Недостаточно средств. Минимум для вывода: ${_MIN_WITHDRAW:.2f} USDC.",
+                show_alert=True,
+            )
+            return
+
+        await state.set_state(PolyState.waiting_withdraw_addr)
+        await state.update_data(withdraw_balance=balance, withdraw_wallet=wallet["address"])
+        NL = "\n"
+        text = (
+            "💸 <b>Вывод USDC</b>" + NL + NL +
+            f"На кошельке: <b>${balance:.2f} USDC</b>" + NL + NL +
+            "Введи адрес Polygon-кошелька получателя (0x…):" + NL + NL +
+            "<i>⚠️ Убедись, что адрес поддерживает сеть Polygon.</i>"
+        )
+        await _safe_edit(
+            cb, text,
+            _ik([_btn("❌ Отмена", "pm:wallet_info")]),
+        )
+
+    @dp.message(PolyState.waiting_withdraw_addr)
+    async def msg_withdraw_addr(msg: Message, state: FSMContext):
+        address = (msg.text or "").strip()
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", address):
+            NL = "\n"
+            await msg.answer(
+                "❌ Неверный формат адреса." + NL +
+                "Адрес должен начинаться с <code>0x</code> и содержать 40 hex-символов." + NL + NL +
+                "Попробуй ещё раз или нажми «Отмена»:",
+                parse_mode="HTML",
+                reply_markup=_ik([_btn("❌ Отмена", "pm:wallet_info")]),
+            )
+            return
+
+        data = await state.get_data()
+        balance = data.get("withdraw_balance", 0.0)
+        await state.update_data(withdraw_to=address)
+        await state.set_state(PolyState.waiting_withdraw_amt)
+
+        NL = "\n"
+        text = (
+            f"💸 Адрес получателя: <code>{html.escape(address)}</code>" + NL + NL +
+            f"Доступно: <b>${balance:.2f} USDC</b>" + NL + NL +
+            f"Введи сумму вывода (минимум ${_MIN_WITHDRAW:.2f}):" + NL + NL +
+            "<i>Пример: 1.00</i>"
+        )
+        await msg.answer(
+            text, parse_mode="HTML",
+            reply_markup=_ik([_btn("❌ Отмена", "pm:wallet_info")]),
+        )
+
+    @dp.message(PolyState.waiting_withdraw_amt)
+    async def msg_withdraw_amt(msg: Message, state: FSMContext):
+        raw = (msg.text or "").strip().replace(",", ".")
+        try:
+            amount = float(raw)
+        except ValueError:
+            await msg.answer(
+                "❌ Введи число, например: <code>1.00</code>",
+                parse_mode="HTML",
+                reply_markup=_ik([_btn("❌ Отмена", "pm:wallet_info")]),
+            )
+            return
+
+        data    = await state.get_data()
+        balance = data.get("withdraw_balance", 0.0)
+        to_addr = data.get("withdraw_to", "")
+
+        if amount < _MIN_WITHDRAW:
+            await msg.answer(
+                f"❌ Минимум для вывода: <b>${_MIN_WITHDRAW:.2f} USDC</b>",
+                parse_mode="HTML",
+                reply_markup=_ik([_btn("❌ Отмена", "pm:wallet_info")]),
+            )
+            return
+        if amount > balance:
+            await msg.answer(
+                f"❌ Недостаточно средств. На кошельке <b>${balance:.2f} USDC</b>.",
+                parse_mode="HTML",
+                reply_markup=_ik([_btn("❌ Отмена", "pm:wallet_info")]),
+            )
+            return
+
+        await state.update_data(withdraw_amount=amount)
+        NL = "\n"
+        text = (
+            "💸 <b>Подтверди вывод</b>" + NL + NL +
+            f"Сумма:    <b>${amount:.2f} USDC</b>" + NL +
+            f"Куда:     <code>{html.escape(to_addr)}</code>" + NL +
+            f"Сеть:     Polygon" + NL + NL +
+            "⚠️ Операция необратима. Подтвердить?"
+        )
+        await msg.answer(
+            text, parse_mode="HTML",
+            reply_markup=_ik(
+                [_btn("✅ Подтвердить", "pm:withdraw_confirm")],
+                [_btn("❌ Отмена",     "pm:wallet_info")],
+            ),
+        )
+
+    @dp.callback_query(F.data == "pm:withdraw_confirm")
+    async def cb_withdraw_confirm(cb: CallbackQuery, state: FSMContext):
+        await cb.answer()
+        data    = await state.get_data()
+        to_addr = data.get("withdraw_to", "")
+        amount  = data.get("withdraw_amount", 0.0)
+        from_addr = data.get("withdraw_wallet", "")
+        await state.clear()
+
+        if not to_addr or not amount or not from_addr:
+            await cb.answer("⚠️ Сессия истекла. Начни вывод заново.", show_alert=True)
+            return
+
+        wallet = await db.poly_wallet_get(cb.from_user.id)
+        if not wallet:
+            await cb.answer("⚠️ Кошелёк не найден.", show_alert=True)
+            return
+
+        await _safe_edit(cb, "⏳ Отправляем транзакцию...", None)
+
+        # Проверяем баланс MATIC для газа
+        matic = await wallet_service.get_matic_balance(from_addr)
+        if matic < _MIN_MATIC:
+            NL = "\n"
+            text = (
+                f"⛽ <b>Недостаточно MATIC для газа</b>" + NL + NL +
+                f"На кошельке {matic:.6f} MATIC, нужно минимум {_MIN_MATIC} MATIC." + NL + NL +
+                f"Отправь немного MATIC (сеть Polygon) на адрес:" + NL +
+                f"<code>{html.escape(from_addr)}</code>" + NL + NL +
+                "Достаточно 0.1 MATIC (~$0.05)."
+            )
+            await _safe_edit(
+                cb, text,
+                _ik([_btn("🔙 Кошелёк", "pm:wallet_info")]),
+            )
+            return
+
+        try:
+            encrypted_key = wallet.get("encrypted_key", "")
+            private_key   = wallet_service.decrypt_key(encrypted_key)
+            tx_hash = await wallet_service.transfer_usdc(
+                from_address=from_addr,
+                private_key=private_key,
+                to_address=to_addr,
+                amount_usdc=amount,
+            )
+            del private_key  # немедленно из памяти
+        except Exception as exc:
+            log.error(f"withdraw uid={cb.from_user.id}: {exc}")
+            await _safe_edit(
+                cb,
+                f"❌ Ошибка транзакции: {html.escape(str(exc))}",
+                _ik([_btn("🔙 Кошелёк", "pm:wallet_info")]),
+            )
+            return
+
+        NL = "\n"
+        short_hash = f"{tx_hash[:10]}…{tx_hash[-6:]}"
+        text = (
+            "✅ <b>Транзакция отправлена!</b>" + NL + NL +
+            f"Сумма: <b>${amount:.2f} USDC</b>" + NL +
+            f"Куда:  <code>{html.escape(to_addr)}</code>" + NL +
+            f"TX:    <code>{html.escape(tx_hash)}</code>" + NL + NL +
+            "Средства поступят в течение нескольких минут." + NL +
+            f"<a href='https://polygonscan.com/tx/{tx_hash}'>Смотреть на PolygonScan</a>"
+        )
+        await _safe_edit(
+            cb, text,
+            _ik([_btn("🔙 Polymarket", "pm:menu")]),
+        )
 
     # ─── Трендовые маркеты ────────────────────────────────────────────────
 
