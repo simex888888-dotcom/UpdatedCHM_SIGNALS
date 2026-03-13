@@ -40,7 +40,9 @@ from keyboards import (
     kb_sl, kb_long_sl, kb_short_sl,
     kb_targets, kb_long_targets, kb_short_targets,
     kb_volume, kb_long_volume, kb_short_volume,
-    trend_text, help_text, kb_help, gerchik_help_text,
+    trend_text, help_text, kb_help,
+    gerchik_help_text, gerchik_help_text_p2,
+    kb_gerchik_help_p1, kb_gerchik_help_p2,
     kb_smc_main, kb_smc_tf, kb_smc_interval, kb_smc_direction,
     kb_smc_confirmations, kb_smc_rr, kb_smc_sl, kb_smc_volume, kb_smc_ob_age,
     kb_smc_mode_long, kb_smc_mode_short, kb_smc_mode_both,
@@ -3383,12 +3385,15 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     @dp.callback_query(F.data == "help_gerchik")
     async def help_gerchik_cb(cb: CallbackQuery):
-        """Подробная справка по стратегии Герчика."""
+        """Справка по стратегии Герчика — страница 1."""
         await cb.answer()
-        kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="◀️ Назад к сканеру", callback_data="gerchik_menu")],
-        ])
-        await safe_edit(cb, gerchik_help_text(), kb)
+        await safe_edit(cb, gerchik_help_text(), kb_gerchik_help_p1())
+
+    @dp.callback_query(F.data == "help_gerchik_p2")
+    async def help_gerchik_p2_cb(cb: CallbackQuery):
+        """Справка по стратегии Герчика — страница 2."""
+        await cb.answer()
+        await safe_edit(cb, gerchik_help_text_p2(), kb_gerchik_help_p2())
 
     # ─── АВТО-ТРЕЙДИНГ BYBIT ──────────────────────────
 
