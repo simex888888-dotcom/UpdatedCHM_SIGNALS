@@ -5,8 +5,8 @@ import os
 # ── BingX API ────────────────────────────────────────────────────────────────
 BINGX_WS_URL       = "wss://open-api-ws.bingx.com/market"
 BINGX_REST_FUTURES = "https://open-api.bingx.com/openApi/swap/v2"
-BINGX_API_KEY      = os.getenv("BINGX_API_KEY",    "p1hIr0pmP9gVqO3rHeWVPjIjcdkeRlHAuFTjob5kkV9bc5ZkXxS20a0OrnPHpMkgXQoCETk49IpAfrfK52JA")
-BINGX_SECRET_KEY   = os.getenv("BINGX_SECRET_KEY", "cw7ZMgUeAKiKXjOH5Dl862AnjdXTCXYKnTh3zJxSLXA1DZOKSKtvATzK2OIHF3fxEEuulNtk27cv2KRreg")
+BINGX_API_KEY      = os.getenv("BINGX_API_KEY",    "")
+BINGX_SECRET_KEY   = os.getenv("BINGX_SECRET_KEY", "")
 
 # ── Мониторинг ────────────────────────────────────────────────────────────────
 MIN_VOLUME_24H_USDT = 50_000      # минимальный 24h объём — фильтрует только совсем мёртвые пары
@@ -65,10 +65,12 @@ LAYER_WEIGHTS = {
     "price":     0.10,
     "cvd":       0.15,
     "orderbook": 0.10,
-    "spread":    0.10,
+    "spread":    0.08,
     "funding":   0.15,
     "oi":        0.10,
     "ml":        0.15,
+    "bb_squeeze": 0.07,  # BB сжатие перед взрывом
+    "rsi_div":   0.07,   # RSI дивергенция
 }
 
 # ── ML модель ─────────────────────────────────────────────────────────────────

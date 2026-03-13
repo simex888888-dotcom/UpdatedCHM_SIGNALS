@@ -129,11 +129,11 @@ def analyze_levels(
     hs: "HiddenResult",
     ind: "IndicatorResult",
     buy_ratio: float,
-) -> list[tuple[int, str]]:
+) -> list[tuple[int, str, Optional[SignalPayload]]]:
     """
     Анализирует все уровни сигналов для символа.
-    Возвращает список (level, formatted_text) для каждого нового уровня,
-    который нужно отправить.
+    Возвращает список (level, formatted_text, payload_or_None).
+    payload заполнен только для уровня 3 — используется для сохранения в БД.
 
     Если уровень 3 готов — помечаем 1, 2, 3 как отправленные.
     Если уровень 2 — помечаем 1 и 2.
@@ -164,25 +164,41 @@ def analyze_levels(
 
     if level == 3:
         if not is_spam(symbol, 3):
+            now = time.time()
             text3 = _format_level3_from_parts(
                 symbol, direction, price, score, active, inactive, ml, an, ob, hs
             )
-            results.append((3, text3))
+            payload = SignalPayload(
+                symbol=symbol,
+                direction=direction,
+                score=score,
+                active_layers=active,
+                inactive_layers=inactive,
+                ml_result=ml,
+                price=price,
+                price_change_1m=an.price_change_1m,
+                price_change_3m=an.price_change_3m,
+                funding_rate=hs.funding_rate,
+                oi_change=hs.oi_change_10m,
+                imbalance=ob.imbalance,
+                volume_zscore=an.volume_zscore,
+                ts=now,
+            )
+            results.append((3, text3, payload))
             _mark_sent(symbol, 1)
             _mark_sent(symbol, 2)
             _mark_sent(symbol, 3)
-            # Обновляем глобальный _last_signal_ts для совместимости с aggregate()
-            _last_signal_ts[symbol] = time.time()
+            _last_signal_ts[symbol] = now
     elif level == 2:
         if not is_spam(symbol, 2):
             text2 = format_level2(symbol, direction, price, an, active, score)
-            results.append((2, text2))
+            results.append((2, text2, None))
             _mark_sent(symbol, 1)
             _mark_sent(symbol, 2)
     elif level == 1:
         if not is_spam(symbol, 1):
             text1 = format_level1(symbol, direction, price, an)
-            results.append((1, text1))
+            results.append((1, text1, None))
             _mark_sent(symbol, 1)
 
     return results
@@ -233,6 +249,8 @@ def format_level2(
         "funding":   "💸 Funding аномалия",
         "oi":        "📉 OI дивергенция",
         "ml":        "🤖 ML подтверждение",
+        "bb_squeeze": "📐 BB Squeeze",
+        "rsi_div":   "📉 RSI Divergence",
     }
 
     lines = [
@@ -284,6 +302,8 @@ def _format_level3_from_parts(
         "funding":   "💸 Funding / L/S",
         "oi":        "📉 Open Interest",
         "ml":        "🤖 ML модель",
+        "bb_squeeze": "📐 BB Squeeze",
+        "rsi_div":   "📉 RSI Divergence",
     }
 
     lines = [
@@ -475,6 +495,19 @@ def _score_layers(direction, an, ob, hs, ind, ml) -> tuple[dict, list, float]:
     else:
         inactive.append("ML модель: нет сигнала")
 
+    # ── Слой 9: BB Squeeze ────────────────────────────────────────────────────
+    if ind.bb_squeeze:
+        active["bb_squeeze"] = f"BB Width перцентиль {ind.bb_width_pct:.0f}% (сжатие) ✅"
+    else:
+        inactive.append("BB Squeeze: ширина в норме")
+
+    # ── Слой 10: RSI Divergence ───────────────────────────────────────────────
+    if ind.rsi_divergence and ind.rsi_div_dir == direction:
+        div_type = "бычья" if direction == "PUMP" else "медвежья"
+        active["rsi_div"] = f"RSI {div_type} дивергенция (RSI={ind.rsi:.1f}) ✅"
+    else:
+        inactive.append("RSI Divergence: нет дивергенции")
+
     # ── Взвешенный score ──────────────────────────────────────────────────────
     total_w = sum(w[k] for k in active)
     # Бонус за резкое изменение funding
@@ -513,6 +546,8 @@ def format_alert(sig: SignalPayload) -> str:
         "funding":   "💸 Funding / L/S",
         "oi":        "📉 Open Interest",
         "ml":        "🤖 ML модель",
+        "bb_squeeze": "📐 BB Squeeze",
+        "rsi_div":   "📉 RSI Divergence",
     }
     items = list(sig.active_layers.items())
     for i, (key, desc) in enumerate(items):
