@@ -655,6 +655,79 @@ async def get_account_summary(api_key: str, api_secret: str) -> dict:
     return await loop.run_in_executor(None, _get_account_summary_sync, api_key, api_secret)
 
 
+# ── Быстрый дашборд (одна сессия — все запросы) ───────
+
+def _get_dashboard_sync(api_key: str, api_secret: str) -> tuple:
+    """
+    Загружает позиции, ордера и сводку счёта за одно подключение.
+    Возвращает (positions, orders, summary).
+    Намного быстрее чем 3 отдельных вызова.
+    """
+    import time as _time
+    session = _get_session(api_key, api_secret)
+
+    # ── Позиции ──
+    positions = []
+    try:
+        resp = session.get_positions(category="linear", settleCoin="USDT")
+        if resp.get("retCode", -1) == 0:
+            positions = [p for p in resp["result"].get("list", [])
+                         if float(p.get("size", 0)) > 0]
+    except Exception as e:
+        log.debug(f"dashboard positions: {e}")
+
+    # ── Открытые ордера ──
+    orders = []
+    try:
+        resp = session.get_open_orders(category="linear", settleCoin="USDT", limit=50)
+        if resp.get("retCode", -1) == 0:
+            orders = resp["result"].get("list", [])
+    except Exception as e:
+        log.debug(f"dashboard orders: {e}")
+
+    # ── Сводка счёта ──
+    summary = {
+        "equity": 0.0, "wallet_balance": 0.0,
+        "unrealized_pnl": 0.0, "available": 0.0,
+        "closed_pnl_24h": 0.0, "trades_24h": 0, "wins_24h": 0,
+    }
+    try:
+        resp = session.get_wallet_balance(accountType="UNIFIED", coin="USDT")
+        if resp.get("retCode", -1) == 0:
+            acct = resp["result"]["list"][0]
+            summary["equity"]         = float(acct.get("totalEquity")        or 0)
+            summary["wallet_balance"] = float(acct.get("totalWalletBalance") or 0)
+            summary["unrealized_pnl"] = float(acct.get("totalUnrealisedPnl") or 0)
+            for coin in acct.get("coin", []):
+                if coin["coin"] == "USDT":
+                    summary["available"] = float(
+                        coin.get("availableToWithdraw") or
+                        coin.get("availableBalance") or 0
+                    )
+    except Exception as e:
+        log.debug(f"dashboard wallet: {e}")
+
+    try:
+        start_ts = int((_time.time() - 86400) * 1000)
+        resp = session.get_closed_pnl(category="linear", startTime=start_ts, limit=50)
+        if resp.get("retCode", -1) == 0:
+            records = resp["result"].get("list", [])
+            summary["trades_24h"] = len(records)
+            for r in records:
+                pnl = float(r.get("closedPnl", 0))
+                summary["closed_pnl_24h"] += pnl
+                if pnl > 0:
+                    summary["wins_24h"] += 1
+    except Exception as e:
+        log.debug(f"dashboard 24h: {e}")
+
+    return positions, orders, summary
+
+
+async def get_dashboard(api_key: str, api_secret: str) -> tuple:
+    """Асинхронно возвращает (positions, orders, summary) за одно подключение."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _get_dashboard_sync, api_key, api_secret)
 def _get_execution_exit_price_sync(
     api_key: str, api_secret: str, symbol: str, created_ms: float
 ) -> Optional[float]:

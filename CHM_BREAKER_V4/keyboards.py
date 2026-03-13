@@ -78,6 +78,9 @@ def kb_auto_trade(user: UserSettings) -> InlineKeyboardMarkup:
         _btn(key_label,              "setup_bybit_api"),
         _btn("🧪 Проверить соединение", "test_bybit_api") if has_key else _noop("── Введи ключи для проверки ──"),
         _btn("🗑 Удалить ключи",      "remove_bybit_api") if has_key else _noop("──────────────────────────────────"),
+        *([_noop("── Управление позициями ────────────────────────────"),
+           _btn("📊 Мои позиции / ордера / статистика 24ч", "bybit_pos")]
+          if has_key else []),
         _back(),
     ])
 
@@ -157,8 +160,6 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
             _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
             [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
              InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
-            *([_btn("📊 Мои позиции Bybit — управление", "bybit_pos")]
-              if getattr(user, "bybit_api_key", "") else []),
             _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
             [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
              InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
@@ -178,8 +179,6 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
         _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
         [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
          InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
-        *([_btn("📊 Мои позиции Bybit — управление", "bybit_pos")]
-          if getattr(user, "bybit_api_key", "") else []),
         _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
         [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
          InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
