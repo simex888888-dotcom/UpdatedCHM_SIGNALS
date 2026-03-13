@@ -2065,8 +2065,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.long_active = not user.long_active
         if user.long_active and user.active and user.scan_mode == "both":
-            # Отключаем BOTH режим чтобы не было дублей сигналов
+            # Конвертируем ОБА → раздельный режим, сохраняем покрытие
             user.active = False
+            user.short_active = True
         await cb.answer("🟢 ЛОНГ включён!" if user.long_active else "🔴 ЛОНГ выключен.")
         await um.save(user)
         cfg = user.get_long_cfg()
@@ -2394,10 +2395,10 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.short_active = not user.short_active
         if user.short_active:
-            # Отключаем BOTH режим чтобы не было дублей сигналов
             if user.active and user.scan_mode == "both":
+                # Конвертируем ОБА → раздельный режим, сохраняем покрытие
                 user.active = False
-            user.scan_mode = "short"
+                user.long_active = True
         else:
             if not user.long_active:
                 user.active = False
