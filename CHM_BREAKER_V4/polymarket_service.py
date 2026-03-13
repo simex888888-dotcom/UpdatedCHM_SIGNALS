@@ -40,6 +40,11 @@ _TRANS_TTL = 86400   # 24 часа (вопросы не меняются)
 _market_cache: dict[str, tuple[float, dict]] = {}   # key → (ts, data)
 _CACHE_TTL = 900
 
+# ─── Кэш AI-анализа ──────────────────────────────────────────────────────────
+# condition_id → (timestamp, analysis_dict).  Живёт 60 минут.
+_ai_cache: dict[str, tuple[float, dict]] = {}
+_AI_CACHE_TTL = 3600   # 1 час
+
 # Короткие int-ключи для callback_data (64-байтный лимит Telegram)
 # short_key (int) → condition_id (str)
 _short_keys: dict[int, str] = {}
@@ -79,8 +84,9 @@ def _cache_get(condition_id: str) -> Optional[dict]:
 
 
 def _cache_invalidate(condition_id: str):
-    """Удаляет запись из кэша (принудительное обновление)."""
+    """Удаляет запись из кэша маркета И кэша AI-анализа (принудительное обновление)."""
     _market_cache.pop(condition_id, None)
+    _ai_cache.pop(condition_id, None)
 
 
 # ─── Правило-основанный анализ ───────────────────────────────────────────────
@@ -324,8 +330,17 @@ class PolymarketService:
             data = await r.json()
         return float(data.get("mid", 0.5))
 
-    async def analyze_market(self, market: dict) -> dict:
-        """Глубокий AI-анализ через Groq с fallback на rule-based."""
+    async def analyze_market(self, market: dict, force_refresh: bool = False) -> dict:
+        """Глубокий AI-анализ через Groq с кэшированием и fallback на rule-based."""
+        condition_id = market.get("id", "")
+
+        # Возвращаем кэшированный анализ если не устарел
+        if not force_refresh and condition_id:
+            cached = _ai_cache.get(condition_id)
+            if cached and time.time() - cached[0] < _AI_CACHE_TTL:
+                log.debug(f"AI cache hit: {condition_id[:20]}")
+                return cached[1]
+
         yes_price, no_price = _parse_prices(market)
         volume_24h = float(market.get("volume24hr", 0) or 0)
         liquidity  = float(market.get("liquidityNum", 0) or 0)
@@ -353,7 +368,19 @@ class PolymarketService:
             log.warning(f"Groq fallback: {e}")
             ai = self._rule_based_analysis(data)
 
-        return {**data, **ai}
+        result = {**data, **ai}
+
+        # Сохраняем в кэш (очищаем старые записи раз в 100 запросов)
+        if condition_id:
+            _ai_cache[condition_id] = (time.time(), result)
+            if len(_ai_cache) % 100 == 0:
+                _now = time.time()
+                expired = [k for k, (ts, _) in list(_ai_cache.items())
+                           if _now - ts >= _AI_CACHE_TTL]
+                for k in expired:
+                    _ai_cache.pop(k, None)
+
+        return result
 
     @staticmethod
     def _rule_based_analysis(data: dict) -> dict:
