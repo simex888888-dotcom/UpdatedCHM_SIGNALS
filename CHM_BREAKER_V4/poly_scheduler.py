@@ -10,6 +10,7 @@ poly_scheduler.py — фоновые задачи Polymarket.
 
 import asyncio
 import datetime
+import html
 import logging
 import time
 
@@ -17,7 +18,9 @@ from aiogram import Bot
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 import database as db
-from polymarket_service import PolymarketService, _parse_prices, _get_short_key
+from polymarket_service import (
+    PolymarketService, _parse_prices, _get_short_key, translate_question,
+)
 
 log = logging.getLogger("CHM.PolyScheduler")
 
@@ -57,9 +60,11 @@ async def _build_digest(poly: PolymarketService) -> list[dict]:
                 continue
             if analysis.get("confidence") == "LOW":
                 continue
+            # Переводим вопрос на русский для дайджеста
+            question_ru = await translate_question(m.get("question", ""))
             results.append({
                 "market_id":      m.get("id", ""),
-                "question":       m.get("question", ""),
+                "question":       question_ru,
                 "yes_price":      analysis["yes_price"],
                 "recommendation": analysis["recommendation"],
                 "confidence":     analysis["confidence"],
@@ -83,12 +88,12 @@ async def send_daily_digest(bot: Bot, poly: PolymarketService, um) -> int:
 
     lines = ["🌅 <b>Доброе утро! Топ маркеты на сегодня:</b>\n"]
     for i, m in enumerate(top, 1):
-        q = m["question"]
+        q     = html.escape(m["question"])
         q_short = q[:65] + ("…" if len(q) > 65 else "")
-        rec  = m["recommendation"]
-        conf = m["confidence"]
+        rec   = m["recommendation"]
+        conf  = m["confidence"]
         yes_p = m["yes_price"]
-        reason = m["reasoning"]
+        reason = html.escape(m["reasoning"])
         lines.append(
             f"{i}. 📊 <b>{q_short}</b>\n"
             f"   YES {yes_p:.0%} · <b>{rec}</b> {_rec_emoji(rec)} · {conf} {_conf_emoji(conf)}\n"
@@ -103,6 +108,10 @@ async def send_daily_digest(bot: Bot, poly: PolymarketService, um) -> int:
         if user.sub_status not in ("trial", "active"):
             continue
         if user.sub_expires < now:
+            continue
+        # Проверяем настройку дайджеста пользователя
+        settings = await db.poly_get_settings(user.user_id)
+        if not settings.get("digest_on", 1):
             continue
         wallet = await db.poly_wallet_get(user.user_id)
         if not wallet:
@@ -172,7 +181,8 @@ async def check_price_alerts(bot: Bot, poly: PolymarketService):
 
                 direction = "📈" if yes_now > base else "📉"
                 delta_str = f"{'+' if yes_now > base else ''}{yes_now - base:.0%}"
-                q_short   = a["question"][:60] + ("…" if len(a["question"]) > 60 else "")
+                raw_q   = a["question"][:60] + ("…" if len(a["question"]) > 60 else "")
+                q_short = html.escape(raw_q)
                 text = (
                     f"⚡ <b>Алерт сработал!</b>\n\n"
                     f"📊 {q_short}\n"

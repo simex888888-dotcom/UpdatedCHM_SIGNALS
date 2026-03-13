@@ -285,6 +285,7 @@ def _settings_menu(prefix: str, back_cb: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         _noop("── Сигналы ──────────────────"),
         _btn("📐 Пивоты и уровни S/R",          "menu_" + p + "pivots"),
+        _btn("📉 EMA (трендовые линии)",         "menu_" + p + "ema"),
         _btn("🔬 Фильтры (RSI / Объём / HTF)",  "menu_" + p + "filters"),
         _btn("⭐ Качество сигнала",               "menu_" + p + "quality"),
         _btn("🔁 Cooldown между сигналами",       "menu_" + p + "cooldown"),
@@ -294,7 +295,7 @@ def _settings_menu(prefix: str, back_cb: str) -> InlineKeyboardMarkup:
         _noop("── Монеты ──────────────────"),
         _btn("💰 Фильтр монет по объёму",         "menu_" + p + "volume"),
         _noop("── Уведомления ─────────────"),
-        _btn("📱 Уведомления",                    "menu_notify"),
+        _btn("📱 Уведомления",                    "menu_notify" + ("_" + p.rstrip("_") if p else "")),
         _back(back_cb),
     ])
 
@@ -509,12 +510,12 @@ def kb_short_volume(user: UserSettings) -> InlineKeyboardMarkup: return _volume_
 
 # ── УВЕДОМЛЕНИЯ ──────────────────────────────────────
 
-def kb_notify(user: UserSettings) -> InlineKeyboardMarkup:
+def kb_notify(user: UserSettings, back_cb: str = "menu_settings") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         _noop("── Типы уведомлений ──────────────────────────────"),
         _btn(_check(user.notify_signal)   + " Сигнал входа",        "toggle_notify_signal"),
-        _btn(_check(user.notify_breakout) + " Пробой уровня (ранний)","toggle_notify_breakout"),
-        _back("menu_settings"),
+        _btn(_check(user.notify_breakout) + " Пробой уровня (ранний)", "toggle_notify_breakout"),
+        _back(back_cb),
     ])
 
 

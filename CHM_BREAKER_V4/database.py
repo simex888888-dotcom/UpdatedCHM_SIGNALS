@@ -278,6 +278,18 @@ CREATE TABLE IF NOT EXISTS poly_alerts (
 
 CREATE INDEX IF NOT EXISTS idx_poly_alerts_user ON poly_alerts(user_id, active);
 
+-- Список наблюдения (избранные маркеты)
+CREATE TABLE IF NOT EXISTS poly_watchlist (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id   INTEGER NOT NULL,
+    market_id TEXT    NOT NULL,
+    question  TEXT    NOT NULL,
+    added_at  REAL    DEFAULT 0,
+    UNIQUE(user_id, market_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_poly_watchlist_user ON poly_watchlist(user_id);
+
 -- Лог дайджестов (предотвращает повторную отправку)
 CREATE TABLE IF NOT EXISTS poly_digest_log (
     user_id INTEGER NOT NULL,
@@ -324,6 +336,7 @@ async def init_db(path: str):
             "ALTER TABLE users ADD COLUMN watch_coin TEXT DEFAULT ''",
             "ALTER TABLE trades ADD COLUMN be_set INTEGER DEFAULT 0",
             "ALTER TABLE trades ADD COLUMN pos_idx INTEGER DEFAULT 0",
+            "ALTER TABLE trades ADD COLUMN order_id TEXT DEFAULT ''",
             # Снижаем порог существующих пользователей с дефолтного 70 → 50
             # чтобы они начали получать сигналы (MIN_SIGNAL_SCORE теперь 40%)
             "UPDATE pd_users SET pd_threshold=50 WHERE pd_threshold=70",
@@ -355,6 +368,13 @@ async def init_db(path: str):
                 user_id INTEGER NOT NULL, date TEXT NOT NULL,
                 PRIMARY KEY (user_id, date)
             )""",
+            """CREATE TABLE IF NOT EXISTS poly_watchlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL, market_id TEXT NOT NULL,
+                question TEXT NOT NULL, added_at REAL DEFAULT 0,
+                UNIQUE(user_id, market_id)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_poly_watchlist_user ON poly_watchlist(user_id)",
         ]
         for sql in migrations:
             try:
@@ -565,6 +585,17 @@ async def db_update_trade_pos_idx(trade_id: str, pos_idx: int):
             await db.commit()
 
 
+async def db_update_trade_bybit(trade_id: str, order_id: str, pos_idx: int):
+    """Сохраняет order_id и pos_idx после успешного открытия позиции на Bybit."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "UPDATE trades SET order_id=?, pos_idx=? WHERE trade_id=?",
+                (order_id, pos_idx, trade_id)
+            )
+            await db.commit()
+
+
 async def db_set_trade_be(trade_id: str):
     """Помечает что безубыток по сделке уже выставлен."""
     async with _lock:
@@ -585,6 +616,17 @@ async def db_count_open_trades(user_id: int, window_hours: int = 24) -> int:
         ) as cur:
             row = await cur.fetchone()
             return row[0] if row else 0
+
+
+async def db_has_open_trade_for_symbol(user_id: int, symbol: str) -> bool:
+    """Возвращает True если у пользователя уже есть незакрытая сделка по данному символу."""
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            "SELECT 1 FROM trades WHERE user_id=? AND symbol=? AND result='' LIMIT 1",
+            (user_id, symbol),
+        ) as cur:
+            row = await cur.fetchone()
+            return row is not None
 
 
 async def db_get_user_stats(user_id: int) -> dict:
@@ -822,6 +864,71 @@ async def db_pd_stats() -> dict:
         "week_correct":week_row[1] or 0,
         "week_prec":   _prec(week_row[0], week_row[1]),
     }
+
+
+async def db_pd_recent_signals(limit: int = 10) -> list[dict]:
+    """Последние N сигналов с исходами для истории."""
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT s.id, s.symbol, s.direction, s.score, s.price_signal AS price,
+                   s.ts AS created_at, o.correct
+            FROM pd_signals s
+            LEFT JOIN pd_outcomes o ON o.signal_id = s.id
+            ORDER BY s.ts DESC
+            LIMIT ?
+            """,
+            (limit,)
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def poly_watchlist_add(user_id: int, market_id: str, question: str):
+    """Добавляет маркет в список наблюдения. Дублирование игнорируется."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO poly_watchlist(user_id, market_id, question, added_at)"
+                " VALUES(?,?,?,?)",
+                (user_id, market_id, question, time.time())
+            )
+            await db.commit()
+
+
+async def poly_watchlist_remove(user_id: int, market_id: str):
+    """Удаляет маркет из списка наблюдения."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "DELETE FROM poly_watchlist WHERE user_id=? AND market_id=?",
+                (user_id, market_id)
+            )
+            await db.commit()
+
+
+async def poly_watchlist_get(user_id: int) -> list[dict]:
+    """Возвращает список маркетов наблюдения пользователя (новейшие первыми)."""
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, market_id, question, added_at FROM poly_watchlist"
+            " WHERE user_id=? ORDER BY added_at DESC LIMIT 20",
+            (user_id,)
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def poly_watchlist_has(user_id: int, market_id: str) -> bool:
+    """Возвращает True если маркет уже в списке наблюдения."""
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            "SELECT 1 FROM poly_watchlist WHERE user_id=? AND market_id=?",
+            (user_id, market_id)
+        ) as cur:
+            return (await cur.fetchone()) is not None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

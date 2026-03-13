@@ -243,12 +243,8 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
                 if sig is None:
                     continue
 
-                # Фильтруем по направлению (boolean-флаги всегда в синхронизации с cfg)
-                long_on  = getattr(user, "smc_long_active",  False)
-                short_on = getattr(user, "smc_short_active", False)
-                if long_on and not short_on and sig.direction != "LONG":
-                    continue
-                if short_on and not long_on and sig.direction != "SHORT":
+                # Фильтр направления из настроек SMC (ucfg.direction — главный)
+                if ucfg.direction != "BOTH" and sig.direction != ucfg.direction:
                     continue
 
                 # Антидубликат per-user
