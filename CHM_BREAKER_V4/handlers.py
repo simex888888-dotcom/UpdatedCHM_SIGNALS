@@ -40,7 +40,7 @@ from keyboards import (
     kb_sl, kb_long_sl, kb_short_sl,
     kb_targets, kb_long_targets, kb_short_targets,
     kb_volume, kb_long_volume, kb_short_volume,
-    trend_text, help_text, kb_help,
+    trend_text, help_text, kb_help, gerchik_help_text,
     kb_smc_main, kb_smc_tf, kb_smc_interval, kb_smc_direction,
     kb_smc_confirmations, kb_smc_rr, kb_smc_sl, kb_smc_volume, kb_smc_ob_age,
     kb_smc_mode_long, kb_smc_mode_short, kb_smc_mode_both,
@@ -3380,6 +3380,15 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def help_show(cb: CallbackQuery):
         await cb.answer()
         await safe_edit(cb, help_text(), kb_help())
+
+    @dp.callback_query(F.data == "help_gerchik")
+    async def help_gerchik_cb(cb: CallbackQuery):
+        """Подробная справка по стратегии Герчика."""
+        await cb.answer()
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад к сканеру", callback_data="gerchik_menu")],
+        ])
+        await safe_edit(cb, gerchik_help_text(), kb)
 
     # ─── АВТО-ТРЕЙДИНГ BYBIT ──────────────────────────
 
