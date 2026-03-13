@@ -63,6 +63,12 @@ def get_condition_id(short_key: int) -> Optional[str]:
 
 def _cache_put(condition_id: str, data: dict):
     _market_cache[condition_id] = (time.time(), data)
+    # Периодически удаляем истёкшие записи (каждые 50 put'ов)
+    if len(_market_cache) % 50 == 0:
+        _now = time.time()
+        expired = [k for k, (ts, _) in list(_market_cache.items()) if _now - ts >= _CACHE_TTL]
+        for k in expired:
+            _market_cache.pop(k, None)
 
 
 def _cache_get(condition_id: str) -> Optional[dict]:
@@ -70,6 +76,11 @@ def _cache_get(condition_id: str) -> Optional[dict]:
     if entry and time.time() - entry[0] < _CACHE_TTL:
         return entry[1]
     return None
+
+
+def _cache_invalidate(condition_id: str):
+    """Удаляет запись из кэша (принудительное обновление)."""
+    _market_cache.pop(condition_id, None)
 
 
 # ─── Правило-основанный анализ ───────────────────────────────────────────────
@@ -208,6 +219,12 @@ async def translate_question(question: str) -> str:
         translated = re.sub(r'^["\'"«»]+|["\'"«»]+$', "", translated).strip()
         if translated:
             _translation_cache[question] = (time.time(), translated)
+            # Ограничиваем кэш переводов — удаляем старые записи при превышении лимита
+            if len(_translation_cache) > 3000:
+                _cutoff = time.time() - _TRANS_TTL
+                stale = [k for k, (ts, _) in list(_translation_cache.items()) if ts < _cutoff]
+                for k in (stale or list(_translation_cache.keys())[:200]):
+                    _translation_cache.pop(k, None)
             return translated
     except Exception as e:
         log.debug(f"translate_question: {e}")
@@ -282,10 +299,12 @@ class PolymarketService:
             _cache_put(m.get("id", ""), m)
         return result[:limit]
 
-    async def get_market_by_id(self, condition_id: str) -> Optional[dict]:
-        cached = _cache_get(condition_id)
-        if cached:
-            return cached
+    async def get_market_by_id(self, condition_id: str,
+                               force_refresh: bool = False) -> Optional[dict]:
+        if not force_refresh:
+            cached = _cache_get(condition_id)
+            if cached:
+                return cached
         s = await self._sess()
         async with s.get(f"{GAMMA_BASE}/markets", params={"id": condition_id}) as r:
             if r.status != 200:

@@ -278,6 +278,18 @@ CREATE TABLE IF NOT EXISTS poly_alerts (
 
 CREATE INDEX IF NOT EXISTS idx_poly_alerts_user ON poly_alerts(user_id, active);
 
+-- Список наблюдения (избранные маркеты)
+CREATE TABLE IF NOT EXISTS poly_watchlist (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id   INTEGER NOT NULL,
+    market_id TEXT    NOT NULL,
+    question  TEXT    NOT NULL,
+    added_at  REAL    DEFAULT 0,
+    UNIQUE(user_id, market_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_poly_watchlist_user ON poly_watchlist(user_id);
+
 -- Лог дайджестов (предотвращает повторную отправку)
 CREATE TABLE IF NOT EXISTS poly_digest_log (
     user_id INTEGER NOT NULL,
@@ -356,6 +368,13 @@ async def init_db(path: str):
                 user_id INTEGER NOT NULL, date TEXT NOT NULL,
                 PRIMARY KEY (user_id, date)
             )""",
+            """CREATE TABLE IF NOT EXISTS poly_watchlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL, market_id TEXT NOT NULL,
+                question TEXT NOT NULL, added_at REAL DEFAULT 0,
+                UNIQUE(user_id, market_id)
+            )""",
+            "CREATE INDEX IF NOT EXISTS idx_poly_watchlist_user ON poly_watchlist(user_id)",
         ]
         for sql in migrations:
             try:
@@ -853,6 +872,52 @@ async def db_pd_recent_signals(limit: int = 10) -> list[dict]:
         ) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in rows]
+
+
+async def poly_watchlist_add(user_id: int, market_id: str, question: str):
+    """Добавляет маркет в список наблюдения. Дублирование игнорируется."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "INSERT OR IGNORE INTO poly_watchlist(user_id, market_id, question, added_at)"
+                " VALUES(?,?,?,?)",
+                (user_id, market_id, question, time.time())
+            )
+            await db.commit()
+
+
+async def poly_watchlist_remove(user_id: int, market_id: str):
+    """Удаляет маркет из списка наблюдения."""
+    async with _lock:
+        async with aiosqlite.connect(_db_path) as db:
+            await db.execute(
+                "DELETE FROM poly_watchlist WHERE user_id=? AND market_id=?",
+                (user_id, market_id)
+            )
+            await db.commit()
+
+
+async def poly_watchlist_get(user_id: int) -> list[dict]:
+    """Возвращает список маркетов наблюдения пользователя (новейшие первыми)."""
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, market_id, question, added_at FROM poly_watchlist"
+            " WHERE user_id=? ORDER BY added_at DESC LIMIT 20",
+            (user_id,)
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
+async def poly_watchlist_has(user_id: int, market_id: str) -> bool:
+    """Возвращает True если маркет уже в списке наблюдения."""
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            "SELECT 1 FROM poly_watchlist WHERE user_id=? AND market_id=?",
+            (user_id, market_id)
+        ) as cur:
+            return (await cur.fetchone()) is not None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
