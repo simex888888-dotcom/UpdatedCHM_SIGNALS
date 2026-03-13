@@ -455,6 +455,15 @@ class MidScanner:
         show_trade_btn  = False
 
         if auto_trade and api_key and api_secret:
+            # Не открываем вторую сделку по той же монете
+            if await db.db_has_open_trade_for_symbol(user.user_id, sig.symbol):
+                log.info(
+                    f"auto_trade skip duplicate: {sig.symbol} уже открыта у uid={user.user_id}"
+                )
+                show_trade_btn = False
+                auto_trade = False  # сигнал покажем, сделку пропустим
+
+        if auto_trade and api_key and api_secret:
             max_trades = getattr(user, "max_trades_limit", 5)
             open_count = await db.db_count_open_trades(user.user_id)
             # max_trades=0 означает «без лимита»
