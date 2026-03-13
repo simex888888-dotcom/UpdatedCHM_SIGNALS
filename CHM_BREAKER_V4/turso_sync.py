@@ -194,9 +194,79 @@ def _read_local_schema(db_path: str) -> list[str]:
     return stmts
 
 
+# Колонки добавленные через ALTER TABLE не попадают в sqlite_master CREATE TABLE.
+# Поэтому _ensure_turso_schema не создаёт их в Turso → INSERT падает →
+# таблица users пустая в Turso → при рестарте подписка "сбрасывается".
+# Решение: дублируем все ALTER TABLE миграции здесь и запускаем их в Turso
+# по одной (каждую в своём try/except — ошибка "column exists" игнорируется).
+_TURSO_ALTER_MIGRATIONS = [
+    "ALTER TABLE users ADD COLUMN pivot_strength INTEGER DEFAULT 7",
+    "ALTER TABLE users ADD COLUMN max_level_age INTEGER DEFAULT 100",
+    "ALTER TABLE users ADD COLUMN max_retest_bars INTEGER DEFAULT 30",
+    "ALTER TABLE users ADD COLUMN zone_buffer REAL DEFAULT 0.3",
+    "ALTER TABLE users ADD COLUMN ema_fast INTEGER DEFAULT 50",
+    "ALTER TABLE users ADD COLUMN ema_slow INTEGER DEFAULT 200",
+    "ALTER TABLE users ADD COLUMN htf_ema_period INTEGER DEFAULT 50",
+    "ALTER TABLE users ADD COLUMN rsi_period INTEGER DEFAULT 14",
+    "ALTER TABLE users ADD COLUMN rsi_ob INTEGER DEFAULT 65",
+    "ALTER TABLE users ADD COLUMN rsi_os INTEGER DEFAULT 35",
+    "ALTER TABLE users ADD COLUMN vol_mult REAL DEFAULT 1.2",
+    "ALTER TABLE users ADD COLUMN vol_len INTEGER DEFAULT 20",
+    "ALTER TABLE users ADD COLUMN use_rsi INTEGER DEFAULT 1",
+    "ALTER TABLE users ADD COLUMN use_volume INTEGER DEFAULT 1",
+    "ALTER TABLE users ADD COLUMN use_pattern INTEGER DEFAULT 1",
+    "ALTER TABLE users ADD COLUMN use_htf INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN atr_period INTEGER DEFAULT 14",
+    "ALTER TABLE users ADD COLUMN atr_mult REAL DEFAULT 1.0",
+    "ALTER TABLE users ADD COLUMN max_risk_pct REAL DEFAULT 1.5",
+    "ALTER TABLE users ADD COLUMN tp1_rr REAL DEFAULT 2.0",
+    "ALTER TABLE users ADD COLUMN tp2_rr REAL DEFAULT 3.0",
+    "ALTER TABLE users ADD COLUMN tp3_rr REAL DEFAULT 4.5",
+    "ALTER TABLE users ADD COLUMN min_volume_usdt REAL DEFAULT 1000000",
+    "ALTER TABLE users ADD COLUMN min_quality INTEGER DEFAULT 3",
+    "ALTER TABLE users ADD COLUMN cooldown_bars INTEGER DEFAULT 5",
+    "ALTER TABLE users ADD COLUMN notify_signal INTEGER DEFAULT 1",
+    "ALTER TABLE users ADD COLUMN notify_breakout INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN scan_mode TEXT DEFAULT 'both'",
+    "ALTER TABLE users ADD COLUMN long_tf TEXT DEFAULT '1h'",
+    "ALTER TABLE users ADD COLUMN long_interval INTEGER DEFAULT 3600",
+    "ALTER TABLE users ADD COLUMN short_tf TEXT DEFAULT '1h'",
+    "ALTER TABLE users ADD COLUMN short_interval INTEGER DEFAULT 3600",
+    "ALTER TABLE users ADD COLUMN long_active INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN short_active INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN long_cfg TEXT DEFAULT '{}'",
+    "ALTER TABLE users ADD COLUMN short_cfg TEXT DEFAULT '{}'",
+    "ALTER TABLE users ADD COLUMN trend_only INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN signals_received INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN trial_reminder_sent INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN expired_notified INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN zone_pct REAL DEFAULT 0.7",
+    "ALTER TABLE users ADD COLUMN max_dist_pct REAL DEFAULT 1.5",
+    "ALTER TABLE users ADD COLUMN min_rr REAL DEFAULT 2.0",
+    "ALTER TABLE users ADD COLUMN max_level_tests INTEGER DEFAULT 4",
+    "ALTER TABLE users ADD COLUMN strategy TEXT DEFAULT 'LEVELS'",
+    "ALTER TABLE users ADD COLUMN smc_cfg TEXT DEFAULT '{}'",
+    "ALTER TABLE users ADD COLUMN smc_long_active INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN smc_short_active INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN bybit_api_key TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN bybit_api_secret TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN auto_trade INTEGER DEFAULT 0",
+    "ALTER TABLE users ADD COLUMN auto_trade_mode TEXT DEFAULT 'confirm'",
+    "ALTER TABLE users ADD COLUMN trade_risk_pct REAL DEFAULT 1.0",
+    "ALTER TABLE users ADD COLUMN trade_leverage INTEGER DEFAULT 10",
+    "ALTER TABLE users ADD COLUMN max_trades_limit INTEGER DEFAULT 5",
+    "ALTER TABLE users ADD COLUMN watch_coin TEXT DEFAULT ''",
+    "ALTER TABLE users ADD COLUMN gerchik_active INTEGER DEFAULT 0",
+    "ALTER TABLE trades ADD COLUMN be_set INTEGER DEFAULT 0",
+    "ALTER TABLE trades ADD COLUMN pos_idx INTEGER DEFAULT 0",
+    "ALTER TABLE trades ADD COLUMN order_id TEXT DEFAULT ''",
+]
+
+
 async def _ensure_turso_schema(session: aiohttp.ClientSession, db_path: str):
     """
-    Создаёт таблицы и индексы в Turso если их нет.
+    Создаёт таблицы и индексы в Turso если их нет,
+    затем добавляет колонки через ALTER TABLE (игнорирует ошибки "already exists").
     КРИТИЧНО: вызывать перед любым DELETE/INSERT в turso_push.
     """
     loop = asyncio.get_event_loop()
@@ -218,6 +288,13 @@ async def _ensure_turso_schema(session: aiohttp.ClientSession, db_path: str):
             await _pipeline(session, idx_stmts)
         except Exception as e:
             log.debug(f"_ensure_turso_schema idx: {e}")
+
+    # ALTER TABLE по одному — ошибка "duplicate column" тихо игнорируется
+    for sql in _TURSO_ALTER_MIGRATIONS:
+        try:
+            await _pipeline(session, [{"sql": sql}])
+        except Exception:
+            pass  # колонка уже существует — норм
 
 
 # ── Восстановление при старте ──────────────────────────────────────────────
