@@ -95,6 +95,23 @@ def _watch_coin_label(user) -> str:
 
 def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
     strategy = getattr(user, "strategy", "LEVELS")
+    # ── GERCHIK ──
+    if strategy == "GERCHIK":
+        g_s = "🟢" if getattr(user, "gerchik_active", False) else "⚫"
+        return InlineKeyboardMarkup(inline_keyboard=[
+            _btn(g_s + " ⚡ Герчик — запустить / остановить сканер", "gerchik_menu"),
+            _btn("🎯 Стратегия: 🎯 Герчик — сменить", "show_strategy"),
+            [InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
+             InlineKeyboardButton(text="📈 График",         callback_data="my_chart")],
+            _btn(_watch_coin_label(user), "watch_coin_menu"),
+            _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
+            [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
+             InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
+            _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
+            [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
+             InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
+        ])
+    # ── SMC ──
     if strategy == "SMC":
         long_s  = "🟢" if getattr(user, "smc_long_active",  False) else "⚫"
         short_s = "🟢" if getattr(user, "smc_short_active", False) else "⚫"
@@ -110,7 +127,6 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
             _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
             [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
              InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
-            _btn("🎯 Герчик — уровневая торговля (Price Action)", "gerchik_menu"),
             _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
             [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
              InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
@@ -130,7 +146,6 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
         _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
         [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
          InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
-        _btn("🎯 Герчик — уровневая торговля (Price Action)", "gerchik_menu"),
         _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
         [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
          InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
