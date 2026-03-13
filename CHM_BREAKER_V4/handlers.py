@@ -40,7 +40,7 @@ from keyboards import (
     kb_sl, kb_long_sl, kb_short_sl,
     kb_targets, kb_long_targets, kb_short_targets,
     kb_volume, kb_long_volume, kb_short_volume,
-    trend_text, help_text, kb_help,
+    trend_text, help_text, kb_help, gerchik_help_text,
     kb_smc_main, kb_smc_tf, kb_smc_interval, kb_smc_direction,
     kb_smc_confirmations, kb_smc_rr, kb_smc_sl, kb_smc_volume, kb_smc_ob_age,
     kb_smc_mode_long, kb_smc_mode_short, kb_smc_mode_both,
@@ -161,6 +161,18 @@ def main_text(user: UserSettings, trend: dict) -> str:
             sub_line + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
             "Выбери режим SMC сканера 👇"
+        )
+    if strategy == "GERCHIK":
+        active_s = "🟢 СКАНЕР ВКЛ" if getattr(user, "gerchik_active", False) else "🔴 выключен"
+        return (
+            "⚡ <b>CHM BREAKER BOT — 🎯 Стратегия Герчика</b>" + NL + NL +
+            trend_text(trend) + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            active_s + NL +
+            "Таймфрейм: <b>1D</b>  Интервал: <b>30 мин.</b>" + NL +
+            sub_line + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "Сканер ищет уровни + паттерн БСУ→БПУ-1→БПУ-2 👇"
         )
     # ── LEVELS ──
     long_s  = "🟢 ЛОНГ" if user.long_active  else "⚫ лонг выкл"
@@ -396,6 +408,7 @@ def _kb_strategy_select() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Уровни (Price Action)", callback_data="strategy_levels"),
             InlineKeyboardButton(text="🧠 Smart Money (SMC)",     callback_data="strategy_smc"),
         ],
+        [InlineKeyboardButton(text="🎯 Герчик (Price Action)",   callback_data="strategy_gerchik")],
     ])
 
 def _kb_strategy_change(current: str = "") -> InlineKeyboardMarkup:
@@ -404,6 +417,7 @@ def _kb_strategy_change(current: str = "") -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Уровни", callback_data="strategy_levels"),
             InlineKeyboardButton(text="🧠 SMC",    callback_data="strategy_smc"),
         ],
+        [InlineKeyboardButton(text="🎯 Герчик",   callback_data="strategy_gerchik")],
     ]
     if current == "SMC":
         rows.append([InlineKeyboardButton(text="⚙️ Настройки SMC →", callback_data="smc_settings")])
@@ -413,16 +427,21 @@ def _kb_strategy_change(current: str = "") -> InlineKeyboardMarkup:
 def _strategy_text(strategy: str) -> str:
     chosen = ("📊 Уровни (Price Action)" if strategy == "LEVELS"
               else "🧠 Smart Money (SMC)" if strategy == "SMC"
+              else "🎯 Герчик (Price Action)" if strategy == "GERCHIK"
               else "не выбрана")
     return (
         "🎯 <b>ВЫБОР СТРАТЕГИИ</b>\n\n"
-        "Бот поддерживает две стратегии анализа:\n\n"
+        "Бот поддерживает три стратегии анализа:\n\n"
         "📊 <b>Уровни (Price Action)</b>\n"
         "  Классические уровни поддержки/сопротивления, фракталы, "
         "паттерны свечей, Volume Profile, мультитаймфреймный анализ.\n\n"
         "🧠 <b>Smart Money Concepts (SMC)</b>\n"
         "  Институциональный анализ: Market Structure (BOS/CHoCH), "
         "Liquidity Sweeps, Order Blocks, Fair Value Gaps, Premium/Discount Zones.\n\n"
+        "🎯 <b>Стратегия Герчика</b>\n"
+        "  Уровневая торговля по методу Александра Герчика. "
+        "Паттерн входа БСУ→БПУ-1→БПУ-2 у ключевых уровней. "
+        "ATR-фильтр, выход по частям (TP1 3R / TP2 4R).\n\n"
         "Текущая стратегия: <b>" + chosen + "</b>\n\n"
         "Выбери стратегию 👇"
     )
@@ -1409,8 +1428,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     @dp.callback_query(F.data.startswith("strategy_"))
     async def cb_strategy(cb: CallbackQuery):
-        choice = cb.data.replace("strategy_", "")   # "levels" | "smc"
-        strategy_map = {"levels": "LEVELS", "smc": "SMC"}
+        choice = cb.data.replace("strategy_", "")   # "levels" | "smc" | "gerchik"
+        strategy_map = {"levels": "LEVELS", "smc": "SMC", "gerchik": "GERCHIK"}
         strategy = strategy_map.get(choice)
         if not strategy:
             await cb.answer("Неизвестная стратегия", show_alert=True); return
@@ -1418,40 +1437,46 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         user.strategy = strategy
         await um.save(user)
-        label = "📊 Уровни (Price Action)" if strategy == "LEVELS" else "🧠 Smart Money (SMC)"
+        label = (
+            "📊 Уровни (Price Action)" if strategy == "LEVELS"
+            else "🧠 Smart Money (SMC)" if strategy == "SMC"
+            else "🎯 Герчик (Price Action)"
+        )
         await cb.answer("✅ Стратегия: " + label, show_alert=False)
 
         trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
         await safe_edit(cb, main_text(user, trend), kb_main(user))
 
-    # ─── СТРАТЕГИЯ ГЕРЧИКА ────────────────────────────
+    # ─── СТРАТЕГИЯ ГЕРЧИКА — режим ────────────────────
+
+    def _gerchik_mode_text(user: UserSettings) -> str:
+        active = getattr(user, "gerchik_active", False)
+        status = "🟢 СКАНЕР ВКЛ" if active else "🔴 СКАНЕР ВЫКЛ"
+        return (
+            "🎯 <b>Стратегия Герчика</b>\n\n"
+            "Уровневая торговля по методу Александра Герчика:\n"
+            "• Поиск уровней поддержки и сопротивления (D1)\n"
+            "• Паттерн входа: <b>БСУ → БПУ-1 → БПУ-2</b>\n"
+            "• ATR-фильтр: не входить если прошли ≥75% дневного диапазона\n"
+            "• Выход по частям: 55% на TP1 (3R), 45% на TP2 (4R)\n"
+            "• После TP1 стоп автоматически переносится в безубыток\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"Статус: <b>{status}</b>"
+        )
 
     @dp.callback_query(F.data == "gerchik_menu")
     async def cb_gerchik_menu(cb: CallbackQuery):
-        """Открывает меню стратегии Герчика."""
+        """Открывает экран стратегии Герчика (из главного меню если стратегия уже GERCHIK)."""
         await cb.answer()
         user = await um.get_or_create(cb.from_user.id)
         from keyboards import kb_gerchik_menu
-        active = getattr(user, "gerchik_active", False)
-        status_line = "🟢 Сканер <b>включён</b>" if active else "🔴 Сканер <b>выключен</b>"
-        text = (
-            "🎯 <b>Стратегия Герчика</b>\n\n"
-            "Уровневая торговля по методу Александра Герчика:\n"
-            "• Поиск уровней поддержки и сопротивления\n"
-            "• Паттерн входа: <b>БСУ → БПУ-1 → БПУ-2</b>\n"
-            "• Фильтр ATR (не входить если прошли ≥75% дневного диапазона)\n"
-            "• Выход по частям: 55% на TP1 (3R), 45% на TP2 (4R)\n"
-            "• Стоп переносится в безубыток после TP1\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"Статус: {status_line}"
-        )
-        await safe_edit(cb, text, kb_gerchik_menu(user))
+        await safe_edit(cb, _gerchik_mode_text(user), kb_gerchik_menu(user))
 
     @dp.callback_query(F.data == "toggle_gerchik")
     async def cb_toggle_gerchik(cb: CallbackQuery):
         """Включает / выключает сканер Герчика."""
         user = await um.get_or_create(cb.from_user.id)
-        has, _ = user.check_access()
+        has, reason = user.check_access()
         if not has:
             await cb.answer("❌ Требуется активная подписка.", show_alert=True)
             return
@@ -1461,23 +1486,11 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await um.save(user)
 
         from keyboards import kb_gerchik_menu
-        status_line = "🟢 Сканер <b>включён</b>" if user.gerchik_active else "🔴 Сканер <b>выключен</b>"
-        text = (
-            "🎯 <b>Стратегия Герчика</b>\n\n"
-            "Уровневая торговля по методу Александра Герчика:\n"
-            "• Поиск уровней поддержки и сопротивления\n"
-            "• Паттерн входа: <b>БСУ → БПУ-1 → БПУ-2</b>\n"
-            "• Фильтр ATR (не входить если прошли ≥75% дневного диапазона)\n"
-            "• Выход по частям: 55% на TP1 (3R), 45% на TP2 (4R)\n"
-            "• Стоп переносится в безубыток после TP1\n\n"
-            "━━━━━━━━━━━━━━━━━━━━\n"
-            f"Статус: {status_line}"
-        )
         log.info(
             f"Герчик {'включён' if user.gerchik_active else 'выключен'} "
             f"uid={user.user_id}"
         )
-        await safe_edit(cb, text, kb_gerchik_menu(user))
+        await safe_edit(cb, _gerchik_mode_text(user), kb_gerchik_menu(user))
 
     # ─── АНАЛИЗ МОНЕТЫ ПО ЗАПРОСУ ────────────────────
 
@@ -3367,6 +3380,15 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def help_show(cb: CallbackQuery):
         await cb.answer()
         await safe_edit(cb, help_text(), kb_help())
+
+    @dp.callback_query(F.data == "help_gerchik")
+    async def help_gerchik_cb(cb: CallbackQuery):
+        """Подробная справка по стратегии Герчика."""
+        await cb.answer()
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Назад к сканеру", callback_data="gerchik_menu")],
+        ])
+        await safe_edit(cb, gerchik_help_text(), kb)
 
     # ─── АВТО-ТРЕЙДИНГ BYBIT ──────────────────────────
 
