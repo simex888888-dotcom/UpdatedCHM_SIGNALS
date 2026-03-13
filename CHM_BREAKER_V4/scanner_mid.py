@@ -815,26 +815,37 @@ class MidScanner:
                     # ложного срабатывания сразу после создания сделки
                     if time.time() - float(trade.get("created_at", 0)) < 60:
                         continue
-                    # Запрашиваем историю закрытых позиций по символу
-                    try:
-                        closed = await bybit_trader.get_closed_pnl(
-                            api_key, api_secret, trade["symbol"]
-                        )
-                    except Exception:
-                        closed = []
 
-                    # Ищем запись, которая соответствует нашей сделке:
-                    # side совпадает, закрыта позже создания
+                    # Запрашиваем историю закрытых позиций.
+                    # Bybit иногда задерживает появление записи — делаем 2 попытки.
                     expected_side = "Buy" if direction == "LONG" else "Sell"
                     created_ms    = float(trade.get("created_at", 0)) * 1000
                     matched_exit  = None
-                    for rec in closed:
-                        if rec.get("side") != expected_side:
-                            continue
-                        if float(rec.get("updatedTime", 0)) < created_ms:
-                            continue
-                        matched_exit = float(rec.get("avgExitPrice", 0))
-                        break
+
+                    for _attempt in range(2):
+                        try:
+                            closed = await bybit_trader.get_closed_pnl(
+                                api_key, api_secret, trade["symbol"]
+                            )
+                        except Exception:
+                            closed = []
+
+                        for rec in closed:
+                            # side в get_closed_pnl = сторона открытия позиции
+                            if rec.get("side") != expected_side:
+                                continue
+                            if float(rec.get("updatedTime", 0)) < created_ms:
+                                continue
+                            exit_val = float(rec.get("avgExitPrice") or 0)
+                            if exit_val > 0:
+                                matched_exit = exit_val
+                            break
+
+                        if matched_exit:
+                            break
+                        # Запись ещё не появилась — ждём 3 сек и повторяем
+                        if _attempt == 0:
+                            await asyncio.sleep(3)
 
                     if matched_exit and matched_exit > 0:
                         result_str, result_rr = self._trade_result_from_exit(
@@ -861,19 +872,20 @@ class MidScanner:
                     sym_label = trade["symbol"].replace("-USDT-SWAP", "").replace("-USDT", "")
                     emoji = "✅" if result_str.startswith("TP") else ("🛑" if result_str == "SL" else ("♻️" if result_str == "BE" else "📋"))
                     rr_text = f"  R:R {result_rr:+.2f}" if result_rr != 0 else ""
+                    exit_display = f"<code>{matched_exit}</code>" if matched_exit else "не определена (закрыта вручную или через SL биржи)"
                     try:
                         await self.bot.send_message(
                             user.user_id,
                             f"{emoji} <b>Сделка закрыта: {result_str}</b>{rr_text}\n\n"
                             f"💎 {sym_label}  |  {direction}\n"
                             f"💰 Вход: <code>{entry}</code>\n"
-                            f"📤 Выход: <code>{matched_exit or '—'}</code>",
+                            f"📤 Выход: {exit_display}",
                             parse_mode="HTML",
                         )
                     except Exception:
                         pass
                     log.info(f"Trade closed: {bb_sym} {direction} → {result_str}{rr_text} "
-                             f"(uid={user.user_id})")
+                             f"exit={matched_exit} (uid={user.user_id})")
                     continue
 
                 # ── Позиция ещё открыта: проверяем безубыток ──────────────
