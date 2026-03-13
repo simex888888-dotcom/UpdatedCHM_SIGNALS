@@ -375,6 +375,8 @@ async def init_db(path: str):
                 UNIQUE(user_id, market_id)
             )""",
             "CREATE INDEX IF NOT EXISTS idx_poly_watchlist_user ON poly_watchlist(user_id)",
+            # Стратегия Герчика
+            "ALTER TABLE users ADD COLUMN gerchik_active INTEGER DEFAULT 0",
         ]
         for sql in migrations:
             try:
@@ -432,8 +434,8 @@ _ALLOWED_USER_COLS = {
     "max_level_tests", "min_volume_usdt", "min_quality", "cooldown_bars",
     "notify_signal", "notify_breakout", "scan_mode", "long_tf",
     "long_interval", "short_tf", "short_interval", "long_active",
-    "short_active", "smc_long_active", "smc_short_active", "long_cfg",
-    "short_cfg", "smc_cfg", "trend_only", "signals_received",
+    "short_active", "smc_long_active", "smc_short_active", "gerchik_active",
+    "long_cfg", "short_cfg", "smc_cfg", "trend_only", "signals_received",
     "trial_reminder_sent", "expired_notified", "updated_at", "strategy",
     "bybit_api_key", "bybit_api_secret", "auto_trade", "auto_trade_mode",
     "trade_risk_pct", "trade_leverage", "max_trades_limit", "watch_coin",
@@ -470,7 +472,8 @@ async def db_get_active_users() -> list[dict]:
                     """SELECT * FROM users
                        WHERE sub_status IN ('trial','active') AND sub_expires > ?
                        AND (active=1 OR long_active=1 OR short_active=1
-                            OR smc_long_active=1 OR smc_short_active=1)""",
+                            OR smc_long_active=1 OR smc_short_active=1
+                            OR gerchik_active=1)""",
                     (now,)
                 ) as cur:
                     rows = await cur.fetchall()

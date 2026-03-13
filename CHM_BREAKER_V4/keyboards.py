@@ -110,6 +110,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
             _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
             [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
              InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
+            _btn("🎯 Герчик — уровневая торговля (Price Action)", "gerchik_menu"),
             _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
             [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
              InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
@@ -129,6 +130,7 @@ def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
         _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
         [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
          InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
+        _btn("🎯 Герчик — уровневая торговля (Price Action)", "gerchik_menu"),
         _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
         [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
          InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
@@ -660,6 +662,29 @@ def kb_smc_mode_both(user: UserSettings) -> InlineKeyboardMarkup:
         _btn("📊 Таймфрейм: " + tf_label,                                 "smc_menu_tf"),
         _btn("🔄 Интервал: " + str(cfg.scan_interval // 60) + " мин.",    "smc_menu_interval"),
         _btn("⚙️ Все настройки SMC →",                                    "smc_settings"),
+        _back(),
+    ])
+
+
+# ── ГЕРЧИК ────────────────────────────────────────────
+
+def kb_gerchik_menu(user: UserSettings) -> InlineKeyboardMarkup:
+    """Меню стратегии Герчика."""
+    active   = getattr(user, "gerchik_active", False)
+    status   = "🟢 СКАНЕР ВКЛ — нажми чтобы остановить" if active \
+             else "🔴 СКАНЕР ВЫКЛ — нажми чтобы запустить"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _noop("── 🎯 Стратегия Герчика ──────────────────────────"),
+        _noop("  Уровневая торговля: БСУ → БПУ-1 → БПУ-2"),
+        _noop("  Price Action + объём. Без индикаторов."),
+        _btn(status, "toggle_gerchik"),
+        _noop("── Параметры ──────────────────────────────────────"),
+        _btn("📊 Таймфрейм: 1D (поиск уровней)",       "noop"),
+        _btn("🔄 Интервал сканирования: 30 минут",       "noop"),
+        _btn("⭐ Мин. сила уровня: 2+ балла",            "noop"),
+        _btn("📐 Мин. R:R: 1:3  |  Риск: 1%",           "noop"),
+        _btn("🎯 TP1: 3R (55%)  |  TP2: 4R (45%)",      "noop"),
+        _noop("──────────────────────────────────────────────────"),
         _back(),
     ])
 

@@ -185,6 +185,9 @@ class UserSettings:
     smc_long_active:  bool  = False   # SMC лонг сканер
     smc_short_active: bool  = False   # SMC шорт сканер
 
+    # ── Стратегия Герчика ─────────────────────────
+    gerchik_active:   bool  = False   # Герчик сканер включён
+
     # JSON-строки с независимыми настройками
     long_cfg:         str   = "{}"
     short_cfg:        str   = "{}"
@@ -315,7 +318,7 @@ def _from_db(row: dict) -> UserSettings:
         "active", "trial_used", "use_rsi", "use_volume",
         "use_pattern", "use_htf", "notify_signal", "notify_breakout",
         "long_active", "short_active", "smc_long_active", "smc_short_active",
-        "trend_only", "trial_reminder_sent", "expired_notified",
+        "gerchik_active", "trend_only", "trial_reminder_sent", "expired_notified",
         "auto_trade",
     }
     for f in fields(u):

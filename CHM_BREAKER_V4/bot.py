@@ -26,6 +26,7 @@ from handlers import register_handlers
 from pump_dump.pd_runner import PDRunner
 from polymarket_service import PolymarketService
 from poly_handlers import register_poly_handlers
+from gerchik_runner import GerchikScanner
 
 
 def _code_hash() -> str:
@@ -151,6 +152,8 @@ async def main():
     pd_runner = PDRunner(bot, config.DB_PATH)
 
     register_handlers(dp, bot, um, scanner, config, pd_runner=pd_runner)
+
+    gerchik_scanner = GerchikScanner(bot, um, fetcher=scanner.fetcher)
 
     poly = PolymarketService()
     register_poly_handlers(dp, bot, um, config, poly)
@@ -307,6 +310,7 @@ async def main():
             cache_gc.gc_loop(),
             poly_scheduler.digest_loop(bot, poly, um),
             poly_scheduler.alerts_loop(bot, poly),
+            gerchik_scanner.run_forever(),
         )
     finally:
         log.info("🛑 Завершение...")
