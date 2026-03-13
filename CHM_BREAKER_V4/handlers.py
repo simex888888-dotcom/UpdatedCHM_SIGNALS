@@ -3570,6 +3570,15 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.answer("⚠️ Сделка уже была открыта на Bybit!", show_alert=True)
             return
 
+        # Проверяем дубликат по символу — не открываем вторую сделку по той же монете
+        if await db.db_has_open_trade_for_symbol(user.user_id, trade["symbol"]):
+            await cb.message.answer(
+                f"⚠️ <b>Сделка по {trade['symbol'].replace('-USDT-SWAP','').replace('-USDT','')} уже открыта</b>\n\n"
+                f"Дождись закрытия текущей позиции перед открытием новой.",
+                parse_mode="HTML",
+            )
+            return
+
         max_trades = getattr(user, "max_trades_limit", 5)
         # max_trades=0 означает «без лимита» — не проверяем
         if max_trades > 0:

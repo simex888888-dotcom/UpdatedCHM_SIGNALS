@@ -455,6 +455,15 @@ class MidScanner:
         show_trade_btn  = False
 
         if auto_trade and api_key and api_secret:
+            # Не открываем вторую сделку по той же монете
+            if await db.db_has_open_trade_for_symbol(user.user_id, sig.symbol):
+                log.info(
+                    f"auto_trade skip duplicate: {sig.symbol} уже открыта у uid={user.user_id}"
+                )
+                show_trade_btn = False
+                auto_trade = False  # сигнал покажем, сделку пропустим
+
+        if auto_trade and api_key and api_secret:
             max_trades = getattr(user, "max_trades_limit", 5)
             open_count = await db.db_count_open_trades(user.user_id)
             # max_trades=0 означает «без лимита»
@@ -822,7 +831,9 @@ class MidScanner:
                     created_ms    = float(trade.get("created_at", 0)) * 1000
                     matched_exit  = None
 
-                    for _attempt in range(2):
+                    # Пробуем получить цену выхода из истории закрытых позиций.
+                    # Bybit задерживает появление записи — 3 попытки с паузами.
+                    for _attempt in range(3):
                         try:
                             closed = await bybit_trader.get_closed_pnl(
                                 api_key, api_secret, trade["symbol"]
@@ -843,9 +854,19 @@ class MidScanner:
 
                         if matched_exit:
                             break
-                        # Запись ещё не появилась — ждём 3 сек и повторяем
-                        if _attempt == 0:
-                            await asyncio.sleep(3)
+                        # Запись ещё не появилась — ждём и повторяем
+                        wait_secs = (3, 5, 0)[_attempt]
+                        if wait_secs:
+                            await asyncio.sleep(wait_secs)
+
+                    # Последний резерв: история исполнений (executions)
+                    if not matched_exit:
+                        try:
+                            matched_exit = await bybit_trader.get_execution_exit_price(
+                                api_key, api_secret, trade["symbol"], created_ms
+                            )
+                        except Exception:
+                            pass
 
                     if matched_exit and matched_exit > 0:
                         result_str, result_rr = self._trade_result_from_exit(
@@ -872,7 +893,11 @@ class MidScanner:
                     sym_label = trade["symbol"].replace("-USDT-SWAP", "").replace("-USDT", "")
                     emoji = "✅" if result_str.startswith("TP") else ("🛑" if result_str == "SL" else ("♻️" if result_str == "BE" else "📋"))
                     rr_text = f"  R:R {result_rr:+.2f}" if result_rr != 0 else ""
-                    exit_display = f"<code>{matched_exit}</code>" if matched_exit else "не определена (закрыта вручную или через SL биржи)"
+                    if matched_exit:
+                        exit_display = f"<code>{matched_exit}</code>"
+                    else:
+                        # Не удалось получить точную цену — показываем нейтральный текст
+                        exit_display = "<i>по рыночной цене</i>"
                     # Запрашиваем текущий баланс после закрытия
                     balance_line = ""
                     try:

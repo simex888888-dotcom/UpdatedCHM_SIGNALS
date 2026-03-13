@@ -618,6 +618,17 @@ async def db_count_open_trades(user_id: int, window_hours: int = 24) -> int:
             return row[0] if row else 0
 
 
+async def db_has_open_trade_for_symbol(user_id: int, symbol: str) -> bool:
+    """Возвращает True если у пользователя уже есть незакрытая сделка по данному символу."""
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            "SELECT 1 FROM trades WHERE user_id=? AND symbol=? AND result='' LIMIT 1",
+            (user_id, symbol),
+        ) as cur:
+            row = await cur.fetchone()
+            return row is not None
+
+
 async def db_get_user_stats(user_id: int) -> dict:
     trades = await db_get_user_trades(user_id)
     if not trades:
