@@ -3572,6 +3572,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 f"⛔ Лимит сделок достигнут ({open_count}/{max_trades}). "
                 f"Дождись закрытия открытых позиций.",
                 show_alert=True,
+            )
+            return
         # Защита от двойного нажатия: order_id уже есть — сделка уже открыта
         if trade.get("order_id", ""):
             await cb.answer("⚠️ Сделка уже была открыта на Bybit!", show_alert=True)
@@ -3585,18 +3587,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 parse_mode="HTML",
             )
             return
-
-        max_trades = getattr(user, "max_trades_limit", 5)
-        # max_trades=0 означает «без лимита» — не проверяем
-        if max_trades > 0:
-            open_count = await db.db_count_open_trades(user.user_id)
-            if open_count >= max_trades:
-                await cb.message.answer(
-                    f"⛔ <b>Лимит сделок достигнут</b> ({open_count}/{max_trades})\n\n"
-                    f"Дождись закрытия открытых позиций.",
-                    parse_mode="HTML",
-                )
-                return
 
         wait = await cb.message.answer("⏳ Открываю позицию на Bybit...")
         try:
