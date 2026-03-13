@@ -479,6 +479,9 @@ class MidScanner:
                         risk_pct, leverage,
                         tp2=tp2, tp3=tp3,
                     )
+                    # Сохраняем pos_idx для корректного BE-мониторинга
+                    if result.get("ok"):
+                        await db.db_update_trade_pos_idx(trade_id, result.get("pos_idx", 0))
                     trade_msg = bybit_trader.format_trade_result(
                         result, sig.direction, sig.symbol,
                         sig.entry, sig.sl, tp1, risk_pct, leverage,

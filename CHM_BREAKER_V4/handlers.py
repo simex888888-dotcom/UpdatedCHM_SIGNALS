@@ -3599,7 +3599,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
         max_trades = getattr(user, "max_trades_limit", 5)
         open_count = await db.db_count_open_trades(user.user_id)
-        if open_count >= max_trades:
+        if max_trades > 0 and open_count >= max_trades:
             await cb.answer(
                 f"⛔ Лимит сделок достигнут ({open_count}/{max_trades}). "
                 f"Дождись закрытия открытых позиций.",
@@ -3622,6 +3622,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 tp2=float(trade.get("tp2") or 0),
                 tp3=float(trade.get("tp3") or 0),
             )
+            # Сохраняем pos_idx для корректного BE-мониторинга
+            if result.get("ok"):
+                await db.db_update_trade_pos_idx(trade_id, result.get("pos_idx", 0))
             text = bybit_trader.format_trade_result(
                 result,
                 trade["direction"],
@@ -4069,14 +4072,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         return NL.join(lines)
 
     async def _load_bybit_dashboard(api_key: str, api_secret: str):
-        """Параллельно загружает все данные для панели."""
+        """Загружает все данные за одно подключение к Bybit (быстро)."""
         import bybit_trader as _bt
-        positions, orders, summary = await asyncio.gather(
-            _bt.get_positions(api_key, api_secret),
-            _bt.get_open_orders(api_key, api_secret),
-            _bt.get_account_summary(api_key, api_secret),
-        )
-        return positions, orders, summary
+        return await _bt.get_dashboard(api_key, api_secret)
 
     @dp.callback_query(F.data == "bybit_pos")
     async def bybit_positions(cb: CallbackQuery):
