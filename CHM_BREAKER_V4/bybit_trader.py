@@ -13,8 +13,9 @@ from typing import Optional
 
 log = logging.getLogger("CHM.Bybit")
 
-MIN_NOTIONAL = 5.0   # Минимальный notional (USDT) — меньше Bybit не даст
-MAX_LEVERAGE  = 50   # Ограничение плеча
+MIN_NOTIONAL  = 5.0    # Минимальный notional (USDT) — меньше Bybit не даст
+MAX_LEVERAGE  = 50    # Ограничение плеча
+TAKER_FEE     = 0.00060  # 0.06% комиссия маркет-ордера (opening + closing round-trip)
 
 
 # ── Конвертация символа ──────────────────────────────
@@ -200,14 +201,20 @@ def _place_trade_sync(
                      f"Нужен депозит от ${MIN_NOTIONAL / (risk_pct / 100):.0f} при риске {risk_pct}%."
         }
 
-    # Проверяем, хватит ли маржи (notional / leverage) на балансе
-    margin_required = (float(qty_str) * entry) / lev
-    if margin_required > balance * 0.95:
+    # Проверяем, хватит ли маржи с учётом комиссии маркет-ордера.
+    # Bybit 110007 = available balance < initial_margin + fees.
+    # Используем 85% баланса как потолок (резерв на комиссии и maintenance margin).
+    real_notional  = float(qty_str) * entry
+    initial_margin = real_notional / lev
+    fee_cost       = real_notional * TAKER_FEE * 2   # opening + closing round-trip
+    margin_required = initial_margin + fee_cost
+    if margin_required > balance * 0.85:
         return {
             "ok": False,
             "error": (
                 f"Недостаточно маржи для открытия позиции.\n"
-                f"Требуется: ${margin_required:.2f} USDT\n"
+                f"Требуется: ${margin_required:.2f} USDT "
+                f"(маржа ${initial_margin:.2f} + комиссия ~${fee_cost:.2f})\n"
                 f"Доступно:  ${balance:.2f} USDT\n"
                 f"Уменьши риск (сейчас {risk_pct}%) или пополни счёт."
             )
