@@ -619,10 +619,14 @@ async def db_count_open_trades(user_id: int, window_hours: int = 24) -> int:
 
 
 async def db_has_open_trade_for_symbol(user_id: int, symbol: str) -> bool:
-    """Возвращает True если у пользователя уже есть незакрытая сделка по данному символу."""
+    """
+    Возвращает True если у пользователя уже есть реально открытая позиция
+    на Bybit по данному символу (order_id != '' — значит ордер отправлен на биржу).
+    Записи без order_id — это сигналы до исполнения, не блокируют новые сделки.
+    """
     async with aiosqlite.connect(_db_path) as db:
         async with db.execute(
-            "SELECT 1 FROM trades WHERE user_id=? AND symbol=? AND result='' LIMIT 1",
+            "SELECT 1 FROM trades WHERE user_id=? AND symbol=? AND result='' AND order_id != '' LIMIT 1",
             (user_id, symbol),
         ) as cur:
             row = await cur.fetchone()
