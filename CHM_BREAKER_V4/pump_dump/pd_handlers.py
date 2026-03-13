@@ -48,8 +48,9 @@ def _kb_pd_main(subscribed: bool, threshold: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text=sub_btn, callback_data=sub_cb)],
         [InlineKeyboardButton(text=f"🎚 Порог уверенности: {threshold}%",
                               callback_data="pd_threshold_menu")],
-        [InlineKeyboardButton(text="📊 Моя статистика сигналов",   callback_data="pd_stats")],
-        [InlineKeyboardButton(text="🏆 Топ-5 монет сейчас",        callback_data="pd_top")],
+        [InlineKeyboardButton(text="📊 Статистика сигналов",       callback_data="pd_stats"),
+         InlineKeyboardButton(text="📜 История сигналов",          callback_data="pd_history")],
+        [InlineKeyboardButton(text="🏆 Топ-10 монет сейчас",       callback_data="pd_top")],
         [InlineKeyboardButton(text="💸 Аномальный Funding Rate",   callback_data="pd_funding")],
         [InlineKeyboardButton(text="🔄 Статус системы",            callback_data="pd_status")],
         [InlineKeyboardButton(text="◀️ Главное меню",              callback_data="back_main")],
@@ -232,15 +233,21 @@ def register_pd_handlers(dp: Dispatcher, bot: Bot, runner_getter):
                 pass
             await cb.answer()
             return
-        top5 = sorted(_current_scores.items(), key=lambda x: x[1], reverse=True)[:5]
-        NL   = "\n"
-        lines = ["🏆 <b>Топ-5 монет по текущему score</b>" + NL]
-        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"]
-        for i, (sym, score) in enumerate(top5):
-            lines.append(f"{medals[i]} <b>{sym}</b> — {score:.0f}%")
+
+        top10 = sorted(_current_scores.items(), key=lambda x: x[1], reverse=True)[:10]
+        NL    = "\n"
+        lines = [f"🏆 <b>Топ-10 монет по активности</b>  ({len(_current_scores)} монет)", ""]
+        medals = ["🥇","🥈","🥉","4️⃣","5️⃣","6️⃣","7️⃣","8️⃣","9️⃣","🔟"]
+
+        for i, (sym, score) in enumerate(top10):
+            bar = "█" * int(score / 10) + "░" * (10 - int(score / 10))
+            emoji = "🔥" if score >= 60 else ("⚡" if score >= 40 else "📊")
+            lines.append(f"{medals[i]} {emoji} <b>{sym}</b>\n    {bar} {score:.0f}%")
+
+        lines += ["", f"⏱ Обновлено: {time.strftime('%H:%M:%S')}"]
         try:
             await cb.message.edit_text(NL.join(lines), parse_mode="HTML",
-                                       reply_markup=_kb_back_pd())
+                                       reply_markup=_kb_loading_pd("pd_top"))
         except Exception:
             pass
         await cb.answer()
@@ -274,30 +281,79 @@ def register_pd_handlers(dp: Dispatcher, bot: Bot, runner_getter):
             await cb.message.answer(text, parse_mode="HTML", reply_markup=_kb_back_pd())
         await cb.answer()
 
+    # ── История сигналов ──────────────────────────────────────────────────────
+    @dp.callback_query(F.data == "pd_history")
+    async def cb_pd_history(cb: CallbackQuery):
+        signals = await db.db_pd_recent_signals(limit=10)
+        NL = "\n"
+        if not signals:
+            text = "📜 <b>История сигналов</b>" + NL + NL + "Сигналов пока нет."
+        else:
+            lines = ["📜 <b>Последние 10 сигналов</b>" + NL]
+            for s in signals:
+                direction_emoji = "📈" if s.get("direction") == "PUMP" else "📉"
+                correct = s.get("correct")
+                outcome_emoji = "✅" if correct == 1 else ("❌" if correct == 0 else "⏳")
+                ts = s.get("created_at", 0)
+                ts_str = time.strftime("%d.%m %H:%M", time.localtime(ts)) if ts else "?"
+                lines.append(
+                    f"{direction_emoji} <b>{s['symbol']}</b>  {s['score']:.0f}%  "
+                    f"{outcome_emoji}  <i>{ts_str}</i>"
+                )
+            text = NL.join(lines)
+        try:
+            await cb.message.edit_text(text, parse_mode="HTML", reply_markup=_kb_back_pd())
+        except Exception:
+            pass
+        await cb.answer()
+
     # ── Статус системы ────────────────────────────────────────────────────────
     @dp.callback_query(F.data == "pd_status")
     async def cb_pd_status(cb: CallbackQuery):
         runner = runner_getter()
         from pump_dump.ml_model import get_model
+        from pump_dump.signal_aggregator import _level_spam
         ml     = get_model()
         NL     = "\n"
         if runner:
             n_syms  = len(runner.monitor.get_symbols())
             q_size  = runner.queue.qsize()
             running = runner.is_running()
+            bg_tasks = len(runner._bg_tasks)
         else:
-            n_syms = q_size = 0
+            n_syms = q_size = bg_tasks = 0
             running = False
+
+        # Посчитать недавние сигналы всех уровней
+        now = time.time()
+        recent_l3 = sum(1 for ts in _level_spam.get(3, {}).values() if now - ts < 3600)
+        recent_l2 = sum(1 for ts in _level_spam.get(2, {}).values() if now - ts < 3600)
+        recent_l1 = sum(1 for ts in _level_spam.get(1, {}).values() if now - ts < 3600)
+
+        stats = await db.db_pd_stats()
+
+        ml_text = (
+            f"✅ precision={ml._precision:.2f}"
+            if ml.is_ready() else "⏳ не обучена"
+        )
 
         text = (
             "🔄 <b>Статус системы Памп/Дамп</b>" + NL + NL +
-            f"WS монитор:   {'🟢 активен' if running else '🔴 остановлен'}" + NL +
-            f"Монет:        <b>{n_syms}</b>" + NL +
-            f"Очередь:      <b>{q_size}</b> событий" + NL +
-            f"ML модель:    {'✅ готова, precision=' + f'{ml._precision:.2f}' if ml.is_ready() else '⏳ обучается (нет данных)'}" + NL
+            f"WS монитор:    {'🟢 активен' if running else '🔴 остановлен'}" + NL +
+            f"Монет:         <b>{n_syms}</b>" + NL +
+            f"Очередь:       <b>{q_size}</b> событий" + NL +
+            f"Фон. задачи:   <b>{bg_tasks}</b>" + NL + NL +
+            f"🔔 <b>Сигналы за последний час:</b>" + NL +
+            f"  Уровень 3:   <b>{recent_l3}</b> финальных" + NL +
+            f"  Уровень 2:   <b>{recent_l2}</b> наблюдений" + NL +
+            f"  Уровень 1:   <b>{recent_l1}</b> предупреждений" + NL + NL +
+            f"📊 <b>За 24ч:</b> {stats['day_total']} сигн, "
+            f"{stats['day_prec']:.0f}% точность" + NL +
+            f"🤖 ML:         {ml_text}" + NL
         )
         try:
-            await cb.message.edit_text(text, parse_mode="HTML", reply_markup=_kb_back_pd())
+            await cb.message.edit_text(text, parse_mode="HTML",
+                                       reply_markup=_kb_loading_pd("pd_status"))
         except Exception:
             pass
         await cb.answer()

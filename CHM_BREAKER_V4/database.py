@@ -836,6 +836,25 @@ async def db_pd_stats() -> dict:
     }
 
 
+async def db_pd_recent_signals(limit: int = 10) -> list[dict]:
+    """Последние N сигналов с исходами для истории."""
+    async with aiosqlite.connect(_db_path) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT s.id, s.symbol, s.direction, s.score, s.price_signal AS price,
+                   s.ts AS created_at, o.correct
+            FROM pd_signals s
+            LEFT JOIN pd_outcomes o ON o.signal_id = s.id
+            ORDER BY s.ts DESC
+            LIMIT ?
+            """,
+            (limit,)
+        ) as cur:
+            rows = await cur.fetchall()
+    return [dict(r) for r in rows]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  ПРОМОКОДЫ
 # ═══════════════════════════════════════════════════════════════════════════════

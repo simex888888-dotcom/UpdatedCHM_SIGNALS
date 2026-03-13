@@ -70,33 +70,41 @@ def _rsi(close: pd.Series, period: int = 14) -> float:
     return float(rsi.iloc[-1]) if not rsi.empty else 50.0
 
 
+def _rsi_series(close: pd.Series, period: int = 14) -> np.ndarray:
+    """Вычисляет полную серию RSI за O(n), без повторного перебора."""
+    delta = close.diff()
+    gain  = delta.clip(lower=0).ewm(com=period - 1, adjust=False).mean()
+    loss  = (-delta.clip(upper=0)).ewm(com=period - 1, adjust=False).mean()
+    rs    = gain / loss.replace(0, np.nan)
+    rsi   = 100 - 100 / (1 + rs)
+    return rsi.values
+
+
 def _rsi_divergence(close: pd.Series, rsi_now: float,
                     df: pd.DataFrame) -> tuple[bool, Optional[str]]:
     """
     Бычья: цена делает новый минимум, RSI — более высокий минимум.
     Медвежья: цена делает новый максимум, RSI — более низкий максимум.
+
+    O(n) — RSI вычисляется один раз для всей серии.
     """
     if len(df) < 20:
         return False, None
 
     n = min(len(close), 20)
-    prices = close.values[-n:]
+    prices    = close.values[-n:]
+    rsi_slice = _rsi_series(close)[-n:]   # одноразовый O(n) расчёт
 
-    # Вычисляем RSI на окне
-    rsi_series = []
-    for i in range(n):
-        sl = close.iloc[-(n-i):]
-        rsi_series.append(_rsi(sl))
+    p_min2_idx = n - 1
 
     # Ищем минимумы (бычья дивергенция)
     p_min1_idx = int(np.argmin(prices[:-3]))
-    p_min2_idx = n - 1
-    if prices[p_min2_idx] < prices[p_min1_idx] and rsi_series[-1] > rsi_series[p_min1_idx]:
+    if prices[p_min2_idx] < prices[p_min1_idx] and rsi_slice[-1] > rsi_slice[p_min1_idx]:
         return True, "PUMP"
 
     # Ищем максимумы (медвежья дивергенция)
     p_max1_idx = int(np.argmax(prices[:-3]))
-    if prices[p_min2_idx] > prices[p_max1_idx] and rsi_series[-1] < rsi_series[p_max1_idx]:
+    if prices[p_min2_idx] > prices[p_max1_idx] and rsi_slice[-1] < rsi_slice[p_max1_idx]:
         return True, "DUMP"
 
     return False, None
