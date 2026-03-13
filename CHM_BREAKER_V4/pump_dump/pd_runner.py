@@ -19,12 +19,11 @@ from pump_dump import (
     orderbook_analyzer as orderbook,
     hidden_signals,
     indicators,
-    signal_aggregator  as aggregator,
 )
-from pump_dump.market_monitor  import MarketMonitor, MarketEvent
-from pump_dump.ml_model        import get_model, build_feature_vector
-from pump_dump.pd_handlers     import set_current_scores
-from pump_dump.signal_aggregator import format_alert
+from pump_dump.market_monitor    import MarketMonitor, MarketEvent
+from pump_dump.ml_model          import get_model, build_feature_vector
+from pump_dump.pd_handlers       import set_current_scores
+from pump_dump.signal_aggregator import format_alert, analyze_levels
 from watermark import wm_inject
 
 log = logging.getLogger("CHM.PD.Runner")
@@ -41,6 +40,7 @@ class PDRunner:
         self.monitor = MarketMonitor(self.queue)
         self._running = False
         self._scores: dict[str, float] = {}
+        self._bg_tasks: set = set()   # держим ссылки на фоновые задачи
 
     def is_running(self) -> bool:
         return self._running
@@ -99,14 +99,59 @@ class PDRunner:
         self._scores[sym] = round(raw_score, 1)
         set_current_scores({sym: self._scores[sym]})
 
-        # Агрегируем для принятия решения об отправке
-        signal = aggregator.aggregate(sym, event.last_price, an, ob, hs, ind)
-        if signal is None:
-            return
+        # ── Многоуровневые предупреждения (1, 2, 3) ──────────────────────────
+        total_vol = (event.trades_buy_vol or 0) + (event.trades_sell_vol or 0)
+        buy_ratio = (event.trades_buy_vol / total_vol) if total_vol > 0 else 0.5
 
-        log.info(f"🎯 PD сигнал: {sym} {signal.direction} {signal.score:.0f}%")
-        await self._broadcast_signal(signal)
-        await self._save_signal(signal, features)
+        level_alerts = analyze_levels(
+            sym, event.last_price, an, ob, hs, ind, buy_ratio
+        )
+        for level, text, payload in level_alerts:
+            if level == 3:
+                log.info(f"🎯 PD уровень 3 (ФИНАЛЬНЫЙ): {sym} {raw_score:.0f}%")
+                # payload уже сформирован внутри analyze_levels — сохраняем напрямую
+                if payload is not None:
+                    await self._save_signal(payload, features)
+            elif level == 2:
+                log.info(f"⚠️ PD уровень 2 (НАБЛЮДЕНИЕ): {sym}")
+            else:
+                log.debug(f"👀 PD уровень 1 (ВНИМАНИЕ): {sym}")
+            await self._broadcast_level(level, text, raw_score)
+
+    # ── Рассылка по уровню ───────────────────────────────────────────────────
+
+    async def _broadcast_level(self, level: int, text: str, score: float):
+        """Рассылает предупреждение заданного уровня подписанным пользователям.
+
+        Уровень 1 — ранние предупреждения, получают все подписчики (threshold<=100).
+        Уровень 2 — наблюдение, получают подписчики с threshold<=60.
+        Уровень 3 — финальный сигнал, только пользователи у которых threshold<=score.
+
+        db_pd_subscribers(min_threshold=X) → WHERE pd_threshold <= X
+        """
+        if level == 3:
+            threshold = int(score)
+        elif level == 2:
+            threshold = 60   # пользователи с порогом <= 60% получают уровень 2
+        else:
+            threshold = 100  # все подписчики получают уровень 1
+        users = await db.db_pd_subscribers(min_threshold=threshold)
+        if not users:
+            return
+        for uid in users:
+            try:
+                wm_text = wm_inject(text, uid)
+                await self.bot.send_message(
+                    uid, wm_text,
+                    parse_mode="HTML",
+                    protect_content=True,
+                    disable_web_page_preview=True,
+                )
+                await asyncio.sleep(0.05)
+            except TelegramForbiddenError:
+                await db.db_pd_upsert_user(uid, subscribed=False)
+            except Exception as e:
+                log.debug(f"PD broadcast level{level} {uid}: {e}")
 
     # ── Рассылка сигнала ─────────────────────────────────────────────────────
 
@@ -144,11 +189,13 @@ class PDRunner:
             price=signal.price,
         )
         # Через 15 мин бэкфиллим исход
-        asyncio.get_running_loop().call_later(
-            900, lambda: asyncio.create_task(
+        def _schedule_outcome():
+            task = asyncio.create_task(
                 self._fill_outcome(sig_id, signal.symbol, signal.price, signal.direction)
             )
-        )
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
+        asyncio.get_running_loop().call_later(900, _schedule_outcome)
 
     async def _fill_outcome(self, sig_id: int, symbol: str, price_at: float, direction: str):
         """Через 15 минут проверяем, было ли движение >= 3%."""
@@ -214,11 +261,13 @@ class PDRunner:
             try:
                 pending = await db.db_pd_pending_outcomes()
                 for row in pending:
-                    asyncio.create_task(
+                    task = asyncio.create_task(
                         self._fill_outcome(
                             row["id"], row["symbol"],
                             row["price_signal"], row["direction"]
                         )
                     )
+                    self._bg_tasks.add(task)
+                    task.add_done_callback(self._bg_tasks.discard)
             except Exception as e:
                 log.debug(f"PD outcome loop: {e}")

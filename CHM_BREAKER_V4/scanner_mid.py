@@ -281,6 +281,7 @@ class MidScanner:
         # Глобальный тренд
         self._global_trend:     dict  = {}
         self._trend_updated_at: float = 0
+
         self._trend_ttl:        int   = 3600
 
         # Фундаментальный контекст (обновляется раз в цикл)
@@ -454,6 +455,15 @@ class MidScanner:
         show_trade_btn  = False
 
         if auto_trade and api_key and api_secret:
+            # Не открываем вторую сделку по той же монете
+            if await db.db_has_open_trade_for_symbol(user.user_id, sig.symbol):
+                log.info(
+                    f"auto_trade skip duplicate: {sig.symbol} уже открыта у uid={user.user_id}"
+                )
+                show_trade_btn = False
+                auto_trade = False  # сигнал покажем, сделку пропустим
+
+        if auto_trade and api_key and api_secret:
             max_trades = getattr(user, "max_trades_limit", 5)
             open_count = await db.db_count_open_trades(user.user_id)
             # max_trades=0 означает «без лимита»
@@ -482,6 +492,13 @@ class MidScanner:
                     # Сохраняем pos_idx для корректного BE-мониторинга
                     if result.get("ok"):
                         await db.db_update_trade_pos_idx(trade_id, result.get("pos_idx", 0))
+                    # Сохраняем order_id и pos_idx — критично для BE-монитора
+                    if result.get("ok"):
+                        await db.db_update_trade_bybit(
+                            trade_id,
+                            result.get("order_id", ""),
+                            result.get("pos_idx", 0),
+                        )
                     trade_msg = bybit_trader.format_trade_result(
                         result, sig.direction, sig.symbol,
                         sig.entry, sig.sl, tp1, risk_pct, leverage,
@@ -748,13 +765,14 @@ class MidScanner:
 
     @staticmethod
     def _trade_result_from_exit(trade: dict, exit_price: float) -> tuple[str, float]:
-        """Определяет результат сделки (TP1/TP2/TP3/SL) по цене выхода."""
+        """Определяет результат сделки (TP1/TP2/TP3/SL/BE) по цене выхода."""
         direction = trade.get("direction", "LONG")
         entry     = float(trade.get("entry", 0))
         sl        = float(trade.get("sl",    0))
         tp1       = float(trade.get("tp1",   0))
         tp2       = float(trade.get("tp2",   0))
         tp3       = float(trade.get("tp3",   0))
+        be_set    = bool(trade.get("be_set", 0))
         risk      = abs(entry - sl)
         if risk <= 0 or entry <= 0:
             return "CLOSED", 0.0
@@ -766,6 +784,8 @@ class MidScanner:
                 return "TP2", round((tp2 - entry) / risk, 2)
             if tp1 > 0 and exit_price >= tp1 * (1 - tol):
                 return "TP1", round((tp1 - entry) / risk, 2)
+            if be_set and exit_price >= entry * (1 - tol):
+                return "BE", 0.0
             return "SL",  round((entry - exit_price) / risk, 2)
         else:
             if tp3 > 0 and exit_price <= tp3 * (1 + tol):
@@ -774,6 +794,8 @@ class MidScanner:
                 return "TP2", round((entry - tp2) / risk, 2)
             if tp1 > 0 and exit_price <= tp1 * (1 + tol):
                 return "TP1", round((entry - tp1) / risk, 2)
+            if be_set and exit_price <= entry * (1 + tol):
+                return "BE", 0.0
             return "SL",  round((exit_price - entry) / risk, 2)
 
     async def _check_breakevens(self):
@@ -805,26 +827,49 @@ class MidScanner:
                     # ложного срабатывания сразу после создания сделки
                     if time.time() - float(trade.get("created_at", 0)) < 60:
                         continue
-                    # Запрашиваем историю закрытых позиций по символу
-                    try:
-                        closed = await bybit_trader.get_closed_pnl(
-                            api_key, api_secret, trade["symbol"]
-                        )
-                    except Exception:
-                        closed = []
 
-                    # Ищем запись, которая соответствует нашей сделке:
-                    # side совпадает, закрыта позже создания
+                    # Запрашиваем историю закрытых позиций.
+                    # Bybit иногда задерживает появление записи — делаем 2 попытки.
                     expected_side = "Buy" if direction == "LONG" else "Sell"
                     created_ms    = float(trade.get("created_at", 0)) * 1000
                     matched_exit  = None
-                    for rec in closed:
-                        if rec.get("side") != expected_side:
-                            continue
-                        if float(rec.get("updatedTime", 0)) < created_ms:
-                            continue
-                        matched_exit = float(rec.get("avgExitPrice", 0))
-                        break
+
+                    # Пробуем получить цену выхода из истории закрытых позиций.
+                    # Bybit задерживает появление записи — 3 попытки с паузами.
+                    for _attempt in range(3):
+                        try:
+                            closed = await bybit_trader.get_closed_pnl(
+                                api_key, api_secret, trade["symbol"]
+                            )
+                        except Exception:
+                            closed = []
+
+                        for rec in closed:
+                            # side в get_closed_pnl = сторона открытия позиции
+                            if rec.get("side") != expected_side:
+                                continue
+                            if float(rec.get("updatedTime", 0)) < created_ms:
+                                continue
+                            exit_val = float(rec.get("avgExitPrice") or 0)
+                            if exit_val > 0:
+                                matched_exit = exit_val
+                            break
+
+                        if matched_exit:
+                            break
+                        # Запись ещё не появилась — ждём и повторяем
+                        wait_secs = (3, 5, 0)[_attempt]
+                        if wait_secs:
+                            await asyncio.sleep(wait_secs)
+
+                    # Последний резерв: история исполнений (executions)
+                    if not matched_exit:
+                        try:
+                            matched_exit = await bybit_trader.get_execution_exit_price(
+                                api_key, api_secret, trade["symbol"], created_ms
+                            )
+                        except Exception:
+                            pass
 
                     if matched_exit and matched_exit > 0:
                         result_str, result_rr = self._trade_result_from_exit(
@@ -849,21 +894,34 @@ class MidScanner:
                         trade["trade_id"], result_str, result_rr
                     )
                     sym_label = trade["symbol"].replace("-USDT-SWAP", "").replace("-USDT", "")
-                    emoji = "✅" if result_str.startswith("TP") else ("🛑" if result_str == "SL" else "📋")
+                    emoji = "✅" if result_str.startswith("TP") else ("🛑" if result_str == "SL" else ("♻️" if result_str == "BE" else "📋"))
                     rr_text = f"  R:R {result_rr:+.2f}" if result_rr != 0 else ""
+                    if matched_exit:
+                        exit_display = f"<code>{matched_exit}</code>"
+                    else:
+                        # Не удалось получить точную цену — показываем нейтральный текст
+                        exit_display = "<i>по рыночной цене</i>"
+                    # Запрашиваем текущий баланс после закрытия
+                    balance_line = ""
+                    try:
+                        new_balance = await bybit_trader.get_balance(api_key, api_secret)
+                        balance_line = f"\n💼 Баланс: <code>${new_balance:.2f} USDT</code>"
+                    except Exception:
+                        pass
                     try:
                         await self.bot.send_message(
                             user.user_id,
                             f"{emoji} <b>Сделка закрыта: {result_str}</b>{rr_text}\n\n"
                             f"💎 {sym_label}  |  {direction}\n"
                             f"💰 Вход: <code>{entry}</code>\n"
-                            f"📤 Выход: <code>{matched_exit or '—'}</code>",
+                            f"📤 Выход: {exit_display}"
+                            f"{balance_line}",
                             parse_mode="HTML",
                         )
                     except Exception:
                         pass
                     log.info(f"Trade closed: {bb_sym} {direction} → {result_str}{rr_text} "
-                             f"(uid={user.user_id})")
+                             f"exit={matched_exit} (uid={user.user_id})")
                     continue
 
                 # ── Позиция ещё открыта: проверяем безубыток ──────────────

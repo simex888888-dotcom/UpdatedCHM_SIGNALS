@@ -232,6 +232,10 @@ async def main():
             log.info(f"🔄 Обнаружено обновление кода ({saved_hash} → {current_hash}), рассылка...")
             await notify_restart(bot, config.ADMIN_IDS)
             await database.db_kv_set("bot_code_hash", current_hash)
+            # Немедленно пушим хэш в Turso, чтобы следующий рестарт
+            # не считал код «новым» из-за 60-секундной задержки sync_loop.
+            if turso_sync.is_configured():
+                await turso_sync.turso_push(config.DB_PATH)
         else:
             log.info("♻️ Рестарт без изменений кода — рассылка пропущена.")
 

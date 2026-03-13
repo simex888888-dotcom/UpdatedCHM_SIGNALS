@@ -169,8 +169,9 @@ def calculate_levels(analysis: dict, direction: str, cfg) -> Optional[dict]:
     if atr > 0 and risk < atr * 0.8:         # было 1.5
         return None
 
-    # TP1 = FVG zone или 1R
+    # TP1 = FVG zone или fallback
     # Используем FVG только если он ПОЛНОСТЬЮ за пределами зоны входа
+    _MIN_TP1_RR = 1.0  # TP1 минимум 1.0R от entry_mid
     fvg_obj = fvg.get("bull_fvg") if direction == "LONG" else fvg.get("bear_fvg")
     if fvg_obj:
         if direction == "LONG":
@@ -188,12 +189,18 @@ def calculate_levels(analysis: dict, direction: str, cfg) -> Optional[dict]:
     else:
         tp1 = None
 
-    # Fallback: считаем от entry_high/entry_low (худший вход в зону)
+    # Fallback: минимум 1.5R от entry_mid
     if tp1 is None:
         if direction == "LONG":
-            tp1 = entry_high + risk * cfg.TP1_RATIO * 3
+            tp1 = entry_mid + risk * 1.5
         else:
-            tp1 = entry_low - risk * cfg.TP1_RATIO * 3
+            tp1 = entry_mid - risk * 1.5
+
+    # Гарантируем минимум _MIN_TP1_RR от entry_mid независимо от источника TP1
+    if direction == "LONG":
+        tp1 = max(tp1, entry_mid + risk * _MIN_TP1_RR)
+    else:
+        tp1 = min(tp1, entry_mid - risk * _MIN_TP1_RR)
 
     # TP2 = swing high/low (должен быть за пределами зоны входа)
     sh = s.get("last_swing_high")
@@ -220,19 +227,17 @@ def calculate_levels(analysis: dict, direction: str, cfg) -> Optional[dict]:
         tp3 = entry_high + risk * 4.0 if direction == "LONG" \
               else entry_low - risk * 4.0
 
-    # Проверка порядка TP — база от worst-case входа (entry_high/entry_low)
+    # Проверка порядка TP — база от entry_mid с гарантированным расстоянием
     if direction == "LONG":
-        # Все TP должны быть ВЫШЕ entry_high (верхней границы зоны входа)
         if not (entry_high < tp1 <= tp2 <= tp3):
-            tp2 = entry_high + risk * 2.5
-            tp3 = entry_high + risk * 4.0
-            tp1 = entry_high + risk * 1.2
+            tp1 = entry_mid + risk * 1.2
+            tp2 = entry_mid + risk * 2.5
+            tp3 = entry_mid + risk * 4.0
     else:
-        # Все TP должны быть НИЖЕ entry_low (нижней границы зоны входа)
         if not (entry_low > tp1 >= tp2 >= tp3):
-            tp2 = entry_low - risk * 2.5
-            tp3 = entry_low - risk * 4.0
-            tp1 = entry_low - risk * 1.2
+            tp1 = entry_mid - risk * 1.2
+            tp2 = entry_mid - risk * 2.5
+            tp3 = entry_mid - risk * 4.0
 
     rr = abs(tp2 - entry_mid) / risk if risk > 0 else 0.0
     # Фильтр RR применяется единожды в build_smc_signal, не здесь
