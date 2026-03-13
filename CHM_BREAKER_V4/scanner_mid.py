@@ -873,13 +873,21 @@ class MidScanner:
                     emoji = "✅" if result_str.startswith("TP") else ("🛑" if result_str == "SL" else ("♻️" if result_str == "BE" else "📋"))
                     rr_text = f"  R:R {result_rr:+.2f}" if result_rr != 0 else ""
                     exit_display = f"<code>{matched_exit}</code>" if matched_exit else "не определена (закрыта вручную или через SL биржи)"
+                    # Запрашиваем текущий баланс после закрытия
+                    balance_line = ""
+                    try:
+                        new_balance = await bybit_trader.get_balance(api_key, api_secret)
+                        balance_line = f"\n💼 Баланс: <code>${new_balance:.2f} USDT</code>"
+                    except Exception:
+                        pass
                     try:
                         await self.bot.send_message(
                             user.user_id,
                             f"{emoji} <b>Сделка закрыта: {result_str}</b>{rr_text}\n\n"
                             f"💎 {sym_label}  |  {direction}\n"
                             f"💰 Вход: <code>{entry}</code>\n"
-                            f"📤 Выход: {exit_display}",
+                            f"📤 Выход: {exit_display}"
+                            f"{balance_line}",
                             parse_mode="HTML",
                         )
                     except Exception:
