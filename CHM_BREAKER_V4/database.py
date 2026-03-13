@@ -618,6 +618,50 @@ async def db_count_open_trades(user_id: int, window_hours: int = 24) -> int:
             return row[0] if row else 0
 
 
+async def db_get_auto_stats(user_id: int) -> dict:
+    """
+    Статистика авто-трейдинга пользователя за один SQL-запрос.
+    Учитываются только реальные Bybit-сделки (order_id != '').
+
+    Возвращает:
+        trades_24h  — открыто сегодня (за 24ч)
+        open_now    — сейчас открыто на бирже
+        tp1/tp2/tp3 — закрыто на каждом TP
+        sl          — закрыто по стопу
+        total_rr    — суммарный P&L в R
+    """
+    since_24h = time.time() - 86400
+    async with aiosqlite.connect(_db_path) as db:
+        async with db.execute(
+            """
+            SELECT
+                COUNT(CASE WHEN created_at >= ? AND order_id != '' THEN 1 END),
+                COUNT(CASE WHEN result = ''  AND order_id != '' THEN 1 END),
+                COUNT(CASE WHEN result = 'TP1' THEN 1 END),
+                COUNT(CASE WHEN result = 'TP2' THEN 1 END),
+                COUNT(CASE WHEN result = 'TP3' THEN 1 END),
+                COUNT(CASE WHEN result = 'SL'  THEN 1 END),
+                COALESCE(SUM(CASE WHEN result NOT IN ('','SKIP') THEN result_rr END), 0)
+            FROM trades
+            WHERE user_id = ? AND order_id != ''
+            """,
+            (since_24h, user_id),
+        ) as cur:
+            row = await cur.fetchone()
+    if not row:
+        return {"trades_24h": 0, "open_now": 0,
+                "tp1": 0, "tp2": 0, "tp3": 0, "sl": 0, "total_rr": 0.0}
+    return {
+        "trades_24h": row[0] or 0,
+        "open_now":   row[1] or 0,
+        "tp1":        row[2] or 0,
+        "tp2":        row[3] or 0,
+        "tp3":        row[4] or 0,
+        "sl":         row[5] or 0,
+        "total_rr":   float(row[6] or 0),
+    }
+
+
 async def db_has_open_trade_for_symbol(user_id: int, symbol: str) -> bool:
     """
     Возвращает True если у пользователя уже есть реально открытая позиция

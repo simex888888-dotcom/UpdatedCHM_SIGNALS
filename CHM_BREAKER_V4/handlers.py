@@ -3315,7 +3315,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     # ─── АВТО-ТРЕЙДИНГ BYBIT ──────────────────────────
 
-    def _auto_trade_text(user: UserSettings) -> str:
+    async def _auto_trade_text(user: UserSettings) -> str:
         at       = getattr(user, "auto_trade",        False)
         mode     = getattr(user, "auto_trade_mode",   "confirm")
         risk     = getattr(user, "trade_risk_pct",    1.0)
@@ -3324,17 +3324,55 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         has_key  = bool(getattr(user, "bybit_api_key", ""))
         NL = "\n"
         mode_label = "👆 С подтверждением (кнопка)" if mode == "confirm" else "🤖 Авто (без кнопки)"
-        return (
+        limit_label = "∞ без лимита" if max_tr == 0 else str(max_tr)
+
+        # Загружаем статистику из БД (только если есть API ключи)
+        stats = await db.db_get_auto_stats(user.user_id) if has_key else None
+
+        text = (
             "💹 <b>Авто-трейдинг Bybit</b>" + NL + NL +
             "Статус: " + ("🟢 <b>Включён</b>" if at else "🔴 <b>Выключен</b>") + NL +
-            "Режим: <b>" + mode_label + "</b>" + NL +
-            "Риск: <b>" + str(risk) + "% от баланса</b>" + NL +
-            "Плечо: <b>x" + str(lev) + "</b>" + NL +
-            "Лимит сделок: <b>" + str(max_tr) + " за 24ч</b>" + NL +
-            "API: " + ("✅ <b>Подключено</b>" if has_key else "❌ <b>Не настроено</b>") + NL + NL +
+            "Режим:  <b>" + mode_label + "</b>" + NL +
+            "Риск:   <b>" + str(risk) + "% от баланса</b>" + NL +
+            "Плечо:  <b>x" + str(lev) + "</b>" + NL +
+            "Лимит:  <b>" + limit_label + " сделок/сутки</b>" + NL +
+            "API:    " + ("✅ <b>Подключено</b>" if has_key else "❌ <b>Не настроено</b>")
+        )
+
+        if stats:
+            used_24h   = stats["trades_24h"]
+            open_now   = stats["open_now"]
+            slots_left = (max_tr - open_now) if max_tr > 0 else "∞"
+            tp_total   = stats["tp1"] + stats["tp2"] + stats["tp3"]
+            sl_total   = stats["sl"]
+            closed_all = tp_total + sl_total
+            winrate    = int(tp_total / closed_all * 100) if closed_all > 0 else 0
+            rr         = stats["total_rr"]
+            rr_sign    = "+" if rr >= 0 else ""
+
+            text += (
+                NL + NL +
+                "━━━ 📊 Статистика авто-сделок ━━━" + NL +
+                f"Сегодня открыто: <b>{used_24h}</b>" +
+                (f" / {max_tr}" if max_tr > 0 else "") +
+                f"  |  Сейчас открыто: <b>{open_now}</b>" +
+                (f"  (слотов: {slots_left})" if max_tr > 0 else "") + NL +
+                NL +
+                "Закрытые позиции:" + NL +
+                f"  ✅ TP1: <b>{stats['tp1']}</b>  "
+                f"🎯 TP2: <b>{stats['tp2']}</b>  "
+                f"💎 TP3: <b>{stats['tp3']}</b>" + NL +
+                f"  ❌ Стоп-лосс: <b>{sl_total}</b>" +
+                (f"  |  Win: <b>{winrate}%</b> ({tp_total}/{closed_all})" if closed_all > 0 else "") + NL +
+                f"  💰 Итого P&L: <b>{rr_sign}{rr:.2f}R</b>"
+            )
+
+        text += (
+            NL + NL +
             "⚠️ <i>Используй только собственные API-ключи.\n"
             "Разрешение: только Contract Trade. Без Withdraw!</i>"
         )
+        return text
 
     @dp.callback_query(F.data == "auto_trade_menu")
     async def auto_trade_menu(cb: CallbackQuery):
@@ -3343,7 +3381,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         has, reason = user.check_access()
         if not has:
             await cb.message.answer("❌ Нет доступа. Требуется активная подписка."); return
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data == "toggle_auto_trade")
     async def toggle_auto_trade(cb: CallbackQuery):
@@ -3356,7 +3394,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.message.answer("⚠️ Сначала настрой API ключи!\n\nПерейди: 💹 Авто-трейдинг → 🔑 Настроить Bybit API"); return
         user.auto_trade = not user.auto_trade
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.in_({"set_at_mode_confirm", "set_at_mode_auto"}))
     async def set_at_mode(cb: CallbackQuery):
@@ -3364,7 +3402,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         user.auto_trade_mode = "confirm" if cb.data == "set_at_mode_confirm" else "auto"
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_risk_"))
     async def set_at_risk(cb: CallbackQuery):
@@ -3375,7 +3413,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         except ValueError:
             return
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_lev_"))
     async def set_at_lev(cb: CallbackQuery):
@@ -3386,7 +3424,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         except ValueError:
             return
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_maxtr_"))
     async def set_at_maxtr(cb: CallbackQuery, state: FSMContext):
@@ -3407,7 +3445,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         except ValueError:
             return
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.message(MaxTradesState.waiting)
     async def set_at_maxtr_custom_input(msg: Message, state: FSMContext):
@@ -3537,7 +3575,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.bybit_api_secret = ""
         user.auto_trade       = False
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("exec_trade_"))
     async def exec_trade(cb: CallbackQuery):
