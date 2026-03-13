@@ -9,12 +9,77 @@ bybit_trader.py — Bybit Unified Account API
 import asyncio
 import logging
 import math
+import re
 from typing import Optional
 
 log = logging.getLogger("CHM.Bybit")
 
-MIN_NOTIONAL = 5.0   # Минимальный notional (USDT) — меньше Bybit не даст
-MAX_LEVERAGE  = 50   # Ограничение плеча
+MIN_NOTIONAL  = 5.0    # Минимальный notional (USDT) — меньше Bybit не даст
+MAX_LEVERAGE  = 50    # Ограничение плеча
+TAKER_FEE     = 0.00060  # 0.06% комиссия маркет-ордера (opening + closing round-trip)
+
+
+# ── Человекочитаемые ошибки Bybit ────────────────────────────────────────────
+
+_BYBIT_ERROR_MAP: dict[int, str] = {
+    10003: "Неверный API ключ. Проверьте ключ в настройках.",
+    10004: "API ключ истёк или был отозван. Перевыпустите ключ на Bybit.",
+    10005: "Недостаточно прав API. Включите разрешение «Contract Trading».",
+    10006: "Превышен лимит запросов к API. Попробуйте ещё раз через несколько секунд.",
+    10016: "Сервис Bybit временно недоступен. Повторите попытку позже.",
+    110001: "Ордер не найден.",
+    110003: "Цена ордера выходит за допустимый диапазон. Попробуйте повторно — цена могла измениться.",
+    110007: "Недостаточно свободного баланса для открытия позиции. Пополните счёт или уменьшите объём.",
+    110012: "Недостаточно доступного баланса. Освободите маржу или пополните счёт.",
+    110013: "Не удалось установить маржу — позиция не найдена.",
+    110014: "Превышен лимит позиций по данному инструменту.",
+    110015: "Позиция уже закрыта или не существует.",
+    110016: "Инструмент недоступен для торговли в данный момент.",
+    110017: "Ордер нарушает правило reduce-only (позиция уже меньше объёма ордера).",
+    110025: "Режим позиции уже установлен и не требует изменений.",
+    110040: "Превышен максимальный объём ордера для данного инструмента.",
+    110043: "Кредитное плечо уже установлено на данное значение.",
+    110055: "Торговля по данному инструменту приостановлена.",
+    110066: "Превышен лимит открытых ордеров.",
+    130021: "Объём ордера превышает размер открытой позиции.",
+    130125: "Несоответствие режима позиции (One-Way / Hedge). Выполняется автоматическая коррекция.",
+}
+
+
+def _humanize_bybit_error(raw: str) -> str:
+    """
+    Преобразует сырое сообщение об ошибке Bybit в понятный русскоязычный текст.
+    Убирает технические суффиксы (ErrCode, ErrTime) и маппит коды на описания.
+    """
+    if not raw:
+        return "Неизвестная ошибка Bybit."
+
+    # Ищем числовой код ошибки в скобках: (ErrCode: 110007) или retCode в тексте
+    code_match = re.search(r"\b(ErrCode|retCode)[:\s]+(\d+)", raw, re.IGNORECASE)
+    if not code_match:
+        # Попробуем найти просто число в скобках (некоторые SDK так форматируют)
+        code_match = re.search(r"\((\d{5,6})\)", raw)
+        code = int(code_match.group(1)) if code_match else None
+    else:
+        code = int(code_match.group(2))
+
+    if code and code in _BYBIT_ERROR_MAP:
+        return _BYBIT_ERROR_MAP[code]
+
+    # Убираем технические суффиксы и оставляем только смысловую часть
+    clean = re.sub(
+        r"\s*\(ErrCode:\s*\d+\)\s*|\s*\(ErrTime:\s*[\d:]+\)\s*",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    ).strip().rstrip(".")
+
+    # Если осталось пустое или слишком короткое — общая фраза
+    if len(clean) < 5:
+        return f"Ошибка Bybit (код {code})." if code else "Неизвестная ошибка Bybit."
+
+    # Первую букву — заглавная, добавляем точку
+    return clean[0].upper() + clean[1:] + ("." if not clean.endswith(".") else "")
 
 
 # ── Конвертация символа ──────────────────────────────
@@ -200,14 +265,20 @@ def _place_trade_sync(
                      f"Нужен депозит от ${MIN_NOTIONAL / (risk_pct / 100):.0f} при риске {risk_pct}%."
         }
 
-    # Проверяем, хватит ли маржи (notional / leverage) на балансе
-    margin_required = (float(qty_str) * entry) / lev
-    if margin_required > balance * 0.95:
+    # Проверяем, хватит ли маржи с учётом комиссии маркет-ордера.
+    # Bybit 110007 = available balance < initial_margin + fees.
+    # Используем 85% баланса как потолок (резерв на комиссии и maintenance margin).
+    real_notional  = float(qty_str) * entry
+    initial_margin = real_notional / lev
+    fee_cost       = real_notional * TAKER_FEE * 2   # opening + closing round-trip
+    margin_required = initial_margin + fee_cost
+    if margin_required > balance * 0.85:
         return {
             "ok": False,
             "error": (
                 f"Недостаточно маржи для открытия позиции.\n"
-                f"Требуется: ${margin_required:.2f} USDT\n"
+                f"Требуется: ${margin_required:.2f} USDT "
+                f"(маржа ${initial_margin:.2f} + комиссия ~${fee_cost:.2f})\n"
                 f"Доступно:  ${balance:.2f} USDT\n"
                 f"Уменьши риск (сейчас {risk_pct}%) или пополни счёт."
             )
@@ -584,6 +655,58 @@ async def get_account_summary(api_key: str, api_secret: str) -> dict:
     return await loop.run_in_executor(None, _get_account_summary_sync, api_key, api_secret)
 
 
+def _get_execution_exit_price_sync(
+    api_key: str, api_secret: str, symbol: str, created_ms: float
+) -> Optional[float]:
+    """
+    Ищет цену закрытия позиции в истории исполнений (executions).
+    Возвращает средневзвешенную цену всех исполнений по закрывающей стороне после created_ms.
+    """
+    session   = _get_session(api_key, api_secret)
+    bb_symbol = _to_bybit_symbol(symbol)
+    try:
+        resp = session.get_executions(
+            category="linear", symbol=bb_symbol, limit=50
+        )
+        if resp.get("retCode", -1) != 0:
+            return None
+        items = resp.get("result", {}).get("list", [])
+        # Фильтруем: только execType=Trade, после created_ms, closeOnDebit или reduceOnly
+        prices, qtys = [], []
+        for ex in items:
+            if float(ex.get("execTime", 0)) < created_ms:
+                continue
+            # Закрывающие исполнения имеют closedSize > 0 или execType = "BustTrade"
+            closed_size = float(ex.get("closedSize") or 0)
+            if closed_size <= 0:
+                continue
+            price = float(ex.get("execPrice") or 0)
+            if price > 0:
+                prices.append(price)
+                qtys.append(closed_size)
+        if not prices:
+            return None
+        # Средневзвешенная цена выхода
+        total_qty = sum(qtys)
+        if total_qty <= 0:
+            return None
+        vwap = sum(p * q for p, q in zip(prices, qtys)) / total_qty
+        return round(vwap, 8)
+    except Exception as e:
+        log.debug(f"get_execution_exit_price {symbol}: {e}")
+        return None
+
+
+async def get_execution_exit_price(
+    api_key: str, api_secret: str, symbol: str, created_ms: float
+) -> Optional[float]:
+    """Асинхронно ищет цену выхода через историю исполнений."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, _get_execution_exit_price_sync, api_key, api_secret, symbol, created_ms,
+    )
+
+
 def format_trade_result(result: dict, direction: str, symbol: str,
                         entry: float, sl: float, tp1: float,
                         risk_pct: float, leverage: int,
@@ -617,7 +740,9 @@ def format_trade_result(result: dict, direction: str, symbol: str,
             f"🆔 Order ID: <code>{order_id}</code>"
         )
     else:
+        raw_err = result.get("error", "")
+        reason  = _humanize_bybit_error(raw_err)
         return (
             f"❌ <b>Не удалось открыть сделку</b>\n\n"
-            f"Причина: {result.get('error', 'Неизвестная ошибка')}"
+            f"⚠️ {reason}"
         )

@@ -30,7 +30,7 @@ import turso_sync
 import wallet_service
 from polymarket_service import (
     PolymarketService, analyze_market, _get_short_key, get_condition_id,
-    _parse_prices, translate_market, translate_question,
+    _parse_prices, translate_market, translate_question, _cache_invalidate,
 )
 
 log = logging.getLogger("CHM.Poly")
@@ -47,6 +47,8 @@ class PolyState(StatesGroup):
     waiting_amount          = State()
     waiting_bet_size        = State()
     waiting_wallet_restore  = State()  # ввод адреса для восстановления кошелька
+    waiting_withdraw_addr   = State()  # ввод адреса получателя при выводе
+    waiting_withdraw_amt    = State()  # ввод суммы вывода
 
 
 # ─── Хелперы ──────────────────────────────────────────────────────────────────
@@ -106,6 +108,8 @@ def _market_card(market: dict, analysis: dict) -> str:
     yes_scenario        = analysis.get("yes_scenario", "")
     no_scenario         = analysis.get("no_scenario", "")
     key_risk            = analysis.get("key_risk", "")
+    historical_base     = analysis.get("historical_base", "")
+    smart_money         = analysis.get("smart_money", "")
     # Fallback: если старые поля
     if not main_thesis:
         main_thesis = analysis.get("reasoning", "")
@@ -161,6 +165,12 @@ def _market_card(market: dict, analysis: dict) -> str:
     if key_risk:
         text += NL + "🚨 <b>Ключевой риск:</b>" + NL + f"<i>{_e(key_risk)}</i>" + NL
 
+    if historical_base:
+        text += NL + "📜 <b>Исторический контекст:</b>" + NL + f"<i>{_e(historical_base)}</i>" + NL
+
+    if smart_money:
+        text += NL + "💹 <b>Смарт-мани:</b>" + NL + f"<i>{_e(smart_money)}</i>" + NL
+
     return text
 
 
@@ -181,6 +191,7 @@ def _get_token_ids(market: dict) -> dict:
 def _market_kb(
     sk: int, market: dict, analysis: dict,
     default_bet: float, can_trade: bool,
+    in_watchlist: bool = False,
 ) -> InlineKeyboardMarkup:
     tokens    = _get_token_ids(market)
     yes_tid   = tokens.get("yes", "")
@@ -199,8 +210,13 @@ def _market_kb(
     elif not can_trade:
         rows.append([_btn("👛 Нужен кошелёк с USDC", "pm:wallet_info")])
 
-    rows.append([_btn("🔔 Уведомить при изменении", f"pm:set_alert:{sk}")])
-    rows.append([_btn("🔙 К списку", "pm:trending:0"), _btn("📊 Polymarket", "pm:menu")])
+    # Watchlist + Alert в одну строку
+    watch_btn = _btn("⭐ Убрать из списка" if in_watchlist else "⭐ В список наблюдения",
+                     f"pm:unwatch:{sk}" if in_watchlist else f"pm:watch:{sk}")
+    rows.append([watch_btn, _btn("🔔 Алерт", f"pm:set_alert:{sk}")])
+    rows.append([_btn("🔄 Обновить", f"pm:refresh:{sk}"),
+                 _btn("🔙 К списку", "pm:trending:0"),
+                 _btn("📊 Меню", "pm:menu")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -300,6 +316,7 @@ def register_poly_handlers(
             rows = [
                 [_btn("🔥 Трендовые маркеты", "pm:trending:0")],
                 [_btn("🔍 Поиск маркета", "pm:search"), _btn("💼 Портфель", "pm:portfolio")],
+                [_btn("⭐ Список наблюдения", "pm:watchlist")],
                 [_btn("🔔 Мои алерты", "pm:alerts_list"), _btn("⚙️ Настройки", "pm:settings")],
             ]
             if wallet and wallet_service.is_configured():
@@ -325,7 +342,6 @@ def register_poly_handlers(
 
     @dp.callback_query(F.data == "pm:create_wallet")
     async def cb_create_wallet(cb: CallbackQuery):
-        await cb.answer()
         if not wallet_service.is_configured():
             await cb.answer("⚠️ WALLET_ENCRYPTION_KEY не задан (спросите администратора).", show_alert=True)
             return
@@ -333,12 +349,14 @@ def register_poly_handlers(
         # Проверить — вдруг уже есть
         existing = await db.poly_wallet_get(cb.from_user.id)
         if existing:
+            await cb.answer()
             await _safe_edit(
                 cb,
                 f"👛 Кошелёк уже существует:\n<code>{existing['address']}</code>",
                 _ik([_btn("🔙 Polymarket", "pm:menu")]),
             )
             return
+        await cb.answer()
 
         try:
             w = wallet_service.generate_wallet()
@@ -370,7 +388,6 @@ def register_poly_handlers(
     @dp.callback_query(F.data == "pm:restore_wallet")
     async def cb_restore_wallet_prompt(cb: CallbackQuery, state: FSMContext):
         """Шаг 1: предлагаем ввести адрес."""
-        await cb.answer()
         if not wallet_service.is_configured():
             await cb.answer(
                 "⚠️ WALLET_ENCRYPTION_KEY не задан — восстановление невозможно.",
@@ -380,12 +397,14 @@ def register_poly_handlers(
 
         existing = await db.poly_wallet_get(cb.from_user.id)
         if existing:
+            await cb.answer()
             await _safe_edit(
                 cb,
                 f"👛 Кошелёк уже привязан:\n<code>{existing['address']}</code>",
                 _ik([_btn("🔙 Polymarket", "pm:menu")]),
             )
             return
+        await cb.answer()
 
         await state.set_state(PolyState.waiting_wallet_restore)
         NL = "\n"
@@ -597,8 +616,9 @@ def register_poly_handlers(
         await _safe_edit(cb, text, kb)
 
     @dp.callback_query(F.data == "pm:wallet_info")
-    async def cb_wallet_info(cb: CallbackQuery):
+    async def cb_wallet_info(cb: CallbackQuery, state: FSMContext):
         await cb.answer()
+        await state.clear()
         wallet = await db.poly_wallet_get(cb.from_user.id)
         if not wallet:
             await cb.answer("⚠️ Кошелёк не создан.", show_alert=True)
@@ -613,9 +633,199 @@ def register_poly_handlers(
         )
         kb = _ik(
             [_btn("🔄 Обновить баланс", "pm:check_balance")],
+            [_btn("💸 Вывести USDC", "pm:withdraw")],
             [_btn("🔙 Polymarket", "pm:menu")],
         )
         await _safe_edit(cb, text, kb)
+
+    # ─── Вывод USDC ───────────────────────────────────────────────────────
+
+    _MIN_WITHDRAW = 0.50  # минимальная сумма вывода в USDC
+    _MIN_MATIC    = 0.01  # минимальный MATIC на балансе для газа
+
+    @dp.callback_query(F.data == "pm:withdraw")
+    async def cb_withdraw_start(cb: CallbackQuery, state: FSMContext):
+        wallet = await db.poly_wallet_get(cb.from_user.id)
+        if not wallet:
+            await cb.answer("⚠️ Кошелёк не создан.", show_alert=True)
+            return
+        if not wallet_service.is_configured():
+            await cb.answer("⚠️ Функция вывода не настроена (WALLET_ENCRYPTION_KEY).", show_alert=True)
+            return
+
+        balance = await wallet_service.get_usdc_balance(wallet["address"])
+        if balance < _MIN_WITHDRAW:
+            await cb.answer(
+                f"❌ Недостаточно средств. Минимум для вывода: ${_MIN_WITHDRAW:.2f} USDC.",
+                show_alert=True,
+            )
+            return
+        await cb.answer()
+
+        await state.set_state(PolyState.waiting_withdraw_addr)
+        await state.update_data(withdraw_balance=balance, withdraw_wallet=wallet["address"])
+        NL = "\n"
+        text = (
+            "💸 <b>Вывод USDC</b>" + NL + NL +
+            f"На кошельке: <b>${balance:.2f} USDC</b>" + NL + NL +
+            "Введи адрес Polygon-кошелька получателя (0x…):" + NL + NL +
+            "<i>⚠️ Убедись, что адрес поддерживает сеть Polygon.</i>"
+        )
+        await _safe_edit(
+            cb, text,
+            _ik([_btn("❌ Отмена", "pm:wallet_info")]),
+        )
+
+    @dp.message(PolyState.waiting_withdraw_addr)
+    async def msg_withdraw_addr(msg: Message, state: FSMContext):
+        address = (msg.text or "").strip()
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", address):
+            NL = "\n"
+            await msg.answer(
+                "❌ Неверный формат адреса." + NL +
+                "Адрес должен начинаться с <code>0x</code> и содержать 40 hex-символов." + NL + NL +
+                "Попробуй ещё раз или нажми «Отмена»:",
+                parse_mode="HTML",
+                reply_markup=_ik([_btn("❌ Отмена", "pm:wallet_info")]),
+            )
+            return
+
+        data = await state.get_data()
+        balance = data.get("withdraw_balance", 0.0)
+        await state.update_data(withdraw_to=address)
+        await state.set_state(PolyState.waiting_withdraw_amt)
+
+        NL = "\n"
+        text = (
+            f"💸 Адрес получателя: <code>{html.escape(address)}</code>" + NL + NL +
+            f"Доступно: <b>${balance:.2f} USDC</b>" + NL + NL +
+            f"Введи сумму вывода (минимум ${_MIN_WITHDRAW:.2f}):" + NL + NL +
+            "<i>Пример: 1.00</i>"
+        )
+        await msg.answer(
+            text, parse_mode="HTML",
+            reply_markup=_ik([_btn("❌ Отмена", "pm:wallet_info")]),
+        )
+
+    @dp.message(PolyState.waiting_withdraw_amt)
+    async def msg_withdraw_amt(msg: Message, state: FSMContext):
+        raw = (msg.text or "").strip().replace(",", ".")
+        try:
+            amount = float(raw)
+        except ValueError:
+            await msg.answer(
+                "❌ Введи число, например: <code>1.00</code>",
+                parse_mode="HTML",
+                reply_markup=_ik([_btn("❌ Отмена", "pm:wallet_info")]),
+            )
+            return
+
+        data    = await state.get_data()
+        balance = data.get("withdraw_balance", 0.0)
+        to_addr = data.get("withdraw_to", "")
+
+        if amount < _MIN_WITHDRAW:
+            await msg.answer(
+                f"❌ Минимум для вывода: <b>${_MIN_WITHDRAW:.2f} USDC</b>",
+                parse_mode="HTML",
+                reply_markup=_ik([_btn("❌ Отмена", "pm:wallet_info")]),
+            )
+            return
+        if amount > balance:
+            await msg.answer(
+                f"❌ Недостаточно средств. На кошельке <b>${balance:.2f} USDC</b>.",
+                parse_mode="HTML",
+                reply_markup=_ik([_btn("❌ Отмена", "pm:wallet_info")]),
+            )
+            return
+
+        await state.update_data(withdraw_amount=amount)
+        NL = "\n"
+        text = (
+            "💸 <b>Подтверди вывод</b>" + NL + NL +
+            f"Сумма:    <b>${amount:.2f} USDC</b>" + NL +
+            f"Куда:     <code>{html.escape(to_addr)}</code>" + NL +
+            f"Сеть:     Polygon" + NL + NL +
+            "⚠️ Операция необратима. Подтвердить?"
+        )
+        await msg.answer(
+            text, parse_mode="HTML",
+            reply_markup=_ik(
+                [_btn("✅ Подтвердить", "pm:withdraw_confirm")],
+                [_btn("❌ Отмена",     "pm:wallet_info")],
+            ),
+        )
+
+    @dp.callback_query(F.data == "pm:withdraw_confirm")
+    async def cb_withdraw_confirm(cb: CallbackQuery, state: FSMContext):
+        await cb.answer()
+        data    = await state.get_data()
+        to_addr = data.get("withdraw_to", "")
+        amount  = data.get("withdraw_amount", 0.0)
+        from_addr = data.get("withdraw_wallet", "")
+        await state.clear()
+
+        if not to_addr or not amount or not from_addr:
+            await cb.answer("⚠️ Сессия истекла. Начни вывод заново.", show_alert=True)
+            return
+
+        wallet = await db.poly_wallet_get(cb.from_user.id)
+        if not wallet:
+            await cb.answer("⚠️ Кошелёк не найден.", show_alert=True)
+            return
+
+        await _safe_edit(cb, "⏳ Отправляем транзакцию...", None)
+
+        # Проверяем баланс MATIC для газа
+        matic = await wallet_service.get_matic_balance(from_addr)
+        if matic < _MIN_MATIC:
+            NL = "\n"
+            text = (
+                f"⛽ <b>Недостаточно MATIC для газа</b>" + NL + NL +
+                f"На кошельке {matic:.6f} MATIC, нужно минимум {_MIN_MATIC} MATIC." + NL + NL +
+                f"Отправь немного MATIC (сеть Polygon) на адрес:" + NL +
+                f"<code>{html.escape(from_addr)}</code>" + NL + NL +
+                "Достаточно 0.1 MATIC (~$0.05)."
+            )
+            await _safe_edit(
+                cb, text,
+                _ik([_btn("🔙 Кошелёк", "pm:wallet_info")]),
+            )
+            return
+
+        try:
+            encrypted_key = wallet.get("encrypted_key", "")
+            private_key   = wallet_service.decrypt_key(encrypted_key)
+            tx_hash = await wallet_service.transfer_usdc(
+                from_address=from_addr,
+                private_key=private_key,
+                to_address=to_addr,
+                amount_usdc=amount,
+            )
+            del private_key  # немедленно из памяти
+        except Exception as exc:
+            log.error(f"withdraw uid={cb.from_user.id}: {exc}")
+            await _safe_edit(
+                cb,
+                f"❌ Ошибка транзакции: {html.escape(str(exc))}",
+                _ik([_btn("🔙 Кошелёк", "pm:wallet_info")]),
+            )
+            return
+
+        NL = "\n"
+        short_hash = f"{tx_hash[:10]}…{tx_hash[-6:]}"
+        text = (
+            "✅ <b>Транзакция отправлена!</b>" + NL + NL +
+            f"Сумма: <b>${amount:.2f} USDC</b>" + NL +
+            f"Куда:  <code>{html.escape(to_addr)}</code>" + NL +
+            f"TX:    <code>{html.escape(tx_hash)}</code>" + NL + NL +
+            "Средства поступят в течение нескольких минут." + NL +
+            f"<a href='https://polygonscan.com/tx/{tx_hash}'>Смотреть на PolygonScan</a>"
+        )
+        await _safe_edit(
+            cb, text,
+            _ik([_btn("🔙 Polymarket", "pm:menu")]),
+        )
 
     # ─── Трендовые маркеты ────────────────────────────────────────────────
 
@@ -679,6 +889,10 @@ def register_poly_handlers(
     @dp.message(PolyState.waiting_search)
     async def msg_search(msg: Message, state: FSMContext):
         await state.clear()
+        if not msg.text:
+            await msg.answer("❌ Введите текстовый запрос.",
+                             reply_markup=_ik([_btn("🔙 Polymarket", "pm:menu")]))
+            return
         user = await um.get_or_create(msg.from_user.id)
         has, _ = user.check_access()
         if not has:
@@ -708,7 +922,7 @@ def register_poly_handlers(
         rows.append([_btn("🔙 Polymarket", "pm:menu")])
 
         await msg.answer(
-            f"🔍 <b>Результаты поиска «{query}»</b> ({len(markets)} маркетов)",
+            f"🔍 <b>Результаты поиска «{html.escape(query)}»</b> ({len(markets)} маркетов)",
             parse_mode="HTML",
             reply_markup=InlineKeyboardMarkup(inline_keyboard=rows),
         )
@@ -775,11 +989,13 @@ def register_poly_handlers(
                 or (is_admin(cb.from_user.id) and poly.is_trading_enabled())
             )
 
+            condition_id_for_watch = get_condition_id(sk) or ""
+            in_wl = await db.poly_watchlist_has(cb.from_user.id, condition_id_for_watch)
             text = _market_card(market, analysis)
             # Telegram limit: 4096 chars. Trim if needed.
             if len(text) > 4000:
                 text = text[:3990] + "\n<i>…</i>"
-            kb   = _market_kb(sk, market, analysis, default_bet, can_trade)
+            kb   = _market_kb(sk, market, analysis, default_bet, can_trade, in_watchlist=in_wl)
             await _safe_edit(cb, text, kb)
         except Exception as e:
             log.error(f"cb_view_market {condition_id}: {e}", exc_info=True)
@@ -853,15 +1069,21 @@ def register_poly_handlers(
 
     @dp.callback_query(F.data.startswith("pm:confirm:"))
     async def cb_confirm(cb: CallbackQuery):
-        await cb.answer()
         uid = cb.from_user.id
 
-        # Антиспам
+        # Антиспам — проверяем ДО cb.answer() чтобы show_alert работал
         now = time.time()
+        # Заодно чистим старые записи чтобы _bet_ts не рос бесконечно
+        if len(_bet_ts) > 500:
+            cutoff = now - 60
+            old = [k for k, ts in list(_bet_ts.items()) if ts < cutoff]
+            for k in old:
+                _bet_ts.pop(k, None)
         if now - _bet_ts.get(uid, 0) < _BET_COOLDOWN:
             await cb.answer("⏳ Подождите несколько секунд.", show_alert=True)
             return
         _bet_ts[uid] = now
+        await cb.answer()
 
         parts     = cb.data.split(":")
         sk        = int(parts[2])
@@ -956,6 +1178,10 @@ def register_poly_handlers(
     async def msg_custom_amount(msg: Message, state: FSMContext):
         data = await state.get_data()
         await state.clear()
+        if not msg.text:
+            await msg.answer("❌ Введите число, например: <code>5</code>", parse_mode="HTML",
+                             reply_markup=_ik([_btn("🔙 Polymarket", "pm:menu")]))
+            return
         try:
             amount = float(msg.text.strip().replace("$", "").replace(",", "."))
             if amount < 1:
@@ -1116,20 +1342,33 @@ def register_poly_handlers(
 
     @dp.callback_query(F.data.startswith("pm:alert_del:"))
     async def cb_alert_del(cb: CallbackQuery):
-        await cb.answer()
-        alert_id = int(cb.data.split(":")[2])
+        try:
+            alert_id = int(cb.data.split(":")[2])
+        except (ValueError, IndexError):
+            await cb.answer("⚠️ Некорректный запрос.", show_alert=True)
+            return
         await db.poly_alert_delete(alert_id)
         await cb.answer("✅ Алерт удалён.", show_alert=True)
-        # Обновляем список
+        # Обновляем список без рекурсивного вызова
         alerts = await db.poly_alert_get_user(cb.from_user.id)
+        NL = "\n"
         if not alerts:
             await _safe_edit(
                 cb, "🔔 Активных алертов нет.",
-                _ik([_btn("🔙 Polymarket", "pm:menu")]),
+                _ik([_btn("🔥 Трендовые маркеты", "pm:trending:0"),
+                     _btn("🔙 Polymarket", "pm:menu")]),
             )
         else:
-            # Рекурсивно показываем обновлённый список через фейк-callback
-            await cb_alerts_list(cb)
+            lines = ["🔔 <b>Твои алерты</b>" + NL]
+            rows  = []
+            for a in alerts:
+                q   = _market_short(a["question"], 35)
+                thr = a["threshold"]
+                yp  = a["yes_price"]
+                lines.append(f"• {html.escape(q)}\n  YES был {yp:.0%}, порог ±{thr:.0f}%")
+                rows.append([_btn(f"🗑 Удалить: {_market_short(q, 25)}", f"pm:alert_del:{a['id']}")])
+            rows.append([_btn("🔙 Polymarket", "pm:menu")])
+            await _safe_edit(cb, NL.join(lines), InlineKeyboardMarkup(inline_keyboard=rows))
 
     # ─── Настройки ────────────────────────────────────────────────────────
 
@@ -1168,10 +1407,16 @@ def register_poly_handlers(
             return
         await db.poly_save_settings(cb.from_user.id, float(val))
         await cb.answer(f"✅ Размер ставки: ${val} USDC", show_alert=True)
+        # Обновляем экран настроек чтобы отразить новое значение
+        await cb_settings(cb)
 
     @dp.message(PolyState.waiting_bet_size)
     async def msg_bet_size(msg: Message, state: FSMContext):
         await state.clear()
+        if not msg.text:
+            await msg.answer("❌ Введите число, например: <code>5</code>", parse_mode="HTML",
+                             reply_markup=_ik([_btn("🔙 Настройки", "pm:settings")]))
+            return
         try:
             val = float(msg.text.strip().replace("$", "").replace(",", "."))
             if val < 1:
@@ -1188,11 +1433,158 @@ def register_poly_handlers(
 
     @dp.callback_query(F.data.startswith("pm:digest:"))
     async def cb_digest_toggle(cb: CallbackQuery):
-        await cb.answer()
         val = int(cb.data.split(":")[2])   # 0 или 1
         await db.poly_save_digest(cb.from_user.id, val)
         await cb.answer(f"✅ Дайджест {'включён' if val else 'выключён'}", show_alert=True)
         await cb_settings(cb)
+
+    # ─── Принудительное обновление карточки маркета ───────────────────────
+
+    @dp.callback_query(F.data.startswith("pm:refresh:"))
+    async def cb_refresh_market(cb: CallbackQuery):
+        try:
+            sk = int(cb.data.split(":")[2])
+        except (ValueError, IndexError):
+            await cb.answer("⚠️ Некорректный запрос.", show_alert=True)
+            return
+
+        condition_id = get_condition_id(sk)
+        if not condition_id:
+            await cb.answer("⚠️ Список маркетов устарел. Обновите список.", show_alert=True)
+            return
+        await cb.answer()
+        await _safe_edit(cb, "🔄 <b>Обновляем данные...</b>", None)
+
+        # Инвалидируем кэш и перезагружаем
+        _cache_invalidate(condition_id)
+        try:
+            market = await poly.get_market_by_id(condition_id, force_refresh=True)
+        except Exception as e:
+            log.warning(f"refresh {condition_id}: {e}")
+            market = None
+
+        if not market:
+            await _safe_edit(cb, "⚠️ Не удалось обновить маркет.\n<i>Polymarket API недоступен.</i>",
+                             _ik([_btn("🔄 Повтор", f"pm:refresh:{sk}"),
+                                  _btn("🔙 К списку", "pm:trending:0")]))
+            return
+
+        try:
+            market, analysis = await asyncio.gather(
+                translate_market(market),
+                poly.analyze_market(market),
+            )
+            settings = await db.poly_get_settings(cb.from_user.id)
+            default_bet = settings.get("default_bet", 5.0)
+            wallet, balance = await _get_user_wallet_balance(cb.from_user.id)
+            can_trade = (
+                (wallet_service.is_configured() and wallet is not None and balance >= 1.0)
+                or (is_admin(cb.from_user.id) and poly.is_trading_enabled())
+            )
+            in_wl = await db.poly_watchlist_has(cb.from_user.id, condition_id)
+            text = _market_card(market, analysis)
+            if len(text) > 4000:
+                text = text[:3990] + "\n<i>…</i>"
+            kb = _market_kb(sk, market, analysis, default_bet, can_trade, in_watchlist=in_wl)
+            await _safe_edit(cb, text, kb)
+        except Exception as e:
+            log.error(f"cb_refresh_market {condition_id}: {e}", exc_info=True)
+            await _safe_edit(cb, f"⚠️ Ошибка обновления: <code>{html.escape(str(e)[:200])}</code>",
+                             _ik([_btn("🔙 К списку", "pm:trending:0")]))
+
+    # ─── Список наблюдения ────────────────────────────────────────────────
+
+    @dp.callback_query(F.data.startswith("pm:watch:"))
+    async def cb_watch(cb: CallbackQuery):
+        try:
+            sk = int(cb.data.split(":")[2])
+        except (ValueError, IndexError):
+            await cb.answer("⚠️ Некорректный запрос.", show_alert=True)
+            return
+
+        condition_id = get_condition_id(sk)
+        if not condition_id:
+            await cb.answer("⚠️ Маркет не найден.", show_alert=True)
+            return
+
+        market = await poly.get_market_by_id(condition_id)
+        q = market.get("question", "—") if market else "—"
+        await db.poly_watchlist_add(cb.from_user.id, condition_id, q)
+        await cb.answer("⭐ Добавлено в список наблюдения!", show_alert=False)
+
+        # Обновляем кнопку на карточке
+        if market:
+            settings = await db.poly_get_settings(cb.from_user.id)
+            default_bet = settings.get("default_bet", 5.0)
+            wallet, balance = await _get_user_wallet_balance(cb.from_user.id)
+            can_trade = (
+                (wallet_service.is_configured() and wallet is not None and balance >= 1.0)
+                or (is_admin(cb.from_user.id) and poly.is_trading_enabled())
+            )
+            analysis = analyze_market(market)
+            kb = _market_kb(sk, market, analysis, default_bet, can_trade, in_watchlist=True)
+            try:
+                await cb.message.edit_reply_markup(reply_markup=kb)
+            except Exception:
+                pass
+
+    @dp.callback_query(F.data.startswith("pm:unwatch:"))
+    async def cb_unwatch(cb: CallbackQuery):
+        try:
+            sk = int(cb.data.split(":")[2])
+        except (ValueError, IndexError):
+            await cb.answer("⚠️ Некорректный запрос.", show_alert=True)
+            return
+
+        condition_id = get_condition_id(sk)
+        if not condition_id:
+            await cb.answer("⚠️ Маркет не найден.", show_alert=True)
+            return
+
+        await db.poly_watchlist_remove(cb.from_user.id, condition_id)
+        await cb.answer("Убрано из списка наблюдения.", show_alert=False)
+
+        market = await poly.get_market_by_id(condition_id)
+        if market:
+            settings = await db.poly_get_settings(cb.from_user.id)
+            default_bet = settings.get("default_bet", 5.0)
+            wallet, balance = await _get_user_wallet_balance(cb.from_user.id)
+            can_trade = (
+                (wallet_service.is_configured() and wallet is not None and balance >= 1.0)
+                or (is_admin(cb.from_user.id) and poly.is_trading_enabled())
+            )
+            analysis = analyze_market(market)
+            kb = _market_kb(sk, market, analysis, default_bet, can_trade, in_watchlist=False)
+            try:
+                await cb.message.edit_reply_markup(reply_markup=kb)
+            except Exception:
+                pass
+
+    @dp.callback_query(F.data == "pm:watchlist")
+    async def cb_watchlist(cb: CallbackQuery):
+        await cb.answer()
+        items = await db.poly_watchlist_get(cb.from_user.id)
+        NL = "\n"
+        if not items:
+            await _safe_edit(
+                cb,
+                "⭐ <b>Список наблюдения пуст.</b>" + NL + NL +
+                "Добавляй маркеты кнопкой «⭐ В список наблюдения» в карточке маркета.",
+                _ik([_btn("🔥 Трендовые маркеты", "pm:trending:0"),
+                     _btn("🔙 Polymarket", "pm:menu")]),
+            )
+            return
+
+        lines = ["⭐ <b>Список наблюдения</b>" + NL]
+        rows  = []
+        for it in items:
+            q  = _market_short(it["question"], 38)
+            sk = _get_short_key(it["market_id"])
+            lines.append(f"• {html.escape(q)}")
+            rows.append([_btn(f"📊 {_market_short(q, 30)}", f"pm:view:{sk}")])
+
+        rows.append([_btn("🔙 Polymarket", "pm:menu")])
+        await _safe_edit(cb, NL.join(lines), InlineKeyboardMarkup(inline_keyboard=rows))
 
     # ─── Вспомогательные ──────────────────────────────────────────────────
 
