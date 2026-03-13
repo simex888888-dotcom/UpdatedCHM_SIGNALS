@@ -108,6 +108,8 @@ def _market_card(market: dict, analysis: dict) -> str:
     yes_scenario        = analysis.get("yes_scenario", "")
     no_scenario         = analysis.get("no_scenario", "")
     key_risk            = analysis.get("key_risk", "")
+    historical_base     = analysis.get("historical_base", "")
+    smart_money         = analysis.get("smart_money", "")
     # Fallback: если старые поля
     if not main_thesis:
         main_thesis = analysis.get("reasoning", "")
@@ -162,6 +164,12 @@ def _market_card(market: dict, analysis: dict) -> str:
 
     if key_risk:
         text += NL + "🚨 <b>Ключевой риск:</b>" + NL + f"<i>{_e(key_risk)}</i>" + NL
+
+    if historical_base:
+        text += NL + "📜 <b>Исторический контекст:</b>" + NL + f"<i>{_e(historical_base)}</i>" + NL
+
+    if smart_money:
+        text += NL + "💹 <b>Смарт-мани:</b>" + NL + f"<i>{_e(smart_money)}</i>" + NL
 
     return text
 
