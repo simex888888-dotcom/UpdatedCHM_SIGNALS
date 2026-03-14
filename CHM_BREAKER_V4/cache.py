@@ -95,10 +95,16 @@ def _candle_key(symbol: str, tf: str) -> str:
 
 
 async def get_candles(symbol: str, tf: str) -> Optional[pd.DataFrame]:
+    if _candle_cache is None:
+        log.warning("cache.get_candles: кэш не инициализирован — вызовите init_cache()")
+        return None
     return await _candle_cache.get(_candle_key(symbol, tf))
 
 
 async def set_candles(symbol: str, tf: str, df: pd.DataFrame, ttl_map: dict):
+    if _candle_cache is None:
+        log.warning("cache.set_candles: кэш не инициализирован — вызовите init_cache()")
+        return
     ttl = ttl_map.get(tf, 3600)
     await _candle_cache.set(_candle_key(symbol, tf), df, ttl)
 

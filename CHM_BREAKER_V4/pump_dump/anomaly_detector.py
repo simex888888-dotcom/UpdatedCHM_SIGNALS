@@ -93,15 +93,18 @@ def detect(df: pd.DataFrame,
     cvd_series = (buy_vol - sell_vol)[-10:]
     cvd_10  = float(np.sum(cvd_series))
 
-    # CVD растёт или падает последние 5 свечей
+    # CVD: проверяем инкрементальные дельты (buy-sell) за последние 5 баров.
+    # Кумулятивная сумма не подходит — одно отрицательное значение ломает монотонность.
+    # Достаточно 4 из 5 баров в нужном направлении.
     cvd_dir   = None
     cvd_signal = False
     if len(cvd_series) >= 5:
-        cumulative = np.cumsum(buy_vol[-10:] - sell_vol[-10:])
-        last5 = cumulative[-5:]
-        if all(last5[i] < last5[i+1] for i in range(4)):
+        deltas = (buy_vol - sell_vol)[-5:]
+        positive = int((deltas > 0).sum())
+        negative = int((deltas < 0).sum())
+        if positive >= 4:
             cvd_signal, cvd_dir = True, "PUMP"
-        elif all(last5[i] > last5[i+1] for i in range(4)):
+        elif negative >= 4:
             cvd_signal, cvd_dir = True, "DUMP"
 
     # Переопределяем CVD через реальный trade-поток (@trade WS) если данные есть.

@@ -83,9 +83,11 @@ class PDRunner:
         ind  = indicators.analyze(df)
         hs   = await hidden_signals.analyze(sym, df, self.monitor.get_symbols())
 
-        # Обновляем score для /pd_top даже если нет сигнала
+        # Обновляем score для /pd_top даже если нет сигнала.
+        # Для отображения используем ненаправленный score; ML-бонус — только при совпадении направления.
         features = build_feature_vector(an, ob, hs, ind)
         ml_res   = get_model().predict(features)
+        direction_hint = an.spike_dir or ("PUMP" if (event.trades_buy_vol or 0) >= (event.trades_sell_vol or 0) else "DUMP")
         raw_score = (
             (an.volume_double_cond * 0.15) +
             (an.price_spike        * 0.10) +
@@ -94,7 +96,7 @@ class PDRunner:
             (ob.spread_signal      * 0.10) +
             (hs.funding_signal     * 0.15) +
             (hs.oi_signal          * 0.10) +
-            ((ml_res is not None and ml_res.predicted != "NEUTRAL") * 0.15)
+            ((ml_res is not None and ml_res.predicted == direction_hint) * 0.15)
         ) * 100
         self._scores[sym] = round(raw_score, 1)
         set_current_scores({sym: self._scores[sym]})
@@ -107,16 +109,18 @@ class PDRunner:
             sym, event.last_price, an, ob, hs, ind, buy_ratio
         )
         for level, text, payload in level_alerts:
+            # Используем score из payload (взвешенный, с учётом направления),
+            # а не raw_score (ненаправленный, для /pd_top)
+            actual_score = payload.score if payload is not None else raw_score
             if level == 3:
-                log.info(f"🎯 PD уровень 3 (ФИНАЛЬНЫЙ): {sym} {raw_score:.0f}%")
-                # payload уже сформирован внутри analyze_levels — сохраняем напрямую
+                log.info(f"🎯 PD уровень 3 (ФИНАЛЬНЫЙ): {sym} {actual_score:.0f}%")
                 if payload is not None:
                     await self._save_signal(payload, features)
             elif level == 2:
                 log.info(f"⚠️ PD уровень 2 (НАБЛЮДЕНИЕ): {sym}")
             else:
                 log.debug(f"👀 PD уровень 1 (ВНИМАНИЕ): {sym}")
-            await self._broadcast_level(level, text, raw_score)
+            await self._broadcast_level(level, text, actual_score)
 
     # ── Рассылка по уровню ───────────────────────────────────────────────────
 
@@ -152,29 +156,6 @@ class PDRunner:
                 await db.db_pd_upsert_user(uid, subscribed=False)
             except Exception as e:
                 log.debug(f"PD broadcast level{level} {uid}: {e}")
-
-    # ── Рассылка сигнала ─────────────────────────────────────────────────────
-
-    async def _broadcast_signal(self, signal):
-        from pump_dump.signal_aggregator import format_alert
-        users = await db.db_pd_subscribers(min_threshold=int(signal.score))
-        if not users:
-            return
-        text = format_alert(signal)
-        for uid in users:
-            try:
-                wm_text = wm_inject(text, uid)
-                await self.bot.send_message(
-                    uid, wm_text,
-                    parse_mode="HTML",
-                    protect_content=True,
-                    disable_web_page_preview=True,
-                )
-                await asyncio.sleep(0.05)
-            except TelegramForbiddenError:
-                await db.db_pd_upsert_user(uid, subscribed=False)
-            except Exception as e:
-                log.debug(f"PD broadcast {uid}: {e}")
 
     # ── Сохранение сигнала в БД ───────────────────────────────────────────────
 
@@ -239,10 +220,7 @@ class PDRunner:
             await asyncio.sleep(FUNDING_FETCH_EVERY)
             symbols = self.monitor.get_symbols()
             if symbols:
-                # Баг 2 фикс: сбрасываем TTL, иначе now - last == FUNDING_FETCH_EVERY → False
-                _cache._last_funding_fetch = 0
-                _cache._last_oi_fetch      = 0
-                _cache._last_ls_fetch      = 0
+                _cache.reset_fetch_timestamps()
                 await _cache.refresh_if_needed(symbols)
 
     # ── Переобучение ML ───────────────────────────────────────────────────────

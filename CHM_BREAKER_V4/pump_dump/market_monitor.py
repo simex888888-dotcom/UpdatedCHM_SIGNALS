@@ -66,6 +66,7 @@ class MarketMonitor:
         self._sell_vols:  dict[str, deque]      = defaultdict(lambda: deque(maxlen=30))
         self._symbols:    list[str]             = []
         self._running     = False
+        self._dropped_events: int = 0
 
     # ─── Публичный интерфейс ─────────────────────────────────────────────────
 
@@ -210,7 +211,6 @@ class MarketMonitor:
         async with aiohttp.ClientSession() as session:
             async with session.ws_connect(
                 BINGX_WS_URL,
-                heartbeat=HEARTBEAT_INTERVAL,
                 timeout=aiohttp.ClientTimeout(total=None),
             ) as ws:
                 log.info(f"✅ PD WS[{conn_id}] подключён ({len(symbols)} монет)")
@@ -360,4 +360,9 @@ class MarketMonitor:
         try:
             self._queue.put_nowait(event)
         except asyncio.QueueFull:
-            pass  # анализаторы не успевают — пропускаем
+            self._dropped_events += 1
+            if self._dropped_events % 50 == 1:
+                log.warning(
+                    f"📛 Queue переполнена! Пропущено {self._dropped_events} событий. "
+                    f"Анализаторы не успевают (queue maxsize={self._queue.maxsize})."
+                )

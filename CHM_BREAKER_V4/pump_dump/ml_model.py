@@ -9,8 +9,8 @@ ml_model.py — ML фильтр на основе XGBoost (25 признаков
 """
 
 import logging
+import math
 import os
-import pickle
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,6 +22,8 @@ from pump_dump.pd_config import (
     ML_MODEL_PATH, ML_RETRAIN_DAYS, ML_MIN_SAMPLES,
     ML_PUMP_THRESHOLD, ML_PRECISION_MIN,
 )
+
+_RETRAIN_INTERVAL = ML_RETRAIN_DAYS * 86400  # секунды
 
 log = logging.getLogger("CHM.PD.ML")
 
@@ -52,8 +54,8 @@ class PDMLModel:
         if not os.path.exists(ML_MODEL_PATH):
             return
         try:
-            with open(ML_MODEL_PATH, "rb") as f:
-                bundle = pickle.load(f)
+            import joblib
+            bundle = joblib.load(ML_MODEL_PATH)
             self._model     = bundle["model"]
             self._precision = bundle.get("precision", 0.0)
             self._loaded    = True
@@ -87,7 +89,7 @@ class PDMLModel:
         Запускаем переобучение если прошло ML_RETRAIN_DAYS и накоплено
         достаточно данных с известным исходом (pd_outcomes).
         """
-        if time.time() - self._last_try < 3600:
+        if time.time() - self._last_try < _RETRAIN_INTERVAL:
             return
         self._last_try = time.time()
 
@@ -141,8 +143,8 @@ class PDMLModel:
             prec = precision_score(y_val, y_pred, labels=[LABEL_PUMP, LABEL_DUMP],
                                    average="macro", zero_division=0)
             bundle = {"model": model, "precision": prec, "trained_at": time.time()}
-            with open(ML_MODEL_PATH, "wb") as f:
-                pickle.dump(bundle, f)
+            import joblib
+            joblib.dump(bundle, ML_MODEL_PATH)
             self._model     = model
             self._precision = prec
             self._loaded    = True
@@ -187,8 +189,8 @@ def build_feature_vector(an, ob, hs, ind) -> list[float]:
         float(int(hs.cvd_divergence)),
         float(hs.long_short_ratio),
         float(0.0),                                 # liquidation_zone_distance (нет Coinglass)
-        # Контекст
-        float(datetime.now(timezone.utc).hour),
+        # Контекст — час закодирован через sin для цикличности (23:00 ≈ 00:00)
+        float(math.sin(2 * math.pi * datetime.now(timezone.utc).hour / 24)),
         float(abs(an.price_change_3m) * 100),       # приближение volatility_24h
         float(int(an.volume_double_cond)),           # Баг 3 фикс: был ob.spread_pct (дубль индекса 6)
     ]
