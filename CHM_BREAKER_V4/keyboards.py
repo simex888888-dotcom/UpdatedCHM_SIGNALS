@@ -78,7 +78,57 @@ def kb_auto_trade(user: UserSettings) -> InlineKeyboardMarkup:
         _btn(key_label,              "setup_bybit_api"),
         _btn("🧪 Проверить соединение", "test_bybit_api") if has_key else _noop("── Введи ключи для проверки ──"),
         _btn("🗑 Удалить ключи",      "remove_bybit_api") if has_key else _noop("──────────────────────────────────"),
+        *([_noop("── Управление позициями ────────────────────────────"),
+           _btn("📊 Мои позиции / ордера / статистика 24ч", "bybit_pos")]
+          if has_key else []),
         _back(),
+    ])
+
+
+# ── Панель управления позициями Bybit ────────────────
+
+def kb_bybit_dashboard(positions: list, orders: list) -> InlineKeyboardMarkup:
+    """Клавиатура панели позиций: обновить, закрыть/отменить по позиции, назад."""
+    rows = [
+        _btn("🔄 Обновить", "bybit_pos"),
+    ]
+    # Кнопки для каждой позиции
+    for pos in positions:
+        sym     = pos.get("symbol", "")
+        side    = pos.get("side", "")
+        pos_idx = int(pos.get("positionIdx", 0))
+        dir_label = "LONG" if side == "Buy" else "SHORT"
+        rows.append([
+            InlineKeyboardButton(text=f"❌ Закрыть {sym}",   callback_data=f"bybit_pos_close_{sym}_{pos_idx}"),
+            InlineKeyboardButton(text=f"🗑 Ордера {sym}", callback_data=f"bybit_ord_cancel_all_{sym}_{pos_idx}"),
+        ])
+    # Кнопки отмены отдельных ордеров (первые 6)
+    shown_orders = orders[:6]
+    for order in shown_orders:
+        order_id = order.get("orderId", "")
+        sym      = order.get("symbol", "")
+        price    = order.get("price", "?")
+        side_o   = order.get("side", "")
+        reduce   = " TP" if order.get("reduceOnly") else ""
+        rows.append(_btn(
+            f"✖ {sym} {side_o} @{price}{reduce}",
+            f"bybit_ord_cancel_{order_id}",
+        ))
+    rows.append(_btn("⚙️ Настройки авто-трейдинга", "auto_trade_menu"))
+    rows.append(_back())
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_close_confirm(symbol: str, pos_idx: int) -> InlineKeyboardMarkup:
+    """Подтверждение закрытия позиции маркет-ордером."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Да, закрыть по рынку",
+                callback_data=f"bybit_pos_close_ok_{symbol}_{pos_idx}",
+            ),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="bybit_pos"),
+        ]
     ])
 
 

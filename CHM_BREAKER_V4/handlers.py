@@ -3397,7 +3397,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     # ─── АВТО-ТРЕЙДИНГ BYBIT ──────────────────────────
 
-    def _auto_trade_text(user: UserSettings) -> str:
+    async def _auto_trade_text(user: UserSettings) -> str:
         at       = getattr(user, "auto_trade",        False)
         mode     = getattr(user, "auto_trade_mode",   "confirm")
         risk     = getattr(user, "trade_risk_pct",    1.0)
@@ -3406,17 +3406,55 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         has_key  = bool(getattr(user, "bybit_api_key", ""))
         NL = "\n"
         mode_label = "👆 С подтверждением (кнопка)" if mode == "confirm" else "🤖 Авто (без кнопки)"
-        return (
+        limit_label = "∞ без лимита" if max_tr == 0 else str(max_tr)
+
+        # Загружаем статистику из БД (только если есть API ключи)
+        stats = await db.db_get_auto_stats(user.user_id) if has_key else None
+
+        text = (
             "💹 <b>Авто-трейдинг Bybit</b>" + NL + NL +
             "Статус: " + ("🟢 <b>Включён</b>" if at else "🔴 <b>Выключен</b>") + NL +
-            "Режим: <b>" + mode_label + "</b>" + NL +
-            "Риск: <b>" + str(risk) + "% от баланса</b>" + NL +
-            "Плечо: <b>x" + str(lev) + "</b>" + NL +
-            "Лимит сделок: <b>" + str(max_tr) + " за 24ч</b>" + NL +
-            "API: " + ("✅ <b>Подключено</b>" if has_key else "❌ <b>Не настроено</b>") + NL + NL +
+            "Режим:  <b>" + mode_label + "</b>" + NL +
+            "Риск:   <b>" + str(risk) + "% от баланса</b>" + NL +
+            "Плечо:  <b>x" + str(lev) + "</b>" + NL +
+            "Лимит:  <b>" + limit_label + " сделок/сутки</b>" + NL +
+            "API:    " + ("✅ <b>Подключено</b>" if has_key else "❌ <b>Не настроено</b>")
+        )
+
+        if stats:
+            used_24h   = stats["trades_24h"]
+            open_now   = stats["open_now"]
+            slots_left = (max_tr - open_now) if max_tr > 0 else "∞"
+            tp_total   = stats["tp1"] + stats["tp2"] + stats["tp3"]
+            sl_total   = stats["sl"]
+            closed_all = tp_total + sl_total
+            winrate    = int(tp_total / closed_all * 100) if closed_all > 0 else 0
+            rr         = stats["total_rr"]
+            rr_sign    = "+" if rr >= 0 else ""
+
+            text += (
+                NL + NL +
+                "━━━ 📊 Статистика авто-сделок ━━━" + NL +
+                f"Сегодня открыто: <b>{used_24h}</b>" +
+                (f" / {max_tr}" if max_tr > 0 else "") +
+                f"  |  Сейчас открыто: <b>{open_now}</b>" +
+                (f"  (слотов: {slots_left})" if max_tr > 0 else "") + NL +
+                NL +
+                "Закрытые позиции:" + NL +
+                f"  ✅ TP1: <b>{stats['tp1']}</b>  "
+                f"🎯 TP2: <b>{stats['tp2']}</b>  "
+                f"💎 TP3: <b>{stats['tp3']}</b>" + NL +
+                f"  ❌ Стоп-лосс: <b>{sl_total}</b>" +
+                (f"  |  Win: <b>{winrate}%</b> ({tp_total}/{closed_all})" if closed_all > 0 else "") + NL +
+                f"  💰 Итого P&L: <b>{rr_sign}{rr:.2f}R</b>"
+            )
+
+        text += (
+            NL + NL +
             "⚠️ <i>Используй только собственные API-ключи.\n"
             "Разрешение: только Contract Trade. Без Withdraw!</i>"
         )
+        return text
 
     @dp.callback_query(F.data == "auto_trade_menu")
     async def auto_trade_menu(cb: CallbackQuery):
@@ -3425,7 +3463,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         has, reason = user.check_access()
         if not has:
             await cb.message.answer("❌ Нет доступа. Требуется активная подписка."); return
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data == "toggle_auto_trade")
     async def toggle_auto_trade(cb: CallbackQuery):
@@ -3438,7 +3476,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.message.answer("⚠️ Сначала настрой API ключи!\n\nПерейди: 💹 Авто-трейдинг → 🔑 Настроить Bybit API"); return
         user.auto_trade = not user.auto_trade
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.in_({"set_at_mode_confirm", "set_at_mode_auto"}))
     async def set_at_mode(cb: CallbackQuery):
@@ -3446,7 +3484,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         user.auto_trade_mode = "confirm" if cb.data == "set_at_mode_confirm" else "auto"
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_risk_"))
     async def set_at_risk(cb: CallbackQuery):
@@ -3457,7 +3495,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         except ValueError:
             return
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_lev_"))
     async def set_at_lev(cb: CallbackQuery):
@@ -3468,7 +3506,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         except ValueError:
             return
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_maxtr_"))
     async def set_at_maxtr(cb: CallbackQuery, state: FSMContext):
@@ -3489,7 +3527,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         except ValueError:
             return
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.message(MaxTradesState.waiting)
     async def set_at_maxtr_custom_input(msg: Message, state: FSMContext):
@@ -3619,7 +3657,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.bybit_api_secret = ""
         user.auto_trade       = False
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("exec_trade_"))
     async def exec_trade(cb: CallbackQuery):
@@ -3647,6 +3685,15 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.message.answer("❌ Сделка не найдена или устарела.")
             return
 
+        max_trades = getattr(user, "max_trades_limit", 5)
+        open_count = await db.db_count_open_trades(user.user_id)
+        if max_trades > 0 and open_count >= max_trades:
+            await cb.answer(
+                f"⛔ Лимит сделок достигнут ({open_count}/{max_trades}). "
+                f"Дождись закрытия открытых позиций.",
+                show_alert=True,
+            )
+            return
         # Защита от двойного нажатия: order_id уже есть — сделка уже открыта
         if trade.get("order_id", ""):
             await cb.answer("⚠️ Сделка уже была открыта на Bybit!", show_alert=True)
@@ -3660,18 +3707,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 parse_mode="HTML",
             )
             return
-
-        max_trades = getattr(user, "max_trades_limit", 5)
-        # max_trades=0 означает «без лимита» — не проверяем
-        if max_trades > 0:
-            open_count = await db.db_count_open_trades(user.user_id)
-            if open_count >= max_trades:
-                await cb.message.answer(
-                    f"⛔ <b>Лимит сделок достигнут</b> ({open_count}/{max_trades})\n\n"
-                    f"Дождись закрытия открытых позиций.",
-                    parse_mode="HTML",
-                )
-                return
 
         wait = await cb.message.answer("⏳ Открываю позицию на Bybit...")
         try:
@@ -3688,6 +3723,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 tp2=float(trade.get("tp2") or 0),
                 tp3=float(trade.get("tp3") or 0),
             )
+            # Сохраняем pos_idx для корректного BE-мониторинга
+            if result.get("ok"):
+                await db.db_update_trade_pos_idx(trade_id, result.get("pos_idx", 0))
             # Сохраняем order_id и pos_idx — критично для BE-монитора и дедупликации
             if result.get("ok"):
                 await db.db_update_trade_bybit(
@@ -4065,6 +4103,271 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 log.warning(f"import_subs line error: {e}")
                 errors += 1
         await msg.answer(f"✅ Восстановлено: {restored}  ❌ Ошибок: {errors}")
+
+    # ─── ПАНЕЛЬ ПОЗИЦИЙ BYBIT ──────────────────────────
+
+    def _fmt_bybit_dashboard(positions: list, orders: list, summary: dict) -> str:
+        NL = "\n"
+        eq       = summary.get("equity", 0.0)
+        upnl     = summary.get("unrealized_pnl", 0.0)
+        avail    = summary.get("available", 0.0)
+        pnl24    = summary.get("closed_pnl_24h", 0.0)
+        trades24 = summary.get("trades_24h", 0)
+        wins24   = summary.get("wins_24h", 0)
+
+        upnl_str = ("+$" if upnl >= 0 else "-$") + f"{abs(upnl):.2f}"
+        pnl24_str = ("+$" if pnl24 >= 0 else "-$") + f"{abs(pnl24):.2f}"
+
+        lines = [
+            "📊 <b>BYBIT — Панель управления</b>" + NL,
+            f"💰 Баланс: <b>${eq:.2f}</b>   💵 Доступно: <b>${avail:.2f}</b>",
+            f"📈 Нереализ. P&L: <b>{upnl_str}</b>",
+        ]
+
+        # Открытые позиции
+        open_pos = [p for p in positions if float(p.get("size", 0)) > 0]
+        if open_pos:
+            lines.append(NL + f"─── Открытые позиции ({len(open_pos)}) ───")
+            for pos in open_pos:
+                sym      = pos.get("symbol", "")
+                side     = pos.get("side", "")
+                size     = pos.get("size", "0")
+                entry    = float(pos.get("entryPrice", 0) or 0)
+                mark     = float(pos.get("markPrice", 0) or 0)
+                pos_upnl = float(pos.get("unrealisedPnl", 0) or 0)
+                lev      = pos.get("leverage", "?")
+                sl_raw   = pos.get("stopLoss", "0") or "0"
+                sl       = float(sl_raw)
+
+                dir_em   = "🟢 LONG" if side == "Buy" else "🔴 SHORT"
+                upnl_em  = ("+" if pos_upnl >= 0 else "") + f"${pos_upnl:.2f}"
+                pct = ((mark - entry) / entry * 100) if entry > 0 else 0.0
+                if side == "Sell":
+                    pct = -pct
+
+                sl_line = f"   🛑 SL: <code>{sl:.6g}</code>" if sl > 0 else ""
+                lines.append(
+                    f"{dir_em} <b>{sym}</b> x{lev}   📦 {size}" + NL +
+                    f"   🎯 Вход: <code>{entry:.6g}</code>  →  Сейчас: <code>{mark:.6g}</code>" + NL +
+                    f"   💹 P&L: <b>{upnl_em}</b> ({pct:+.1f}%)" +
+                    (NL + sl_line if sl_line else "")
+                )
+        else:
+            lines.append(NL + "─── Открытых позиций нет ───")
+
+        # Ожидающие ордера
+        if orders:
+            lines.append(NL + f"─── Ожидающие ордера ({len(orders)}) ───")
+            for order in orders[:10]:
+                sym    = order.get("symbol", "")
+                side_o = order.get("side", "")
+                price  = order.get("price", "?")
+                qty    = order.get("qty", "?")
+                reduce = " [TP]" if order.get("reduceOnly") else ""
+                em     = "🟢" if side_o == "Buy" else "🔴"
+                lines.append(f"  {em} {sym} {side_o} Limit <code>{price}</code>  ({qty}){reduce}")
+            if len(orders) > 10:
+                lines.append(f"  … ещё {len(orders) - 10} ордеров")
+        else:
+            lines.append(NL + "─── Ожидающих ордеров нет ───")
+
+        # 24ч статистика
+        lines.append(NL + "─── За последние 24 часа ───")
+        wr_str = f"  Win: {wins24}/{trades24} ({int(wins24/trades24*100)}%)" if trades24 > 0 else ""
+        lines.append(f"📊 Закрыто сделок: <b>{trades24}</b>{wr_str}")
+        lines.append(f"💵 Реализов. P&L: <b>{pnl24_str}</b>")
+
+        return NL.join(lines)
+
+    async def _load_bybit_dashboard(api_key: str, api_secret: str):
+        """Загружает все данные за одно подключение к Bybit (быстро)."""
+        import bybit_trader as _bt
+        return await _bt.get_dashboard(api_key, api_secret)
+
+    @dp.callback_query(F.data == "bybit_pos")
+    async def bybit_positions(cb: CallbackQuery):
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        has, _ = user.check_access()
+        if not has:
+            await cb.answer("❌ Нет доступа", show_alert=True); return
+        api_key    = getattr(user, "bybit_api_key",    "")
+        api_secret = getattr(user, "bybit_api_secret", "")
+        if not api_key:
+            await cb.answer("❌ API ключи не настроены", show_alert=True); return
+
+        try:
+            await cb.message.edit_text("⏳ Загружаю данные с Bybit...", parse_mode="HTML")
+        except Exception:
+            pass
+
+        try:
+            positions, orders, summary = await _load_bybit_dashboard(api_key, api_secret)
+        except Exception as e:
+            await cb.message.edit_text(f"❌ Ошибка Bybit:\n<code>{e}</code>", parse_mode="HTML")
+            return
+
+        from keyboards import kb_bybit_dashboard
+        text = _fmt_bybit_dashboard(positions, orders, summary)
+        kb   = kb_bybit_dashboard(positions, orders)
+        try:
+            await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            await cb.message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+    @dp.callback_query(F.data.startswith("bybit_pos_close_") & ~F.data.startswith("bybit_pos_close_ok_"))
+    async def bybit_pos_close_ask(cb: CallbackQuery):
+        """Запрашивает подтверждение закрытия позиции."""
+        await cb.answer()
+        # callback: bybit_pos_close_{symbol}_{pos_idx}
+        parts = cb.data[len("bybit_pos_close_"):].rsplit("_", 1)
+        if len(parts) != 2:
+            await cb.answer("Ошибка формата", show_alert=True); return
+        symbol, pos_idx_s = parts[0], parts[1]
+        try:
+            pos_idx = int(pos_idx_s)
+        except ValueError:
+            await cb.answer("Ошибка формата", show_alert=True); return
+
+        from keyboards import kb_close_confirm
+        await safe_edit(
+            cb,
+            f"⚠️ <b>Закрыть {symbol} по рынку?</b>\n\nЭто действие нельзя отменить.",
+            kb_close_confirm(symbol, pos_idx),
+        )
+
+    @dp.callback_query(F.data.startswith("bybit_pos_close_ok_"))
+    async def bybit_pos_close_confirm(cb: CallbackQuery):
+        """Закрывает позицию маркет-ордером."""
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        api_key    = getattr(user, "bybit_api_key",    "")
+        api_secret = getattr(user, "bybit_api_secret", "")
+        if not api_key:
+            await cb.answer("❌ API ключи не настроены", show_alert=True); return
+
+        # callback: bybit_pos_close_ok_{symbol}_{pos_idx}
+        parts = cb.data[len("bybit_pos_close_ok_"):].rsplit("_", 1)
+        if len(parts) != 2:
+            await cb.answer("Ошибка формата", show_alert=True); return
+        symbol, pos_idx_s = parts[0], parts[1]
+        try:
+            pos_idx = int(pos_idx_s)
+        except ValueError:
+            await cb.answer("Ошибка формата", show_alert=True); return
+
+        try:
+            await cb.message.edit_text(f"⏳ Закрываю {symbol}...", parse_mode="HTML")
+        except Exception:
+            pass
+
+        import bybit_trader as _bt
+        # Получаем актуальный размер и сторону позиции
+        positions = await _bt.get_positions(api_key, api_secret, symbol)
+        pos = next((p for p in positions
+                    if p.get("symbol") == _bt._to_bybit_symbol(symbol)
+                    and int(p.get("positionIdx", 0)) == pos_idx
+                    and float(p.get("size", 0)) > 0), None)
+        if not pos:
+            await cb.message.edit_text(
+                f"ℹ️ Позиция {symbol} уже закрыта или не найдена.",
+                parse_mode="HTML",
+            )
+            return
+
+        # Сначала отменяем все TP-ордера
+        await _bt.cancel_all_orders(api_key, api_secret, symbol)
+
+        result = await _bt.close_position(
+            api_key, api_secret,
+            symbol,
+            side    = pos.get("side", "Buy"),
+            size    = pos.get("size", "0"),
+            pos_idx = pos_idx,
+        )
+        if result.get("ok"):
+            await cb.message.edit_text(
+                f"✅ <b>{symbol}</b> закрыт маркет-ордером.\n\n"
+                f"🆔 Order ID: <code>{result.get('order_id', '—')}</code>",
+                parse_mode="HTML",
+            )
+        else:
+            await cb.message.edit_text(
+                f"❌ Не удалось закрыть {symbol}:\n{result.get('error')}",
+                parse_mode="HTML",
+            )
+
+    @dp.callback_query(F.data.startswith("bybit_ord_cancel_all_"))
+    async def bybit_ord_cancel_all(cb: CallbackQuery):
+        """Отменяет все ордера для символа."""
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        api_key    = getattr(user, "bybit_api_key",    "")
+        api_secret = getattr(user, "bybit_api_secret", "")
+        if not api_key:
+            await cb.answer("❌ API ключи не настроены", show_alert=True); return
+
+        # callback: bybit_ord_cancel_all_{symbol}_{pos_idx}
+        tail  = cb.data[len("bybit_ord_cancel_all_"):]
+        parts = tail.rsplit("_", 1)
+        symbol = parts[0]
+
+        import bybit_trader as _bt
+        result = await _bt.cancel_all_orders(api_key, api_secret, symbol)
+        if result.get("ok"):
+            cancelled = result.get("cancelled", 0)
+            await cb.answer(f"✅ Отменено ордеров: {cancelled}", show_alert=True)
+        else:
+            await cb.answer(f"❌ {result.get('error', 'Ошибка')}", show_alert=True)
+
+    @dp.callback_query(F.data.startswith("bybit_ord_cancel_"))
+    async def bybit_ord_cancel_one(cb: CallbackQuery):
+        """Отменяет один ордер по orderId."""
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        api_key    = getattr(user, "bybit_api_key",    "")
+        api_secret = getattr(user, "bybit_api_secret", "")
+        if not api_key:
+            await cb.answer("❌ API ключи не настроены", show_alert=True); return
+
+        # callback: bybit_ord_cancel_{orderId}
+        order_id = cb.data[len("bybit_ord_cancel_"):]
+        if not order_id:
+            await cb.answer("Ошибка: нет order_id", show_alert=True); return
+
+        # Для отмены нужен symbol — берём из открытых ордеров
+        import bybit_trader as _bt
+        orders = await _bt.get_open_orders(api_key, api_secret)
+        target = next((o for o in orders if o.get("orderId") == order_id), None)
+        if not target:
+            await cb.answer("ℹ️ Ордер уже исполнен или отменён", show_alert=True)
+            # Обновляем панель
+            try:
+                positions, orders2, summary = await _load_bybit_dashboard(api_key, api_secret)
+                from keyboards import kb_bybit_dashboard
+                text = _fmt_bybit_dashboard(positions, orders2, summary)
+                kb   = kb_bybit_dashboard(positions, orders2)
+                await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        symbol = target.get("symbol", "")
+        result = await _bt.cancel_order(api_key, api_secret, symbol, order_id)
+        if result.get("ok"):
+            await cb.answer("✅ Ордер отменён", show_alert=False)
+        else:
+            await cb.answer(f"❌ {result.get('error', 'Ошибка')}", show_alert=True)
+
+        # Обновляем панель после отмены
+        try:
+            positions, orders2, summary = await _load_bybit_dashboard(api_key, api_secret)
+            from keyboards import kb_bybit_dashboard
+            text = _fmt_bybit_dashboard(positions, orders2, summary)
+            kb   = kb_bybit_dashboard(positions, orders2)
+            await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            pass
 
     # ─── Закрываем register_handlers ──────────────────
     # (конец функции)
