@@ -101,9 +101,9 @@ def _signal_text(
     )
 
 
-def _signal_kb(trade_id: str, symbol: str) -> InlineKeyboardMarkup:
+def _signal_kb(trade_id: str, symbol: str, show_trade_btn: bool = False) -> InlineKeyboardMarkup:
     """Клавиатура под сигналом Герчика."""
-    return InlineKeyboardMarkup(inline_keyboard=[
+    rows = [
         [
             InlineKeyboardButton(text="📈 График",     url=_tv_url(symbol)),
             InlineKeyboardButton(text="📊 Статистика", callback_data="my_stats"),
@@ -114,7 +114,15 @@ def _signal_kb(trade_id: str, symbol: str) -> InlineKeyboardMarkup:
                 callback_data="sig_records_" + trade_id,
             ),
         ],
-    ])
+    ]
+    if show_trade_btn:
+        rows.insert(0, [
+            InlineKeyboardButton(
+                text="✅ Открыть сделку на Bybit",
+                callback_data="exec_trade_" + trade_id,
+            ),
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 class GerchikScanner:
@@ -323,6 +331,70 @@ class GerchikScanner:
             "created_at":    time.time(),
         })
 
+        # ── Авто-трейдинг ────────────────────────────
+        auto_trade      = getattr(user, "auto_trade",      False)
+        auto_trade_mode = getattr(user, "auto_trade_mode", "confirm")
+        api_key         = getattr(user, "bybit_api_key",   "")
+        api_secret      = getattr(user, "bybit_api_secret","")
+        risk_pct        = getattr(user, "trade_risk_pct",  1.0)
+        leverage        = getattr(user, "trade_leverage",  10)
+        show_trade_btn  = False
+
+        if auto_trade and api_key and api_secret:
+            if await db.db_has_open_trade_for_symbol(uid, symbol):
+                log.info(f"Герчик auto_trade skip duplicate: {symbol} uid={uid}")
+                auto_trade = False
+
+        if auto_trade and api_key and api_secret:
+            max_trades = getattr(user, "max_trades_limit", 5)
+            open_count = await db.db_count_open_trades(uid)
+            if max_trades > 0 and open_count >= max_trades:
+                await self._bot.send_message(
+                    uid,
+                    f"⛔ Авто-трейд отклонён: достигнут лимит открытых сделок "
+                    f"({open_count}/{max_trades}).\n"
+                    f"Сигнал: {symbol} {sig['direction']}",
+                )
+                auto_trade = False
+
+        if auto_trade and api_key and api_secret:
+            if auto_trade_mode == "auto":
+                try:
+                    import bybit_trader
+                    result = await bybit_trader.place_trade(
+                        api_key, api_secret,
+                        symbol, sig["direction"],
+                        sig["entry"], sig["sl"], sig["tp1"],
+                        risk_pct, leverage,
+                        tp2=sig["tp2"], tp3=sig["tp2"],
+                    )
+                    if result.get("ok"):
+                        # Сохраняем order_id и pos_idx — дедупликация и BE-монитор
+                        await db.db_update_trade_bybit(
+                            trade_id,
+                            result.get("order_id", ""),
+                            result.get("pos_idx", 0),
+                        )
+                    else:
+                        # Сделка не открыта — SKIP чтобы не блокировать следующий сигнал
+                        await db.db_set_trade_result(trade_id, "SKIP", 0.0)
+                    trade_msg = bybit_trader.format_trade_result(
+                        result, sig["direction"], symbol,
+                        sig["entry"], sig["sl"], sig["tp1"],
+                        risk_pct, leverage,
+                        tp2=sig["tp2"], tp3=sig["tp2"],
+                    )
+                    await self._bot.send_message(uid, trade_msg, parse_mode="HTML")
+                except Exception as e:
+                    log.error(f"Герчик auto_trade {symbol}: {e}")
+                    await db.db_set_trade_result(trade_id, "SKIP", 0.0)
+                    await self._bot.send_message(
+                        uid,
+                        f"⚠️ Авто-трейд: ошибка открытия {symbol}: {e}",
+                    )
+            else:
+                show_trade_btn = True
+
         text = _signal_text(
             symbol    = symbol,
             direction = sig["direction"],
@@ -339,7 +411,7 @@ class GerchikScanner:
                 uid,
                 text,
                 parse_mode      = "HTML",
-                reply_markup    = _signal_kb(trade_id, symbol),
+                reply_markup    = _signal_kb(trade_id, symbol, show_trade_btn),
                 protect_content = True,
             )
             user.signals_received += 1

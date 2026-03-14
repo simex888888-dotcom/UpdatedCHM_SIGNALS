@@ -494,11 +494,15 @@ class MidScanner:
                         await db.db_update_trade_pos_idx(trade_id, result.get("pos_idx", 0))
                     # Сохраняем order_id и pos_idx — критично для BE-монитора
                     if result.get("ok"):
+                        # Сохраняем order_id и pos_idx — дедупликация и BE-монитор
                         await db.db_update_trade_bybit(
                             trade_id,
                             result.get("order_id", ""),
                             result.get("pos_idx", 0),
                         )
+                    else:
+                        # Сделка не открыта — помечаем SKIP чтобы не блокировать следующий сигнал
+                        await db.db_set_trade_result(trade_id, "SKIP", 0.0)
                     trade_msg = bybit_trader.format_trade_result(
                         result, sig.direction, sig.symbol,
                         sig.entry, sig.sl, tp1, risk_pct, leverage,
@@ -509,6 +513,7 @@ class MidScanner:
                     )
                 except Exception as e:
                     log.error(f"auto_trade {sig.symbol}: {e}")
+                    await db.db_set_trade_result(trade_id, "SKIP", 0.0)
                     await self.bot.send_message(
                         user.user_id,
                         f"⚠️ Авто-трейд: ошибка открытия {sig.symbol}: {e}"

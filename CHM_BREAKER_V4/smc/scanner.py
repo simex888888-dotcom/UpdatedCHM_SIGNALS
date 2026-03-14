@@ -284,6 +284,11 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
                 show_trade_btn  = False
 
                 if auto_trade and api_key and api_secret:
+                    if await db.db_has_open_trade_for_symbol(user.user_id, sig.symbol):
+                        log.info(f"SMC auto_trade skip duplicate: {sig.symbol} uid={user.user_id}")
+                        auto_trade = False
+
+                if auto_trade and api_key and api_secret:
                     max_trades = getattr(user, "max_trades_limit", 5)
                     open_count = await db.db_count_open_trades(user.user_id)
                     # max_trades=0 означает без лимита
@@ -308,11 +313,16 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
                                 risk_pct, leverage,
                                 tp2=sig.tp2, tp3=sig.tp3,
                             )
-                            # Сохраняем pos_idx чтобы BE-монитор корректно переносил стоп
-                            if result.get("ok") and "pos_idx" in result:
-                                await db.db_update_trade_pos_idx(
-                                    trade_id, result["pos_idx"]
+                            if result.get("ok"):
+                                # Сохраняем order_id и pos_idx — дедупликация и BE-монитор
+                                await db.db_update_trade_bybit(
+                                    trade_id,
+                                    result.get("order_id", ""),
+                                    result.get("pos_idx", 0),
                                 )
+                            else:
+                                # Сделка не открыта — SKIP чтобы не блокировать следующий сигнал
+                                await db.db_set_trade_result(trade_id, "SKIP", 0.0)
                             trade_msg = bybit_trader.format_trade_result(
                                 result, sig.direction, sig.symbol,
                                 sig.entry, sig.sl, sig.tp1, risk_pct, leverage,
@@ -322,6 +332,7 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
                                                    parse_mode="HTML", protect_content=True)
                         except Exception as e:
                             log.error(f"SMC auto_trade {sig.symbol}: {e}")
+                            await db.db_set_trade_result(trade_id, "SKIP", 0.0)
                             await bot.send_message(
                                 user.user_id,
                                 f"⚠️ Авто-трейд: ошибка открытия {sig.symbol}: {e}",

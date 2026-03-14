@@ -674,11 +674,11 @@ async def db_set_trade_be(trade_id: str):
 
 
 async def db_count_open_trades(user_id: int, window_hours: int = 24) -> int:
-    """Количество сделок без результата за последние window_hours часов."""
+    """Количество ИСПОЛНЕННЫХ (order_id != '') открытых сделок за последние window_hours часов."""
     since = time.time() - window_hours * 3600
     async with aiosqlite.connect(_db_path) as db:
         async with db.execute(
-            "SELECT COUNT(*) FROM trades WHERE user_id=? AND result='' AND created_at>=?",
+            "SELECT COUNT(*) FROM trades WHERE user_id=? AND result='' AND order_id != '' AND created_at>=?",
             (user_id, since),
         ) as cur:
             row = await cur.fetchone()
@@ -730,6 +730,9 @@ async def db_get_auto_stats(user_id: int) -> dict:
 
 
 async def db_has_open_trade_for_symbol(user_id: int, symbol: str) -> bool:
+    """Возвращает True если у пользователя уже есть ИСПОЛНЕННАЯ (order_id != '')
+    незакрытая сделка по данному символу.
+    Сигналы-записи без order_id (pending, не отправленные на биржу) не считаются.
     """
     Возвращает True если у пользователя уже есть реально открытая позиция
     на Bybit по данному символу (order_id != '' — значит ордер отправлен на биржу).
@@ -794,6 +797,54 @@ async def db_get_user_stats(user_id: int) -> dict:
         "tp1_cnt": sum(1 for t in wins if t["result"] == "TP1"),
         "tp2_cnt": sum(1 for t in wins if t["result"] == "TP2"),
         "tp3_cnt": sum(1 for t in wins if t["result"] == "TP3"),
+    }
+
+
+def _strategy_stats(trades: list[dict]) -> dict:
+    """Вычисляет статистику для набора сделок одной стратегии."""
+    if not trades:
+        return {}
+    wins   = [t for t in trades if t["result"] in ("TP1", "TP2", "TP3")]
+    losses = [t for t in trades if t["result"] == "SL"]
+    total  = len(trades)
+    total_rr = sum(t["result_rr"] for t in trades)
+    return {
+        "total":    total,
+        "wins":     len(wins),
+        "losses":   len(losses),
+        "be_cnt":   sum(1 for t in trades if t["result"] == "BE"),
+        "winrate":  len(wins) / total * 100 if total else 0.0,
+        "avg_rr":   total_rr / total if total else 0.0,
+        "total_rr": total_rr,
+        "tp1_cnt":  sum(1 for t in wins if t["result"] == "TP1"),
+        "tp2_cnt":  sum(1 for t in wins if t["result"] == "TP2"),
+        "tp3_cnt":  sum(1 for t in wins if t["result"] == "TP3"),
+        "longs":    sum(1 for t in trades if t["direction"] == "LONG"),
+        "shorts":   sum(1 for t in trades if t["direction"] == "SHORT"),
+        "longs_w":  sum(1 for t in trades if t["direction"] == "LONG"  and t["result"] in ("TP1","TP2","TP3")),
+        "shorts_w": sum(1 for t in trades if t["direction"] == "SHORT" and t["result"] in ("TP1","TP2","TP3")),
+    }
+
+
+async def db_get_user_stats_by_strategy(user_id: int) -> dict:
+    """Статистика авто-трейдинга с разбивкой по стратегиям.
+
+    Возвращает dict с ключами 'LEVELS', 'SMC', 'GERCHIK' и 'ALL'.
+    Каждое значение — dict со статистикой или пустой dict если сделок нет.
+    Группировка по полю breakout_type:
+      SMC     → breakout_type = 'SMC'
+      GERCHIK → breakout_type = 'ГЕРЧИК'
+      LEVELS  → всё остальное
+    """
+    trades = await db_get_user_trades(user_id)
+    smc     = [t for t in trades if t.get("breakout_type") == "SMC"]
+    gerchik = [t for t in trades if t.get("breakout_type") == "ГЕРЧИК"]
+    levels  = [t for t in trades if t.get("breakout_type") not in ("SMC", "ГЕРЧИК")]
+    return {
+        "LEVELS":  _strategy_stats(levels),
+        "SMC":     _strategy_stats(smc),
+        "GERCHIK": _strategy_stats(gerchik),
+        "ALL":     _strategy_stats(trades),
     }
 
 
