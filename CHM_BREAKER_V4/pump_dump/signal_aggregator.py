@@ -79,13 +79,23 @@ def _mark_sent(symbol: str, level: int) -> None:
 
 
 def _direction_simple(an: "AnomalyResult", buy_ratio: float) -> Optional[Literal["PUMP", "DUMP"]]:
-    """Определяет направление по объёму торгов и ценовому спайку (для ранних уровней)."""
+    """Определяет направление по ценовому спайку, объёму торгов или CVD.
+
+    Порядок приоритета:
+      1. Ценовой спайк (самый надёжный)
+      2. Дисбаланс покупателей/продавцов из @trade потока (≥60% / ≤40%)
+      3. CVD-направление как последний резерв — позволяет выявить
+         накопление/распределение ещё до движения цены.
+    """
     if an.spike_dir is not None:
         return an.spike_dir
     if buy_ratio >= 0.60:
         return "PUMP"
     if buy_ratio <= 0.40:
         return "DUMP"
+    # Резерв: CVD-направление (критично для раннего обнаружения накопления)
+    if an.cvd_dir is not None:
+        return an.cvd_dir
     return None
 
 
@@ -102,13 +112,12 @@ def check_alert_level(
     """
     n = len(active)
 
-    # Уровень 3: финальный сигнал
+    # Уровень 3: финальный сигнал.
+    # ML не блокирует уровень 3 жёстко — она учитывается через штраф -15 к score
+    # в analyze_levels(). Раньше ML-блок полностью подавлял сигналы когда
+    # модель говорила NEUTRAL (что происходит при недостатке обучающих данных).
     if n >= LVL3_MIN_LAYERS and score >= LVL3_MIN_SCORE:
-        ml_ready = get_model().is_ready()
-        if ml_ready and (ml is None or ml.predicted == "NEUTRAL"):
-            pass  # ML не согласна — не уходим на уровень 3
-        else:
-            return 3
+        return 3
 
     # Уровень 2: наблюдение
     if n >= LVL2_MIN_LAYERS and score >= LVL2_MIN_SCORE:
@@ -425,9 +434,14 @@ def _score_layers(direction, an, ob, hs, ind, ml) -> tuple[dict, list, float]:
     total_w = sum(w[k] for k in active)
     # Бонус за резкое изменение funding
     total_w += hs.funding_delta_bonus if "funding" in active else 0.0
-    # Нормируем к 100%
-    max_w = sum(w.values())
-    score = min(total_w / max_w * 100, 100.0)
+
+    # Нормируем к 100%.
+    # Ключевое исправление: если ML-модель не обучена — исключаем её вес
+    # из знаменателя. Иначе при max_w=1.12 порог 45% требует суммы весов 0.504,
+    # что с 3 лучшими слоями (0.45) недостижимо. Без ML: max_w=0.97, 0.45/0.97=46.4% ✓
+    ml_trained = get_model().is_ready()
+    max_w = sum(v for k, v in w.items() if k != "ml" or ml_trained)
+    score = min(total_w / max_w * 100, 100.0) if max_w > 0 else 0.0
 
     return active, inactive, round(score, 1)
 
