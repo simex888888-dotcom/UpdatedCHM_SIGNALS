@@ -2159,8 +2159,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not has:
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
-        # Проверяем стратегию перед включением
-        if not user.long_active and not user.strategy:
+        # Проверяем стратегию перед включением (пустая строка или None — просим выбрать)
+        if not user.long_active and user.strategy not in ("LEVELS", "SMC", "GERCHIK"):
             await cb.answer()
             await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.long_active = not user.long_active
@@ -2489,8 +2489,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not has:
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
-        # Проверяем стратегию перед включением
-        if not user.short_active and not user.strategy:
+        # Проверяем стратегию перед включением (пустая строка или None — просим выбрать)
+        if not user.short_active and user.strategy not in ("LEVELS", "SMC", "GERCHIK"):
             await cb.answer()
             await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.short_active = not user.short_active
@@ -2828,7 +2828,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
         is_active = user.active and user.scan_mode == "both"
-        if not is_active and not user.strategy:
+        if not is_active and user.strategy not in ("LEVELS", "SMC", "GERCHIK"):
             await cb.answer()
             await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.active = not is_active
