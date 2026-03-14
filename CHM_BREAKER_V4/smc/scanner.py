@@ -249,9 +249,17 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
 
                 # Антидубликат per-user
                 sig_hash = f"{user.user_id}_{symbol}_{sig.direction}_{sig.score}"
-                if time.time() - _sent_signals.get(sig_hash, 0) < _DEDUP_HOURS * 3600:
+                now = time.time()
+                if now - _sent_signals.get(sig_hash, 0) < _DEDUP_HOURS * 3600:
                     continue
-                _sent_signals[sig_hash] = time.time()
+                _sent_signals[sig_hash] = now
+
+                # Прунинг старых записей (каждые 500 записей)
+                if len(_sent_signals) > 500:
+                    cutoff = now - _DEDUP_HOURS * 3600
+                    stale = [k for k, v in _sent_signals.items() if v < cutoff]
+                    for k in stale:
+                        del _sent_signals[k]
 
                 # ── Сохраняем сигнал в БД ────────────────────────────
                 trade_id = f"{user.user_id}_{int(time.time() * 1000)}"

@@ -155,6 +155,7 @@ def get_market_structure(df: pd.DataFrame,
                          bos_confirm: bool = True,
                          choch_enabled: bool = True) -> dict:
     """Полный анализ рыночной структуры."""
+    lookback = max(lookback, 2)
     if len(df) < lookback * 3:
         return {
             "trend": "RANGING",
