@@ -52,12 +52,18 @@ class Config:
     #  🔑 TELEGRAM
     # ════════════════════════════════════════════════
 
-    TELEGRAM_TOKEN ="8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k"
-
+    TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 
     # Твой Telegram ID — станешь администратором
     # Узнать: написать @userinfobot
-    ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "445677777,705020259,7107654772").split(",")]
+    # Обязательно задать переменную окружения ADMIN_IDS=123456789,987654321
+    _admin_ids_raw = os.getenv("ADMIN_IDS", "")
+    if not _admin_ids_raw:
+        raise RuntimeError(
+            "Переменная окружения ADMIN_IDS не задана! "
+            "Пример: ADMIN_IDS=123456789,987654321"
+        )
+    ADMIN_IDS = [int(x.strip()) for x in _admin_ids_raw.split(",")]
     # ════════════════════════════════════════════════
     #  🗄  SQLITE — путь к БД (persistent volume)
     # ════════════════════════════════════════════════

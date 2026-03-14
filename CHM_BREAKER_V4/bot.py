@@ -300,20 +300,37 @@ async def main():
         except Exception as exc:
             log.warning(f"subs_backup final save error: {exc}")
 
+    async def _guarded(name: str, coro):
+        """Оборачивает корутину: одна упавшая задача не убивает остальные."""
+        try:
+            await coro
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.critical(f"💀 Задача '{name}' завершилась с необработанным исключением!", exc_info=True)
+
     try:
         await asyncio.gather(
-            dp.start_polling(bot, allowed_updates=["message", "callback_query"]),
-            scanner.run_forever(),
-            pd_runner.run_forever(),
-            turso_sync.turso_sync_loop(config.DB_PATH),
-            _subs_backup_loop(),
-            cache_gc.gc_loop(),
-            poly_scheduler.digest_loop(bot, poly, um),
-            poly_scheduler.alerts_loop(bot, poly),
-            gerchik_scanner.run_forever(),
+            _guarded("polling",          dp.start_polling(bot, allowed_updates=["message", "callback_query"])),
+            _guarded("scanner",          scanner.run_forever()),
+            _guarded("pd_runner",        pd_runner.run_forever()),
+            _guarded("turso_sync",       turso_sync.turso_sync_loop(config.DB_PATH)),
+            _guarded("subs_backup",      _subs_backup_loop()),
+            _guarded("cache_gc",         cache_gc.gc_loop()),
+            _guarded("poly_digest",      poly_scheduler.digest_loop(bot, poly, um)),
+            _guarded("poly_alerts",      poly_scheduler.alerts_loop(bot, poly)),
+            _guarded("gerchik_scanner",  gerchik_scanner.run_forever()),
         )
     finally:
-        log.info("🛑 Завершение...")
+        log.info("🛑 Завершение — отменяем фоновые задачи...")
+        current = asyncio.current_task()
+        pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        log.info("🛑 Закрываем соединения...")
         await scanner.fetcher.close()
         await bot.session.close()
         await poly.close()

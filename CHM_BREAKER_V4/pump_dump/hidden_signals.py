@@ -92,8 +92,12 @@ class HiddenSignalsCache:
                         data = await r.json()
                     rate = float(data.get("data", {}).get("fundingRate", 0))
                     self._funding[sym].append((rate, time.time()))
-                except Exception:
-                    pass
+                except asyncio.TimeoutError:
+                    log.debug(f"funding {sym}: timeout")
+                except aiohttp.ClientError as e:
+                    log.debug(f"funding {sym}: {e}")
+                except Exception as e:
+                    log.warning(f"funding {sym}: неожиданная ошибка: {e}")
 
         async with aiohttp.ClientSession() as s:
             await asyncio.gather(*[_one(s, sym) for sym in symbols], return_exceptions=True)
@@ -110,8 +114,12 @@ class HiddenSignalsCache:
                         data = await r.json()
                     oi = float(data.get("data", {}).get("openInterest", 0))
                     self._oi_history[sym].append((oi, time.time()))
-                except Exception:
-                    pass
+                except asyncio.TimeoutError:
+                    log.debug(f"OI {sym}: timeout")
+                except aiohttp.ClientError as e:
+                    log.debug(f"OI {sym}: {e}")
+                except Exception as e:
+                    log.warning(f"OI {sym}: неожиданная ошибка: {e}")
 
         async with aiohttp.ClientSession() as s:
             await asyncio.gather(*[_one(s, sym) for sym in symbols], return_exceptions=True)
@@ -130,8 +138,12 @@ class HiddenSignalsCache:
                     if entries:
                         ratio = float(entries[0].get("longShortRatio", 1.0))
                         self._ls_ratio[sym] = ratio
-                except Exception:
-                    pass
+                except asyncio.TimeoutError:
+                    log.debug(f"L/S {sym}: timeout")
+                except aiohttp.ClientError as e:
+                    log.debug(f"L/S {sym}: {e}")
+                except Exception as e:
+                    log.warning(f"L/S {sym}: неожиданная ошибка: {e}")
 
         async with aiohttp.ClientSession() as s:
             await asyncio.gather(*[_one(s, sym) for sym in symbols], return_exceptions=True)
@@ -158,6 +170,12 @@ class HiddenSignalsCache:
 
     def get_ls_ratio(self, sym: str) -> float:
         return self._ls_ratio.get(sym, 1.0)
+
+    def reset_fetch_timestamps(self) -> None:
+        """Сбрасывает TTL-кэш для немедленного обновления Funding/OI/L&S."""
+        self._last_funding_fetch = 0
+        self._last_oi_fetch      = 0
+        self._last_ls_fetch      = 0
 
 
 # Синглтон кэша

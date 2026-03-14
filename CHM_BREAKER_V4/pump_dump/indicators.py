@@ -80,32 +80,48 @@ def _rsi_series(close: pd.Series, period: int = 14) -> np.ndarray:
     return rsi.values
 
 
+def _local_extrema(arr: np.ndarray, window: int = 3, mode: str = "min") -> list[int]:
+    """Возвращает индексы локальных минимумов/максимумов в окне ±window баров."""
+    result = []
+    for i in range(window, len(arr) - window):
+        segment = arr[i - window: i + window + 1]
+        if mode == "min" and arr[i] <= segment.min():
+            result.append(i)
+        elif mode == "max" and arr[i] >= segment.max():
+            result.append(i)
+    return result
+
+
 def _rsi_divergence(close: pd.Series, rsi_now: float,
                     df: pd.DataFrame) -> tuple[bool, Optional[str]]:
     """
-    Бычья: цена делает новый минимум, RSI — более высокий минимум.
-    Медвежья: цена делает новый максимум, RSI — более низкий максимум.
+    Бычья: два последовательных локальных минимума цены — второй ниже, RSI второго выше.
+    Медвежья: два последовательных локальных максимума цены — второй выше, RSI второго ниже.
 
+    Алгоритм ищет настоящие локальные экстремумы в окне ±3 бара,
+    чтобы не сравнивать произвольный последний бар с исторически далёкими точками.
     O(n) — RSI вычисляется один раз для всей серии.
     """
     if len(df) < 20:
         return False, None
 
-    n = min(len(close), 20)
+    n = min(len(close), 30)
     prices    = close.values[-n:]
-    rsi_slice = _rsi_series(close)[-n:]   # одноразовый O(n) расчёт
+    rsi_slice = _rsi_series(close)[-n:]
 
-    p_min2_idx = n - 1
+    # Бычья дивергенция — ищем два локальных минимума
+    mins = _local_extrema(prices, window=3, mode="min")
+    if len(mins) >= 2:
+        i1, i2 = mins[-2], mins[-1]
+        if prices[i2] < prices[i1] and rsi_slice[i2] > rsi_slice[i1]:
+            return True, "PUMP"
 
-    # Ищем минимумы (бычья дивергенция)
-    p_min1_idx = int(np.argmin(prices[:-3]))
-    if prices[p_min2_idx] < prices[p_min1_idx] and rsi_slice[-1] > rsi_slice[p_min1_idx]:
-        return True, "PUMP"
-
-    # Ищем максимумы (медвежья дивергенция)
-    p_max1_idx = int(np.argmax(prices[:-3]))
-    if prices[p_min2_idx] > prices[p_max1_idx] and rsi_slice[-1] < rsi_slice[p_max1_idx]:
-        return True, "DUMP"
+    # Медвежья дивергенция — ищем два локальных максимума
+    maxs = _local_extrema(prices, window=3, mode="max")
+    if len(maxs) >= 2:
+        i1, i2 = maxs[-2], maxs[-1]
+        if prices[i2] > prices[i1] and rsi_slice[i2] < rsi_slice[i1]:
+            return True, "DUMP"
 
     return False, None
 

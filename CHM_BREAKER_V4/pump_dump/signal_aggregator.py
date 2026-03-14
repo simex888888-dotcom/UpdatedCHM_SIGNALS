@@ -14,13 +14,13 @@ signal_aggregator.py — агрегатор сигналов.
 """
 
 import asyncio
+import datetime
 import logging
 import time
 from dataclasses import dataclass
 from typing import Optional, Literal
 
 log = logging.getLogger("CHM.PD.Aggregator")
-_debug_counter = 0   # счётчик событий для периодического debug-лога
 
 from pump_dump.pd_config import (
     LAYER_WEIGHTS, MIN_SIGNAL_SCORE, MIN_ACTIVE_LAYERS,
@@ -253,13 +253,14 @@ def format_level2(
         "rsi_div":   "📉 RSI Divergence",
     }
 
+    _total_layers = len(LAYER_WEIGHTS)
     lines = [
         f"⚠️ <b>НАБЛЮДЕНИЕ — {emoji} {dir_ru}</b>",
         f"🪙 <b>${symbol}/USDT</b>  •  BingX Futures",
         f"💰 Цена: <b>${price:,.4f}</b>",
         f"{'📈' if change_pct >= 0 else '📉'} Изменение: {change_pct:+.1f}% (1m)",
         "",
-        f"🔍 <b>Активных слоёв: {len(active_layers)}/8:</b>",
+        f"🔍 <b>Активных слоёв: {len(active_layers)}/{_total_layers}:</b>",
     ]
     items = list(active_layers.keys())
     for i, key in enumerate(items):
@@ -287,7 +288,6 @@ def _format_level3_from_parts(
     hs: "HiddenResult",
 ) -> str:
     """Форматирует уровень 3 через существующий format_alert после создания SignalPayload."""
-    import datetime
     NL = "\n"
     emoji = "⚡️" if direction == "PUMP" else "💥"
     dir_ru = "ПАМП" if direction == "PUMP" else "ДАМП"
@@ -306,6 +306,7 @@ def _format_level3_from_parts(
         "rsi_div":   "📉 RSI Divergence",
     }
 
+    _total_layers = len(LAYER_WEIGHTS)
     lines = [
         f"{emoji} <b>HIGH CONFIDENCE {dir_ru} SIGNAL</b>" + NL,
         f"🪙 <b>${symbol}</b>  •  BingX Futures",
@@ -313,7 +314,7 @@ def _format_level3_from_parts(
         f"<b>{an.price_change_1m*100:+.1f}%</b> (1m) / "
         f"<b>{an.price_change_3m*100:+.1f}%</b> (3m)",
         "",
-        f"🔍 <b>Активные сигналы ({len(active)}/8):</b>",
+        f"🔍 <b>Активные сигналы ({len(active)}/{_total_layers}):</b>",
     ]
     items = list(active.items())
     for i, (key, desc) in enumerate(items):
@@ -337,94 +338,6 @@ def _format_level3_from_parts(
     ]
     return NL.join(lines)
 
-
-def aggregate(
-    symbol: str,
-    price: float,
-    an: AnomalyResult,
-    ob: OBResult,
-    hs: HiddenResult,
-    ind: IndicatorResult,
-) -> Optional[SignalPayload]:
-    """
-    Запускает все слои, считает score, возвращает SignalPayload или None.
-    """
-    global _debug_counter
-    _debug_counter += 1
-    do_debug = (_debug_counter % 500 == 0)  # каждые 500 событий логируем статистику
-
-    # ── Anti-spam ─────────────────────────────────────────────────────────────
-    now = time.time()
-    last = _last_signal_ts.get(symbol, 0)
-    if now - last < ANTI_SPAM_MINUTES * 60:
-        return None
-
-    # ── Фильтр: памп уже идёт ─────────────────────────────────────────────────
-    if an.atr_pct > MAX_ATR_PCT:
-        return None
-
-    # ── Определяем вероятное направление и оцениваем слои ────────────────────
-    ml    = get_model().predict(build_feature_vector(an, ob, hs, ind))
-    votes = _count_direction_votes(an, ob, hs, ind, ml)
-
-    if votes["PUMP"] == 0 and votes["DUMP"] == 0:
-        return None
-    direction: Literal["PUMP", "DUMP"] = "PUMP" if votes["PUMP"] >= votes["DUMP"] else "DUMP"
-
-    active, inactive, raw_score = _score_layers(direction, an, ob, hs, ind, ml)
-
-    # ML — дополнительный слой, не обязательный блокировщик.
-    # Если модель готова и говорит против — штрафуем score, но не блокируем полностью.
-    ml_ready = get_model().is_ready()
-    min_layers = MIN_ACTIVE_LAYERS
-    if ml_ready and "ml" not in active:
-        raw_score = max(0.0, raw_score - 15.0)
-
-    if do_debug:
-        log.info(
-            f"📊 PD диагностика (событие #{_debug_counter}) {symbol}: "
-            f"score={raw_score:.1f}% layers={len(active)}/{MIN_ACTIVE_LAYERS} "
-            f"dir={direction} votes={votes} "
-            f"vol_dc={an.volume_double_cond} vol_z={an.volume_zscore:.1f} "
-            f"price_spike={an.price_spike} cvd={an.cvd_signal} "
-            f"ob_imbal={ob.imbalance_signal} funding={hs.funding_signal}"
-        )
-
-    if len(active) < min_layers:
-        return None
-    if raw_score < MIN_SIGNAL_SCORE:
-        return None
-
-    _last_signal_ts[symbol] = now
-
-    return SignalPayload(
-        symbol=symbol,
-        direction=direction,
-        score=raw_score,
-        active_layers=active,
-        inactive_layers=inactive,
-        ml_result=ml,
-        price=price,
-        price_change_1m=an.price_change_1m,
-        price_change_3m=an.price_change_3m,
-        funding_rate=hs.funding_rate,
-        oi_change=hs.oi_change_10m,
-        imbalance=ob.imbalance,
-        volume_zscore=an.volume_zscore,
-        ts=now,
-    )
-
-
-def _count_direction_votes(an, ob, hs, ind, ml) -> dict:
-    v = {"PUMP": 0, "DUMP": 0}
-    for d in [an.spike_dir, an.cvd_dir, ob.imbalance_dir,
-              hs.funding_dir, hs.oi_dir, hs.cvd_div_dir,
-              hs.ls_dir, ind.macd_dir, ind.rsi_div_dir]:
-        if d in v:
-            v[d] += 1
-    if ml and ml.predicted in v:
-        v[ml.predicted] += 2   # ML голосует вдвойне
-    return v
 
 
 def _score_layers(direction, an, ob, hs, ind, ml) -> tuple[dict, list, float]:
@@ -523,6 +436,7 @@ def _score_layers(direction, an, ob, hs, ind, ml) -> tuple[dict, list, float]:
 
 def format_alert(sig: SignalPayload) -> str:
     NL = "\n"
+    _total_layers = len(LAYER_WEIGHTS)
     emoji = "⚡️" if sig.direction == "PUMP" else "💥"
     dir_ru = "ПАМП" if sig.direction == "PUMP" else "ДАМП"
     sign = "📈" if sig.direction == "PUMP" else "📉"
@@ -534,7 +448,7 @@ def format_alert(sig: SignalPayload) -> str:
         f"<b>{sig.price_change_1m*100:+.1f}%</b> (1m) / "
         f"<b>{sig.price_change_3m*100:+.1f}%</b> (3m)",
         "",
-        f"🔍 <b>Активные сигналы ({len(sig.active_layers)}/8):</b>",
+        f"🔍 <b>Активные сигналы ({len(sig.active_layers)}/{_total_layers}):</b>",
     ]
 
     layer_labels = {
@@ -561,7 +475,6 @@ def format_alert(sig: SignalPayload) -> str:
             prefix = "└" if i == len(sig.inactive_layers) - 1 else "├"
             lines.append(f"{prefix} {item}")
 
-    import datetime
     ts_str = datetime.datetime.utcfromtimestamp(sig.ts).strftime("%H:%M:%S UTC")
     sym_url = sig.symbol.replace("-", "")
     lines += [
