@@ -151,7 +151,7 @@ class GerchikScanner:
                 return df
             df = await self._fetcher.get_candles(symbol, tf, limit=300)
             if df is not None:
-                await cache.set_candles(symbol, tf, df, ttl=900)
+                await cache.set_candles(symbol, tf, df, {tf: 900})
             return df
 
     # ── Анализ одной монеты (последние закрытые бары) ─────────────────────
