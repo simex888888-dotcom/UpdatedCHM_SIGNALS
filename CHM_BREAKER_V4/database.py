@@ -361,16 +361,32 @@ async def init_db(path: str):
     _init_fernet()  # инициализируем шифрование ключей один раз при старте
     async with aiosqlite.connect(_db_path) as db:
         # PRAGMAs должны устанавливаться через execute(), а не executescript()
-        # WAL может не работать на Docker overlay/NFS — добавляем fallback
+        # WAL может не работать на Docker overlay/NFS — проверяем реальный результат
         try:
-            await db.execute("PRAGMA journal_mode=WAL")
+            cur = await db.execute("PRAGMA journal_mode=WAL")
+            row = await cur.fetchone()
+            actual_mode = (row[0] if row else "").lower()
+            if actual_mode != "wal":
+                # Docker overlay/NFS не поддерживает WAL — явно переключаем на DELETE
+                log.warning(
+                    "WAL mode unavailable (got %r), switching to DELETE journal mode",
+                    actual_mode,
+                )
+                await db.execute("PRAGMA journal_mode=DELETE")
+            else:
+                log.info("SQLite journal_mode=WAL activated")
         except Exception as e:
-            log.warning("WAL mode unavailable (%s), using DELETE journal mode", e)
-            await db.execute("PRAGMA journal_mode=DELETE")
+            log.warning("PRAGMA journal_mode failed (%s), using DELETE journal mode", e)
+            try:
+                await db.execute("PRAGMA journal_mode=DELETE")
+            except Exception:
+                pass
         await db.execute("PRAGMA synchronous=NORMAL")
         await db.execute("PRAGMA cache_size=10000")
         await db.execute("PRAGMA temp_store=MEMORY")
         await db.execute("PRAGMA mmap_size=0")   # отключаем mmap — безопаснее в контейнерах
+        # commit перед executescript: он делает неявный COMMIT, лучше явный
+        await db.commit()
         await db.executescript(SCHEMA)
         # Миграция: добавляем новые колонки если их нет (для существующих БД)
         migrations = [
