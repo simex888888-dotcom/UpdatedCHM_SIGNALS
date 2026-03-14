@@ -313,10 +313,12 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
                                 risk_pct, leverage,
                                 tp2=sig.tp2, tp3=sig.tp3,
                             )
-                            # Сохраняем pos_idx чтобы BE-монитор корректно переносил стоп
-                            if result.get("ok") and "pos_idx" in result:
-                                await db.db_update_trade_pos_idx(
-                                    trade_id, result["pos_idx"]
+                            # Сохраняем order_id и pos_idx — дедупликация и BE-монитор
+                            if result.get("ok"):
+                                await db.db_update_trade_bybit(
+                                    trade_id,
+                                    result.get("order_id", ""),
+                                    result.get("pos_idx", 0),
                                 )
                             trade_msg = bybit_trader.format_trade_result(
                                 result, sig.direction, sig.symbol,
