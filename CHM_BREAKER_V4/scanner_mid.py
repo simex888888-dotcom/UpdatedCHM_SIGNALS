@@ -489,6 +489,10 @@ class MidScanner:
                         risk_pct, leverage,
                         tp2=tp2, tp3=tp3,
                     )
+                    # Сохраняем pos_idx для корректного BE-мониторинга
+                    if result.get("ok"):
+                        await db.db_update_trade_pos_idx(trade_id, result.get("pos_idx", 0))
+                    # Сохраняем order_id и pos_idx — критично для BE-монитора
                     if result.get("ok"):
                         # Сохраняем order_id и pos_idx — дедупликация и BE-монитор
                         await db.db_update_trade_bybit(
