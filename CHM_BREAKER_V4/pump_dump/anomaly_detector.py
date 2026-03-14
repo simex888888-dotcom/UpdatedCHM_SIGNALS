@@ -68,10 +68,12 @@ def detect(df: pd.DataFrame,
     ewma_std  = s.ewm(span=EWMA_SPAN).std().iloc[-1]
     roll_max  = s.rolling(min(len(s), 200)).max().iloc[-1]
 
-    # Двойное кондиционирование
+    # Двойное кондиционирование — OR-логика:
+    # достаточно превысить EWMA-среднее ИЛИ 30% от 200-барного максимума.
+    # Было AND → обе условия выполнялись крайне редко.
     cond1 = cur_vol > ewma_mean * DOUBLE_COND_MEAN_M
     cond2 = cur_vol > roll_max  * DOUBLE_COND_MAX_M
-    double_cond = bool(cond1 and cond2)
+    double_cond = bool(cond1 or cond2)
 
     # Z-score
     zscore = float((cur_vol - ewma_mean) / ewma_std) if ewma_std > 0 else 0.0
@@ -81,11 +83,13 @@ def detect(df: pd.DataFrame,
     p1m = float((close[-1] - close[-2]) / close[-2]) if close[-2] > 0 else 0.0
     p3m = float((close[-1] - close[-4]) / close[-4]) if len(close) >= 4 and close[-4] > 0 else 0.0
 
+    # Ценовой спайк — OR-логика: достаточно одного из двух условий.
+    # Было AND (1.2% за 1m И 2.0% за 3m) — сигнал приходил уже в разгар пампа.
     spike     = False
     spike_dir = None
-    if p1m >= PRICE_SPIKE_1M and p3m >= PRICE_SPIKE_3M:
+    if p1m >= PRICE_SPIKE_1M or p3m >= PRICE_SPIKE_3M:
         spike, spike_dir = True, "PUMP"
-    elif p1m <= -PRICE_SPIKE_1M and p3m <= -PRICE_SPIKE_3M:
+    elif p1m <= -PRICE_SPIKE_1M or p3m <= -PRICE_SPIKE_3M:
         spike, spike_dir = True, "DUMP"
 
     # ── CVD за 10 свечей ─────────────────────────────────────────────────────
