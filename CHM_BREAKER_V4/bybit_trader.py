@@ -105,6 +105,9 @@ _to_bybit_symbol = to_bybit_symbol
 
 # ── Получение qtyStep и tickSize для символа ─────────
 
+
+# ── Получение qtyStep и tickSize для символа ─────────
+
 def _get_instrument_filters(session, symbol: str) -> tuple[float, float]:
     """
     Запрашивает lotSizeFilter.qtyStep и priceFilter.tickSize у Bybit.
