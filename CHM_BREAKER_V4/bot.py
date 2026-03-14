@@ -3,6 +3,7 @@ bot.py — точка входа CHM BREAKER MID (50-500 пользовател�
 """
 
 import asyncio
+import contextlib
 import hashlib
 import logging
 import os
@@ -12,6 +13,7 @@ from logging.handlers import RotatingFileHandler
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import ErrorEvent
 
 import database
 import cache
@@ -23,6 +25,7 @@ from config import Config
 from user_manager import UserManager
 from scanner_mid import MidScanner
 from handlers import register_handlers
+from middleware import ThrottleMiddleware
 from pump_dump.pd_runner import PDRunner
 from polymarket_service import PolymarketService
 from poly_handlers import register_poly_handlers
@@ -147,6 +150,31 @@ async def main():
 
     bot      = Bot(token=config.TELEGRAM_TOKEN)
     dp       = Dispatcher(storage=MemoryStorage())
+
+    # ─── Throttling: не более 2 апдейтов/сек от одного пользователя ─────────
+    _throttle = ThrottleMiddleware(rate=0.5)
+    dp.message.middleware(_throttle)
+    dp.callback_query.middleware(_throttle)
+
+    # ─── Глобальный обработчик необработанных исключений ─────────────────────
+    @dp.errors()
+    async def global_error_handler(event: ErrorEvent) -> bool:
+        log.critical(
+            "Необработанное исключение в хендлере: %s",
+            event.exception,
+            exc_info=event.exception,
+        )
+        # Уведомляем администраторов о критической ошибке
+        short = str(event.exception)[:200]
+        for admin_id in config.ADMIN_IDS:
+            with contextlib.suppress(Exception):
+                await bot.send_message(
+                    admin_id,
+                    f"🔴 <b>Критическая ошибка бота:</b>\n<code>{short}</code>",
+                    parse_mode="HTML",
+                )
+        return True  # сообщаем aiogram что ошибка обработана
+
     um       = UserManager()
     scanner  = MidScanner(config, bot, um)
     pd_runner = PDRunner(bot, config.DB_PATH)

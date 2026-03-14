@@ -20,7 +20,7 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
+from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest, TelegramForbiddenError
 
 import database as db
 import turso_sync as _turso
@@ -52,12 +52,32 @@ from scanner_mid import signal_compact_keyboard, trade_records_keyboard
 from watermark import wm_decode
 
 log = logging.getLogger("CHM.Handlers")
+_audit = logging.getLogger("CHM.Audit")  # отдельный логгер для admin-действий
 
 # Кэш username бота (заполняется при старте, нужен для реферальных ссылок)
 _bot_username: str = ""
 
 # ─── Antispam: user_id → last_analyze_ts ──────────────
 _analyze_cooldown: dict[int, float] = {}
+
+
+def _fire_task(coro, *, name: str = "bg_task") -> asyncio.Task:
+    """Создаёт asyncio.Task с логированием исключений.
+
+    Заменяет голый asyncio.create_task(), который молча проглатывает
+    исключения и затрудняет диагностику сбоев фоновых задач.
+    """
+    task = asyncio.create_task(coro, name=name)
+
+    def _on_done(t: asyncio.Task) -> None:
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            log.error("Фоновая задача '%s' упала: %s", name, exc, exc_info=exc)
+
+    task.add_done_callback(_on_done)
+    return task
 _ANALYZE_COOLDOWN_SEC = 10  # секунд между /analyze запросами
 
 
@@ -103,8 +123,10 @@ async def safe_edit(cb: CallbackQuery, text: str = None, reply_markup=None):
         except TelegramBadRequest as e:
             if "not modified" in str(e):
                 return
+            log.debug("safe_edit TelegramBadRequest: %s", e)
             return
-        except Exception:
+        except Exception as e:
+            log.debug("safe_edit error: %s", e)
             return
 
 
@@ -1218,7 +1240,11 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     from pump_dump.pd_handlers import register_pd_handlers
     register_pd_handlers(dp, bot, lambda: pd_runner)
 
-    is_admin = lambda uid: uid in config.ADMIN_IDS
+    def is_admin(uid: int) -> bool:
+        if uid in config.ADMIN_IDS:
+            return True
+        log.warning("Попытка admin-команды от uid=%s — отклонено", uid)
+        return False
 
     # ── Запуск SMC сканера (background task) ───────────────────────────────
     from fetcher import OKXFetcher as _OKXFetcher
@@ -1229,8 +1255,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         try:
             me = await bot.get_me()
             _bot_username = me.username or ""
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("Не удалось получить username бота: %s", e)
         from smc.scanner import run_smc_scanner
 
         async def _smc_task_with_restart():
@@ -1399,7 +1425,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.sub_expires = _time.time() + hours * 3600
         user.sub_status  = "active"
         await um.save(user)
-        asyncio.create_task(_turso.turso_push(config.DB_PATH))
+        _fire_task(_turso.turso_push(config.DB_PATH), name="turso_push")
         await msg.answer(
             f"✅ <b>Промокод принят!</b>\n\n"
             f"Вам открыт тестовый доступ на <b>{hours} часа</b>.\n"
@@ -1710,12 +1736,14 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         rr_strs = {"TP1":"+"+str(trade["tp1_rr"])+"R","TP2":"+"+str(trade["tp2_rr"])+"R",
                    "TP3":"+"+str(trade["tp3_rr"])+"R","SL":"-1R","SKIP":""}
         try:
+            emoji_str = emojis.get(result, "")
+            rr_str    = rr_strs.get(result, "")
             await cb.message.edit_text(
-                (cb.message.text or "") + NL + NL +
-                "<b>Результат: " + emojis.get(result,"") + "  " + rr_strs.get(result,"") + "</b>",
+                f"{cb.message.text or ''}{NL}{NL}<b>Результат: {emoji_str}  {rr_str}</b>",
                 parse_mode="HTML", reply_markup=None,
             )
-        except Exception: pass
+        except (TelegramBadRequest, TelegramForbiddenError):
+            pass  # сообщение уже изменено или удалено — норма
 
         if result != "SKIP":
             user  = await um.get_or_create(cb.from_user.id)
@@ -2108,8 +2136,10 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await cb.answer()
         user  = await um.get_or_create(cb.from_user.id)
         trend = scanner.get_trend()
-        try: await cb.message.delete()
-        except Exception: pass
+        try:
+            await cb.message.delete()
+        except (TelegramBadRequest, TelegramForbiddenError):
+            pass  # сообщение уже удалено — норма
         await bot.send_message(cb.message.chat.id, main_text(user, trend),
                                parse_mode="HTML", reply_markup=kb_main(user))
 
@@ -3755,15 +3785,23 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.grant_access(days)
         await um.save(user)
         await _save_subs_backup()                         # автосохранение на диск
-        asyncio.create_task(_turso.turso_push(config.DB_PATH))  # немедленный пуш в Turso
-        await msg.answer("✅ Доступ выдан @" + str(user.username or tid) + " на " + str(days) + " дней")
+        _fire_task(_turso.turso_push(config.DB_PATH), name="turso_push")
+        uname = user.username or str(tid)
+        await msg.answer(f"✅ Доступ выдан @{uname} на {days} дней")
+        _audit.info("GIVE uid=%s days=%d by_admin=%s", tid, days, msg.from_user.id)
         try:
             await bot.send_message(
                 tid,
-                "🎉 <b>Доступ открыт!</b>\n\nПодписка на <b>" + str(days) + " дней</b>.\nОсталось: <b>" + user.time_left_str() + "</b>\n\nНажми /menu",
+                f"🎉 <b>Доступ открыт!</b>\n\nПодписка на <b>{days} дней</b>.\n"
+                f"Осталось: <b>{user.time_left_str()}</b>\n\nНажми /menu",
                 parse_mode="HTML",
             )
-        except Exception: pass
+        except TelegramForbiddenError:
+            log.info("GIVE: пользователь %s заблокировал бота — уведомление не отправлено", tid)
+        except TelegramRetryAfter as e:
+            log.warning("GIVE: flood control %ss для uid=%s", e.retry_after, tid)
+        except Exception as e:
+            log.error("GIVE: не удалось уведомить uid=%s: %s", tid, e)
         # Реферальная программа: отмечаем конверсию и выдаём награду если нужно
         try:
             ref_result = await db.db_ref_on_purchase(tid)
@@ -3778,8 +3816,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                         await um.save(referrer)
                     notify += "\n\n🎁 <b>Вы получили 30 дней бесплатно!</b> (5 успешных рефералов)"
                 await bot.send_message(referrer_id, notify, parse_mode="HTML")
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("GIVE: реферальная программа uid=%s: %s", tid, e)
 
     @dp.message(Command("revoke"))
     async def cmd_revoke(msg: Message):
@@ -3794,8 +3832,10 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.active = False; user.long_active = False; user.short_active = False
         await um.save(user)
         await _save_subs_backup()                          # обновляем бэкап
-        asyncio.create_task(_turso.turso_push(config.DB_PATH))
-        await msg.answer("✅ Доступ отозван у @" + str(user.username or tid))
+        _fire_task(_turso.turso_push(config.DB_PATH), name="turso_push")
+        uname = user.username or str(tid)
+        _audit.info("REVOKE uid=%s by_admin=%s", tid, msg.from_user.id)
+        await msg.answer(f"✅ Доступ отозван у @{uname}")
 
     @dp.message(Command("ban"))
     async def cmd_ban(msg: Message):
@@ -3809,8 +3849,10 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.sub_status = "banned"; user.active = False
         user.long_active = False; user.short_active = False
         await um.save(user)
-        asyncio.create_task(_turso.turso_push(config.DB_PATH))
-        await msg.answer("🚫 @" + str(user.username or tid) + " заблокирован")
+        _fire_task(_turso.turso_push(config.DB_PATH), name="turso_push")
+        uname = user.username or str(tid)
+        _audit.info("BAN uid=%s by_admin=%s", tid, msg.from_user.id)
+        await msg.answer(f"🚫 @{uname} заблокирован")
 
     @dp.message(Command("unban"))
     async def cmd_unban(msg: Message):
@@ -3823,7 +3865,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not user: await msg.answer("❌ Не найден"); return
         user.sub_status = "expired"
         await um.save(user)
-        await msg.answer("✅ @" + str(user.username or tid) + " разблокирован")
+        uname = user.username or str(tid)
+        _audit.info("UNBAN uid=%s by_admin=%s", tid, msg.from_user.id)
+        await msg.answer(f"✅ @{uname} разблокирован")
 
     @dp.message(Command("userinfo"))
     async def cmd_userinfo(msg: Message):
@@ -3835,15 +3879,18 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get(tid)
         if not user: await msg.answer("❌ Не найден"); return
         stats = await db.db_get_user_stats(tid)
-        NL    = "\n"
+        long_icon  = "🟢" if user.long_active  else "⚫"
+        short_icon = "🟢" if user.short_active else "⚫"
+        both_icon  = "🟢" if user.active       else "⚫"
+        total_rr   = stats.get("total_rr", 0)
         await msg.answer(
-            "👤 <b>@" + str(user.username or "—") + "</b> (<code>" + str(user.user_id) + "</code>)" + NL +
-            "Подписка: <b>" + user.sub_status.upper() + "</b> | Осталось: <b>" + user.time_left_str() + "</b>" + NL +
-            "ЛОНГ: " + ("🟢" if user.long_active else "⚫") +
-            "  ШОРТ: " + ("🟢" if user.short_active else "⚫") +
-            "  ОБА: " + ("🟢" if user.active else "⚫") + NL +
-            "Сигналов: <b>" + str(user.signals_received) + "</b>  Сделок: <b>" + str(stats.get("total",0)) + "</b>  R: <b>" + "{:+.2f}".format(stats.get("total_rr",0)) + "R</b>" + NL +
-            "Стратегия: <b>" + (user.strategy or "не выбрана") + "</b>",
+            f"👤 <b>@{user.username or '—'}</b> (<code>{user.user_id}</code>)\n"
+            f"Подписка: <b>{user.sub_status.upper()}</b> | Осталось: <b>{user.time_left_str()}</b>\n"
+            f"ЛОНГ: {long_icon}  ШОРТ: {short_icon}  ОБА: {both_icon}\n"
+            f"Сигналов: <b>{user.signals_received}</b>  "
+            f"Сделок: <b>{stats.get('total', 0)}</b>  "
+            f"R: <b>{total_rr:+.2f}R</b>\n"
+            f"Стратегия: <b>{user.strategy or 'не выбрана'}</b>",
             parse_mode="HTML",
         )
 
@@ -3899,13 +3946,25 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await state.clear()
             users = await um.all_users()
             sent = failed = 0
+            _audit.info("BROADCAST by_admin=%s recipients=%d", msg.from_user.id,
+                        sum(1 for u in users if u.sub_status in ("trial", "active")))
             for u in users:
                 if u.sub_status in ("trial", "active"):
                     try:
-                        await bot.send_message(u.user_id, "📢 " + text)
+                        await bot.send_message(u.user_id, f"📢 {text}")
                         sent += 1
                         await asyncio.sleep(0.04)
-                    except Exception:
+                    except TelegramForbiddenError:
+                        failed += 1  # пользователь заблокировал бота
+                    except TelegramRetryAfter as e:
+                        await asyncio.sleep(e.retry_after)
+                        try:
+                            await bot.send_message(u.user_id, f"📢 {text}")
+                            sent += 1
+                        except Exception:
+                            failed += 1
+                    except Exception as e:
+                        log.warning("broadcast uid=%s: %s", u.user_id, e)
                         failed += 1
             await msg.answer(f"📢 Рассылка завершена: ✅ {sent}  ❌ {failed}")
         else:

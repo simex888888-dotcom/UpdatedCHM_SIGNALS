@@ -7,6 +7,7 @@ database.py — SQLite через aiosqlite
 import aiosqlite
 import asyncio
 import logging
+import os
 import time
 from typing import Optional
 
@@ -22,6 +23,57 @@ def _request_turso_push():
 
 _db_path: str = "chm_bot.db"
 _lock = asyncio.Lock()   # SQLite не любит параллельные записи
+
+# ─── Шифрование Bybit API-ключей (Fernet AES-128-CBC + HMAC) ──────────────
+# Устанавливает переменная окружения BYBIT_FERNET_KEY.
+# Генерация нового ключа (один раз): python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Если переменная не задана или cryptography не установлен — ключи хранятся
+# как plaintext (деградация без потери функциональности, WARNING в логах).
+
+_fernet = None
+
+def _init_fernet():
+    global _fernet
+    raw_key = os.getenv("BYBIT_FERNET_KEY", "")
+    if not raw_key:
+        log.warning(
+            "⚠️  BYBIT_FERNET_KEY не задан — Bybit API-ключи хранятся в БД "
+            "в открытом виде. Задайте переменную окружения для шифрования."
+        )
+        return
+    try:
+        from cryptography.fernet import Fernet
+        _fernet = Fernet(raw_key.encode())
+        log.info("🔐 Bybit API-ключи: шифрование Fernet активно.")
+    except Exception as e:
+        log.warning("⚠️  Fernet недоступен (%s) — ключи хранятся в открытом виде.", e)
+
+
+def _encrypt_key(plain: str) -> str:
+    """Шифрует строку ключа перед записью в БД."""
+    if not plain or _fernet is None:
+        return plain
+    try:
+        return _fernet.encrypt(plain.encode()).decode()
+    except Exception as e:
+        log.warning("_encrypt_key error: %s", e)
+        return plain
+
+
+def _decrypt_key(stored: str) -> str:
+    """Расшифровывает ключ после чтения из БД.
+
+    Поддерживает «миграционный» сценарий: если ключ хранится как plaintext
+    (до введения шифрования), Fernet.decrypt упадёт с InvalidToken — в этом
+    случае возвращаем исходную строку без изменений.
+    """
+    if not stored or _fernet is None:
+        return stored
+    try:
+        return _fernet.decrypt(stored.encode()).decode()
+    except Exception:
+        # plaintext — миграция без потери данных
+        return stored
 
 
 SCHEMA = """
@@ -302,6 +354,7 @@ CREATE TABLE IF NOT EXISTS poly_digest_log (
 async def init_db(path: str):
     global _db_path
     _db_path = path
+    _init_fernet()  # инициализируем шифрование ключей один раз при старте
     async with aiosqlite.connect(_db_path) as db:
         await db.executescript(SCHEMA)
         # Миграция: добавляем новые колонки если их нет (для существующих БД)
@@ -420,7 +473,13 @@ async def db_get_user(user_id: int) -> Optional[dict]:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM users WHERE user_id=?", (user_id,)) as cur:
             row = await cur.fetchone()
-            return dict(row) if row else None
+            if row is None:
+                return None
+            d = dict(row)
+            # Расшифровываем API-ключи при чтении (no-op если шифрование не настроено)
+            d["bybit_api_key"]    = _decrypt_key(d.get("bybit_api_key", "") or "")
+            d["bybit_api_secret"] = _decrypt_key(d.get("bybit_api_secret", "") or "")
+            return d
 
 
 _ALLOWED_USER_COLS = {
@@ -444,6 +503,11 @@ _ALLOWED_USER_COLS = {
 
 async def db_upsert_user(data: dict):
     data["updated_at"] = time.time()
+    # Шифруем API-ключи перед записью (no-op если BYBIT_FERNET_KEY не задан)
+    if "bybit_api_key" in data:
+        data["bybit_api_key"]    = _encrypt_key(data["bybit_api_key"] or "")
+    if "bybit_api_secret" in data:
+        data["bybit_api_secret"] = _encrypt_key(data["bybit_api_secret"] or "")
     # Фильтруем только допустимые колонки во избежание SQL-инъекций
     data = {k: v for k, v in data.items() if k in _ALLOWED_USER_COLS}
     cols = list(data.keys())
