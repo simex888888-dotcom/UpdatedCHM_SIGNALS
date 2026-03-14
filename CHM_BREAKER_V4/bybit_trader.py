@@ -447,7 +447,7 @@ async def set_breakeven(api_key: str, api_secret: str,
                         symbol: str, entry: float,
                         direction: str, pos_idx: int = 0) -> dict:
     """Асинхронно переносит SL на безубыток."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _set_breakeven_sync,
         api_key, api_secret, symbol, entry, direction, pos_idx,
@@ -473,7 +473,7 @@ def _get_positions_sync(api_key: str, api_secret: str, symbol: str = "") -> list
 
 async def get_positions(api_key: str, api_secret: str, symbol: str = "") -> list:
     """Асинхронно возвращает список открытых позиций."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _get_positions_sync, api_key, api_secret, symbol,
     )
@@ -497,7 +497,7 @@ def _cancel_all_orders_sync(api_key: str, api_secret: str, symbol: str) -> dict:
 
 async def cancel_all_orders(api_key: str, api_secret: str, symbol: str) -> dict:
     """Асинхронно отменяет все открытые ордера по символу (чистка после закрытия позиции)."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _cancel_all_orders_sync, api_key, api_secret, symbol,
     )
@@ -520,7 +520,7 @@ def _get_closed_pnl_sync(api_key: str, api_secret: str, symbol: str) -> list:
 
 async def get_closed_pnl(api_key: str, api_secret: str, symbol: str) -> list:
     """Асинхронно возвращает последние закрытые позиции."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _get_closed_pnl_sync, api_key, api_secret, symbol,
     )
@@ -542,7 +542,7 @@ def _get_open_orders_sync(api_key: str, api_secret: str) -> list:
 
 async def get_open_orders(api_key: str, api_secret: str) -> list:
     """Асинхронно возвращает все открытые ордера."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _get_open_orders_sync, api_key, api_secret)
 
 
@@ -564,7 +564,7 @@ def _cancel_order_sync(api_key: str, api_secret: str, symbol: str, order_id: str
 
 async def cancel_order(api_key: str, api_secret: str, symbol: str, order_id: str) -> dict:
     """Асинхронно отменяет один ордер."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _cancel_order_sync, api_key, api_secret, symbol, order_id)
 
 
@@ -602,7 +602,7 @@ async def close_position(api_key: str, api_secret: str,
                          symbol: str, side: str,
                          size: str, pos_idx: int = 0) -> dict:
     """Асинхронно закрывает позицию маркет-ордером."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _close_position_sync,
         api_key, api_secret, symbol, side, size, pos_idx,
@@ -669,7 +669,7 @@ def _get_account_summary_sync(api_key: str, api_secret: str) -> dict:
 
 async def get_account_summary(api_key: str, api_secret: str) -> dict:
     """Асинхронно возвращает сводку аккаунта."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _get_account_summary_sync, api_key, api_secret)
 
 
@@ -744,7 +744,7 @@ def _get_dashboard_sync(api_key: str, api_secret: str) -> tuple:
 
 async def get_dashboard(api_key: str, api_secret: str) -> tuple:
     """Асинхронно возвращает (positions, orders, summary) за одно подключение."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _get_dashboard_sync, api_key, api_secret)
 def _get_execution_exit_price_sync(
     api_key: str, api_secret: str, symbol: str, created_ms: float
@@ -792,7 +792,7 @@ async def get_execution_exit_price(
     api_key: str, api_secret: str, symbol: str, created_ms: float
 ) -> Optional[float]:
     """Асинхронно ищет цену выхода через историю исполнений."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _get_execution_exit_price_sync, api_key, api_secret, symbol, created_ms,
     )
