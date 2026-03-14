@@ -56,13 +56,8 @@ class Config:
 
     # Твой Telegram ID — станешь администратором
     # Узнать: написать @userinfobot
-    # Обязательно задать переменную окружения ADMIN_IDS=123456789,987654321
-    _admin_ids_raw = os.getenv("ADMIN_IDS", "")
-    if not _admin_ids_raw:
-        raise RuntimeError(
-            "Переменная окружения ADMIN_IDS не задана! "
-            "Пример: ADMIN_IDS=123456789,987654321"
-        )
+    # Переопределить: ADMIN_IDS=123456789,987654321
+    _admin_ids_raw = os.getenv("ADMIN_IDS", "445677777,705020259")
     ADMIN_IDS = [int(x.strip()) for x in _admin_ids_raw.split(",")]
     # ════════════════════════════════════════════════
     #  🗄  SQLITE — путь к БД (persistent volume)
