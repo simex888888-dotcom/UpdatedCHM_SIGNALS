@@ -284,6 +284,11 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
                 show_trade_btn  = False
 
                 if auto_trade and api_key and api_secret:
+                    if await db.db_has_open_trade_for_symbol(user.user_id, sig.symbol):
+                        log.info(f"SMC auto_trade skip duplicate: {sig.symbol} uid={user.user_id}")
+                        auto_trade = False
+
+                if auto_trade and api_key and api_secret:
                     max_trades = getattr(user, "max_trades_limit", 5)
                     open_count = await db.db_count_open_trades(user.user_id)
                     # max_trades=0 означает без лимита
