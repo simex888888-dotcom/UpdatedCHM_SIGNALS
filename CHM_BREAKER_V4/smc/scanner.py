@@ -313,13 +313,16 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
                                 risk_pct, leverage,
                                 tp2=sig.tp2, tp3=sig.tp3,
                             )
-                            # Сохраняем order_id и pos_idx — дедупликация и BE-монитор
                             if result.get("ok"):
+                                # Сохраняем order_id и pos_idx — дедупликация и BE-монитор
                                 await db.db_update_trade_bybit(
                                     trade_id,
                                     result.get("order_id", ""),
                                     result.get("pos_idx", 0),
                                 )
+                            else:
+                                # Сделка не открыта — SKIP чтобы не блокировать следующий сигнал
+                                await db.db_set_trade_result(trade_id, "SKIP", 0.0)
                             trade_msg = bybit_trader.format_trade_result(
                                 result, sig.direction, sig.symbol,
                                 sig.entry, sig.sl, sig.tp1, risk_pct, leverage,
@@ -329,6 +332,7 @@ async def _scan_cycle(bot, um, fetcher, analyzer) -> None:
                                                    parse_mode="HTML", protect_content=True)
                         except Exception as e:
                             log.error(f"SMC auto_trade {sig.symbol}: {e}")
+                            await db.db_set_trade_result(trade_id, "SKIP", 0.0)
                             await bot.send_message(
                                 user.user_id,
                                 f"⚠️ Авто-трейд: ошибка открытия {sig.symbol}: {e}",

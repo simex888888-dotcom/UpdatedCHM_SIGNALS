@@ -369,11 +369,15 @@ class GerchikScanner:
                         tp2=sig["tp2"], tp3=sig["tp2"],
                     )
                     if result.get("ok"):
+                        # Сохраняем order_id и pos_idx — дедупликация и BE-монитор
                         await db.db_update_trade_bybit(
                             trade_id,
                             result.get("order_id", ""),
                             result.get("pos_idx", 0),
                         )
+                    else:
+                        # Сделка не открыта — SKIP чтобы не блокировать следующий сигнал
+                        await db.db_set_trade_result(trade_id, "SKIP", 0.0)
                     trade_msg = bybit_trader.format_trade_result(
                         result, sig["direction"], symbol,
                         sig["entry"], sig["sl"], sig["tp1"],
@@ -383,6 +387,7 @@ class GerchikScanner:
                     await self._bot.send_message(uid, trade_msg, parse_mode="HTML")
                 except Exception as e:
                     log.error(f"Герчик auto_trade {symbol}: {e}")
+                    await db.db_set_trade_result(trade_id, "SKIP", 0.0)
                     await self._bot.send_message(
                         uid,
                         f"⚠️ Авто-трейд: ошибка открытия {symbol}: {e}",

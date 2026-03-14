@@ -289,6 +289,48 @@ def stats_text(user: UserSettings, stats: dict) -> str:
     )
 
 
+def _strat_block(name: str, icon: str, s: dict) -> str:
+    """Одна строка стратегии для stats_strategy_text."""
+    NL = "\n"
+    if not s:
+        return icon + " <b>" + name + "</b>: нет сделок" + NL
+    wr   = s["winrate"]
+    wr_e = "🔥" if wr >= 70 else "✅" if wr >= 50 else "⚠️"
+    sign = "+" if s["total_rr"] >= 0 else ""
+    lwr  = str(round(s["longs_w"] / s["longs"] * 100)) + "%" if s["longs"] else "—"
+    swr  = str(round(s["shorts_w"] / s["shorts"] * 100)) + "%" if s["shorts"] else "—"
+    tps  = ""
+    if s["tp1_cnt"] or s["tp2_cnt"] or s["tp3_cnt"]:
+        tps = (f"  TP1:{s['tp1_cnt']}  TP2:{s['tp2_cnt']}  TP3:{s['tp3_cnt']}" + NL)
+    be_line = f"  ♻️ BE: {s['be_cnt']}" + NL if s["be_cnt"] else ""
+    return (
+        icon + " <b>" + name + "</b>" + NL +
+        "  📋 Сделок: <b>" + str(s["total"]) + "</b>"
+        "  ✅ <b>" + str(s["wins"]) + "</b>"
+        "  ❌ <b>" + str(s["losses"]) + "</b>" + NL +
+        "  " + wr_e + " Винрейт: <b>" + "{:.1f}".format(wr) + "%</b>"
+        "  |  R: <b>" + sign + "{:.2f}".format(s["total_rr"]) + "</b>" + NL +
+        "  📈 Л: <b>" + str(s["longs_w"]) + "/" + str(s["longs"]) + "</b> (" + lwr + ")"
+        "  📉 Ш: <b>" + str(s["shorts_w"]) + "/" + str(s["shorts"]) + "</b> (" + swr + ")" + NL +
+        tps + be_line
+    )
+
+
+def stats_strategy_text(user: "UserSettings", by_strat: dict) -> str:
+    """Статистика авто-трейдинга с разбивкой по стратегиям."""
+    NL = "\n"
+    name = "@" + user.username if user.username else "Трейдер"
+    total_all = by_strat.get("ALL", {}).get("total", 0)
+    if not total_all:
+        return "📊 <b>Статистика по стратегиям — " + name + "</b>" + NL + NL + "Сделок пока нет."
+    return (
+        "📊 <b>Авто-трейдинг по стратегиям — " + name + "</b>" + NL + NL +
+        _strat_block("Уровни (LEVELS)", "📊", by_strat.get("LEVELS", {})) + NL +
+        _strat_block("Smart Money (SMC)", "🧠", by_strat.get("SMC", {})) + NL +
+        _strat_block("Герчик", "🎯", by_strat.get("GERCHIK", {}))
+    )
+
+
 def access_denied_text(reason: str) -> str:
     NL = "\n"
     if reason == "banned":
@@ -2072,8 +2114,12 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         stats  = await db.db_get_user_stats(user.user_id)
         trades = await db.db_get_user_trades(user.user_id)
         text   = stats_text(user, stats)
+        kb_stats = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 По стратегиям", callback_data="my_stats_strategy")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+        ])
         if not trades or len(trades) < 2:
-            await safe_edit(cb, text, kb_back())
+            await safe_edit(cb, text, kb_stats)
             return
         equity = [0.0]
         for t in trades:
@@ -2095,9 +2141,13 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         plt.savefig(buf, format='png', bbox_inches='tight')
         buf.seek(0); plt.close()
         photo = BufferedInputFile(buf.getvalue(), filename="equity.png")
+        kb_photo = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 По стратегиям", callback_data="my_stats_strategy")],
+            [InlineKeyboardButton(text="◀️ Назад в меню",  callback_data="back_photo_main")],
+        ])
         await cb.message.delete()
         await bot.send_photo(chat_id=cb.message.chat.id, photo=photo,
-                             caption=text, parse_mode="HTML", reply_markup=kb_back_photo())
+                             caption=text, parse_mode="HTML", reply_markup=kb_photo)
 
     @dp.callback_query(F.data == "my_chart")
     async def my_chart(cb: CallbackQuery):
@@ -2130,6 +2180,18 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await cb.message.delete()
         await bot.send_photo(chat_id=cb.message.chat.id, photo=photo,
                              caption=caption, parse_mode="HTML", reply_markup=kb_back_photo())
+
+    @dp.callback_query(F.data == "my_stats_strategy")
+    async def my_stats_strategy(cb: CallbackQuery):
+        await cb.answer()
+        user     = await um.get_or_create(cb.from_user.id)
+        by_strat = await db.db_get_user_stats_by_strategy(user.user_id)
+        text     = stats_strategy_text(user, by_strat)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Общая статистика", callback_data="my_stats")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+        ])
+        await safe_edit(cb, text, kb)
 
     @dp.callback_query(F.data == "back_photo_main")
     async def back_photo_main(cb: CallbackQuery):
