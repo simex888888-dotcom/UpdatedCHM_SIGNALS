@@ -154,15 +154,18 @@ class GerchikScanner:
                 await cache.set_candles(symbol, tf, df, ttl=900)
             return df
 
-    # ── Анализ одной монеты (последний бар) ────────────────────────────────
+    # ── Анализ одной монеты (последние закрытые бары) ─────────────────────
 
     def _check_signal(self, symbol: str, df) -> Optional[dict]:
         """
-        Проверяет последний бар на наличие паттерна Герчика.
+        Проверяет последние закрытые бары на наличие паттерна Герчика.
 
         Использует методы GerchikStrategy напрямую (не backtest):
           find_levels → cluster_levels → determine_trend →
           find_bsu_bpu_pattern → check_atr_filter → рассчитывает уровни
+
+        bar[-1] — текущий (возможно незакрытый) бар; сканируем с bar[-2]
+        назад до bar[-7], чтобы не пропускать свежие паттерны.
         """
         cfg   = self._strat.cfg
         strat = self._strat
@@ -170,7 +173,7 @@ class GerchikScanner:
         if len(df) < cfg.level_lookback + 5:
             return None
 
-        i     = len(df) - 1    # последний (текущий) бар
+        i     = len(df) - 1    # текущий (может быть незакрытый) бар
         bar   = df.iloc[i]
         close = float(bar["close"])
         atr_s = strat.compute_atr(df)
@@ -219,11 +222,22 @@ class GerchikScanner:
 
         best = max(candidates, key=lambda l: (l.strength, -abs(close - l.price)))
 
-        # Паттерн БПУ-1 → БПУ-2 (bar_idx = последний бар)
-        if not strat.find_bsu_bpu_pattern(df, best.price, best.level_type, i):
+        # Сканируем последние закрытые бары как кандидаты на БПУ-2.
+        # bar[-1] — текущий незакрытый D1-бар, поэтому начинаем с bar[-2].
+        # Проверяем до 6 закрытых баров назад — паттерн, сформировавшийся
+        # 1-5 дней назад, всё ещё актуален для входа (защита от флуда через
+        # антиспам-кулдаун 4 ч).
+        last_closed = len(df) - 2
+        pattern_bar_idx = None
+        for scan_idx in range(last_closed, max(last_closed - 6, 2), -1):
+            if strat.find_bsu_bpu_pattern(df, best.price, best.level_type, scan_idx):
+                pattern_bar_idx = scan_idx
+                break
+
+        if pattern_bar_idx is None:
             return None
 
-        # ATR-фильтр: не входить если уже прошли ≥75% дневного диапазона
+        # ATR-фильтр: не входить если текущий бар уже прошёл ≥75% дневного диапазона
         open_price = float(bar["open"])
         if not strat.check_atr_filter(close, open_price, atr, trend):
             return None
