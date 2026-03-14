@@ -84,7 +84,7 @@ def _humanize_bybit_error(raw: str) -> str:
 
 # ── Конвертация символа ──────────────────────────────
 
-def _to_bybit_symbol(symbol: str) -> str:
+def to_bybit_symbol(symbol: str) -> str:
     """
     OKX формат → Bybit формат:
       BTC-USDT-SWAP  →  BTCUSDT
@@ -99,41 +99,56 @@ def _to_bybit_symbol(symbol: str) -> str:
     return s.replace("-", "")
 
 
-# ── Получение qtyStep для символа ────────────────────
+# Алиас для обратной совместимости
+_to_bybit_symbol = to_bybit_symbol
 
-def _get_qty_step(session, symbol: str) -> float:
+
+# ── Получение qtyStep и tickSize для символа ─────────
+
+def _get_instrument_filters(session, symbol: str) -> tuple[float, float]:
     """
-    Запрашивает реальный lotSizeFilter.qtyStep у Bybit.
-    При ошибке — возвращает запасное значение по цене.
+    Запрашивает lotSizeFilter.qtyStep и priceFilter.tickSize у Bybit.
+    Возвращает (qty_step, tick_size). При ошибке — безопасные дефолты.
     """
     try:
         resp = session.get_instruments_info(category="linear", symbol=symbol)
         if resp.get("retCode", -1) == 0:
             items = resp["result"].get("list", [])
             if items:
-                step = items[0].get("lotSizeFilter", {}).get("qtyStep", "")
-                if step:
-                    return float(step)
+                lot  = items[0].get("lotSizeFilter", {})
+                prc  = items[0].get("priceFilter",   {})
+                qty_step  = float(lot.get("qtyStep",  "") or 0.001)
+                tick_size = float(prc.get("tickSize", "") or 0.0001)
+                return qty_step or 0.001, tick_size or 0.0001
     except Exception as e:
         log.debug(f"get_instruments_info {symbol}: {e}")
-    return 0.001   # fallback — перестрахуемся минимальным шагом
+    return 0.001, 0.0001   # fallback
+
+
+def _step_decimals(step: float) -> int:
+    """Количество знаков после запятой в шаге (0.01 → 2, 0.001 → 3, 1 → 0)."""
+    s = f"{step:.10f}".rstrip("0")
+    return len(s.split(".")[1]) if "." in s else 0
 
 
 def _round_qty(qty: float, qty_step: float) -> str:
-    """
-    Округляем размер позиции вниз до ближайшего шага qtyStep.
-    """
+    """Округляем размер позиции вниз (floor) до шага qtyStep."""
     if qty_step <= 0:
         qty_step = 0.001
-    # Определяем количество знаков после запятой в шаге
-    step_str = f"{qty_step:.10f}".rstrip("0")
-    if "." in step_str:
-        decimals = len(step_str.split(".")[1])
-    else:
-        decimals = 0
-    factor = 1.0 / qty_step
+    decimals = _step_decimals(qty_step)
+    factor   = 1.0 / qty_step
     qty_floor = math.floor(qty * factor) / factor
     return f"{qty_floor:.{decimals}f}"
+
+
+def _round_price(price: float, tick_size: float) -> str:
+    """Округляем цену до шага tickSize (ближайший, не floor — для SL/TP точности)."""
+    if tick_size <= 0:
+        tick_size = 0.0001
+    decimals  = _step_decimals(tick_size)
+    factor    = 1.0 / tick_size
+    rounded   = round(price * factor) / factor
+    return f"{rounded:.{decimals}f}"
 
 
 # ── Сессия Bybit ─────────────────────────────────────
