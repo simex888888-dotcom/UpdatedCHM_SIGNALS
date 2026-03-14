@@ -10,7 +10,7 @@ from collections import defaultdict
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
-from aiogram.types import TelegramObject
+from aiogram.types import TelegramObject, CallbackQuery
 
 log = logging.getLogger("CHM.Middleware")
 
@@ -18,8 +18,12 @@ log = logging.getLogger("CHM.Middleware")
 class ThrottleMiddleware(BaseMiddleware):
     """
     Пропускает не более одного обновления каждые `rate` секунд от одного uid.
-    Превышение лимита — молча игнорируется (не посылает ответ пользователю,
-    чтобы само игнорирование не создавало очередь сообщений об ошибке).
+
+    Для Message: молча игнорирует превышение (пользователь не получает ответа).
+    Для CallbackQuery: вызывает cb.answer() перед игнорированием, чтобы убрать
+    спиннер загрузки с кнопки. Без этого Telegram держит спиннер 2 секунды, потом
+    помечает query как expired → следующий ответ на ту же кнопку падает с
+    "query is too old and response timeout expired".
 
     Параметры
     ----------
@@ -45,6 +49,13 @@ class ThrottleMiddleware(BaseMiddleware):
             uid = user.id
             if now - self._last[uid] < self.rate:
                 log.debug("Throttled uid=%s (%.2fs < %.2fs)", uid, now - self._last[uid], self.rate)
-                return  # молча игнорируем — не обрабатываем этот апдейт
+                # Для CallbackQuery обязательно отвечаем — иначе Telegram
+                # держит спиннер 2с и помечает query как "too old".
+                if isinstance(event, CallbackQuery):
+                    try:
+                        await event.answer()
+                    except Exception:
+                        pass
+                return  # апдейт не обрабатываем
             self._last[uid] = now
         return await handler(event, data)
