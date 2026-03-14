@@ -13,6 +13,7 @@ scanner_mid.py — мультисканнинг для 50-500 пользоват
 
 import asyncio
 import logging
+import math
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -30,6 +31,12 @@ from user_manager import UserManager, UserSettings, TradeCfg
 from fetcher import OKXFetcher
 from indicator import CHMIndicator, SignalResult
 from keyboards import kb_contact_admin
+from watermark import wm_inject
+try:
+    import fundamental as _fund
+    _FUND_OK = True
+except ImportError:
+    _FUND_OK = False
 
 
 def _compute_correlation(df1, df2, periods: int = 30) -> float:
@@ -214,10 +221,16 @@ def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
         "📋 <b>Факторы качества:</b>" + NL + NL.join(sig.reasons)
     ) if sig.reasons else ""
     def _fp(v: float) -> str:
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            return str(v)
+        if v <= 0:      return "0"
         if v >= 10_000: return f"{v:,.0f}"
         if v >= 100:    return f"{v:,.1f}"
         if v >= 1:      return f"{v:.4f}".rstrip("0").rstrip(".")
-        return f"{v:.6f}".rstrip("0").rstrip(".")
+        decimals = -math.floor(math.log10(v)) + 3
+        return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
 
     return (
         header + NL + NL +
@@ -268,7 +281,11 @@ class MidScanner:
         # Глобальный тренд
         self._global_trend:     dict  = {}
         self._trend_updated_at: float = 0
+
         self._trend_ttl:        int   = 3600
+
+        # Фундаментальный контекст (обновляется раз в цикл)
+        self._fund_block: str = ""
 
     # ── Индикатор ────────────────────────────────────
 
@@ -364,7 +381,12 @@ class MidScanner:
         if eth_df is None:
             eth_df = await self._fetch("ETH-USDT-SWAP", job.tf)
 
+        # Фильтр выбранной монеты
+        watch = getattr(user, "watch_coin", "").strip().upper()
+
         for sym, df in candles.items():
+            if watch and sym.upper() != watch:
+                continue
             df_htf = await self._fetch(sym, "1D") if cfg.use_htf else None
             try:
                 sig = ind.analyze(sym, df, df_htf)
@@ -433,9 +455,19 @@ class MidScanner:
         show_trade_btn  = False
 
         if auto_trade and api_key and api_secret:
+            # Не открываем вторую сделку по той же монете
+            if await db.db_has_open_trade_for_symbol(user.user_id, sig.symbol):
+                log.info(
+                    f"auto_trade skip duplicate: {sig.symbol} уже открыта у uid={user.user_id}"
+                )
+                show_trade_btn = False
+                auto_trade = False  # сигнал покажем, сделку пропустим
+
+        if auto_trade and api_key and api_secret:
             max_trades = getattr(user, "max_trades_limit", 5)
             open_count = await db.db_count_open_trades(user.user_id)
-            if open_count >= max_trades:
+            # max_trades=0 означает «без лимита»
+            if max_trades > 0 and open_count >= max_trades:
                 await self.bot.send_message(
                     user.user_id,
                     f"⛔ Авто-трейд отклонён: достигнут лимит открытых сделок "
@@ -447,7 +479,7 @@ class MidScanner:
 
         if auto_trade and api_key and api_secret:
             if auto_trade_mode == "auto":
-                # Открываем сразу
+                # Открываем сразу (3 TP + BE мониторинг)
                 try:
                     import bybit_trader
                     result = await bybit_trader.place_trade(
@@ -455,16 +487,33 @@ class MidScanner:
                         sig.symbol, sig.direction,
                         sig.entry, sig.sl, tp1,
                         risk_pct, leverage,
+                        tp2=tp2, tp3=tp3,
                     )
+                    # Сохраняем pos_idx для корректного BE-мониторинга
+                    if result.get("ok"):
+                        await db.db_update_trade_pos_idx(trade_id, result.get("pos_idx", 0))
+                    # Сохраняем order_id и pos_idx — критично для BE-монитора
+                    if result.get("ok"):
+                        # Сохраняем order_id и pos_idx — дедупликация и BE-монитор
+                        await db.db_update_trade_bybit(
+                            trade_id,
+                            result.get("order_id", ""),
+                            result.get("pos_idx", 0),
+                        )
+                    else:
+                        # Сделка не открыта — помечаем SKIP чтобы не блокировать следующий сигнал
+                        await db.db_set_trade_result(trade_id, "SKIP", 0.0)
                     trade_msg = bybit_trader.format_trade_result(
                         result, sig.direction, sig.symbol,
                         sig.entry, sig.sl, tp1, risk_pct, leverage,
+                        tp2=tp2, tp3=tp3,
                     )
                     await self.bot.send_message(
                         user.user_id, trade_msg, parse_mode="HTML"
                     )
                 except Exception as e:
                     log.error(f"auto_trade {sig.symbol}: {e}")
+                    await db.db_set_trade_result(trade_id, "SKIP", 0.0)
                     await self.bot.send_message(
                         user.user_id,
                         f"⚠️ Авто-трейд: ошибка открытия {sig.symbol}: {e}"
@@ -474,9 +523,16 @@ class MidScanner:
                 show_trade_btn = True
 
         try:
+            _base_text = signal_text(sig, cfg)
+            if self._fund_block:
+                _base_text += (
+                    "\n━━━━━━━━━━━━━━━━━━━━\n"
+                    "📌 <b>Фундаментал рынка:</b>\n" +
+                    self._fund_block + "\n"
+                )
             await self.bot.send_message(
                 user.user_id,
-                signal_text(sig, cfg),
+                wm_inject(_base_text, user.user_id),
                 parse_mode="HTML",
                 reply_markup=signal_compact_keyboard(
                     trade_id, sig.symbol, show_trade_btn=show_trade_btn
@@ -533,17 +589,18 @@ class MidScanner:
             await self.um.save(user)
             cfg = self.cfg
             text = (
-                "⏰ <b>Подписка истекла!</b>\n\n"
-                "🤖 <b>CHM BOT — автоматический сканер твоей прибыли. Бот, который не даст проспать профит.</b>\n\n"
-                "🤖 Только БОТ:\n"
-                "  📅 1 месяц  — <b>" + cfg.BOT_PRICE_30 + "</b>\n"
-                "  📅 3 месяца — <b>" + cfg.BOT_PRICE_90 + "</b>\n"
-                "  📅 1 ГОД    — <b>" + cfg.BOT_PRICE_365 + "</b>\n\n"
-                "🤖📊 БОТ + ИНДИКАТОР:\n"
-                "  📅 1 месяц  — <b>" + cfg.FULL_PRICE_30 + "</b>\n"
-                "  📅 3 месяца — <b>" + cfg.FULL_PRICE_90 + "</b>\n"
-                "  📅 1 ГОД    — <b>" + cfg.FULL_PRICE_365 + "</b>\n\n"
-                "Напишите администратору для продления 👇"
+                "🚫 <b>Подписка истекла!</b>\n\n"
+                "📦 <b>Тариф:</b>\n"
+                "🤖 CHM BOT — 3 месяца — <b>" + cfg.BOT_PRICE_90 + "</b>\n"
+                "🤖 CHM BOT — 12 месяцев — <b>" + cfg.BOT_PRICE_365 + "</b>\n\n"
+                "💳 <b>Оплата подписки</b>\n\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "🔗 <b>Сеть:</b> BEP20 (BSC)\n\n"
+                "📋 <b>Адрес для перевода:</b>\n"
+                "<code>0xb5116aa7d7a20d7c45a8a5ff10bc1d86437df985</code>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n\n"
+                "✅ После оплаты отправь скриншот + свой Telegram ID администратору:\n\n"
+                "🆔 <b>Твой ID:</b> <code>" + str(user.user_id) + "</code>"
             )
             await self.bot.send_message(
                 user.user_id, text,
@@ -611,6 +668,13 @@ class MidScanner:
     async def _cycle(self):
         start = time.time()
         await self._update_trend_if_needed()
+
+        # Обновляем фундаментальный контекст один раз на цикл
+        if _FUND_OK:
+            try:
+                self._fund_block = await _fund.get_market_context_block()
+            except Exception as _fe:
+                log.debug("fundamental: " + str(_fe))
 
         users = await self.um.get_active_users()
         if not users:
@@ -692,6 +756,218 @@ class MidScanner:
                 log.error("Ошибка цикла: " + str(e), exc_info=True)
             await asyncio.sleep(self.cfg.SCAN_LOOP_SLEEP)
 
+    # ── Мониторинг безубытка (BE) ─────────────────────────
+
+    async def _be_monitor_loop(self):
+        """Каждые 60 сек проверяет открытые авто-сделки и переносит SL в БУ после TP1."""
+        await asyncio.sleep(90)   # начальная задержка при старте бота
+        while True:
+            try:
+                await self._check_breakevens()
+            except Exception as e:
+                log.debug(f"BE monitor error: {e}")
+            await asyncio.sleep(60)
+
+    @staticmethod
+    def _trade_result_from_exit(trade: dict, exit_price: float) -> tuple[str, float]:
+        """Определяет результат сделки (TP1/TP2/TP3/SL/BE) по цене выхода."""
+        direction = trade.get("direction", "LONG")
+        entry     = float(trade.get("entry", 0))
+        sl        = float(trade.get("sl",    0))
+        tp1       = float(trade.get("tp1",   0))
+        tp2       = float(trade.get("tp2",   0))
+        tp3       = float(trade.get("tp3",   0))
+        be_set    = bool(trade.get("be_set", 0))
+        risk      = abs(entry - sl)
+        if risk <= 0 or entry <= 0:
+            return "CLOSED", 0.0
+        tol = 0.012   # 1.2% допуск (учитывает проскальзывание и маркет-прайс)
+        if direction == "LONG":
+            if tp3 > 0 and exit_price >= tp3 * (1 - tol):
+                return "TP3", round((tp3 - entry) / risk, 2)
+            if tp2 > 0 and exit_price >= tp2 * (1 - tol):
+                return "TP2", round((tp2 - entry) / risk, 2)
+            if tp1 > 0 and exit_price >= tp1 * (1 - tol):
+                return "TP1", round((tp1 - entry) / risk, 2)
+            if be_set and exit_price >= entry * (1 - tol):
+                return "BE", 0.0
+            return "SL",  round((entry - exit_price) / risk, 2)
+        else:
+            if tp3 > 0 and exit_price <= tp3 * (1 + tol):
+                return "TP3", round((entry - tp3) / risk, 2)
+            if tp2 > 0 and exit_price <= tp2 * (1 + tol):
+                return "TP2", round((entry - tp2) / risk, 2)
+            if tp1 > 0 and exit_price <= tp1 * (1 + tol):
+                return "TP1", round((entry - tp1) / risk, 2)
+            if be_set and exit_price <= entry * (1 + tol):
+                return "BE", 0.0
+            return "SL",  round((exit_price - entry) / risk, 2)
+
+    async def _check_breakevens(self):
+        import bybit_trader
+        users = await self.um.get_active_auto_trade_users()
+        for user in users:
+            api_key    = getattr(user, "bybit_api_key",    "")
+            api_secret = getattr(user, "bybit_api_secret", "")
+            if not api_key or not api_secret:
+                continue
+            # Все незакрытые сделки (не только be_set=0)
+            trades = await db.db_get_all_open_trades(user.user_id)
+            if not trades:
+                continue
+            try:
+                positions = await bybit_trader.get_positions(api_key, api_secret)
+            except Exception:
+                continue
+            pos_map = {p["symbol"]: p for p in positions if float(p.get("size", 0)) > 0}
+
+            for trade in trades:
+                bb_sym    = bybit_trader._to_bybit_symbol(trade["symbol"])
+                pos       = pos_map.get(bb_sym)
+                direction = trade.get("direction", "LONG")
+                entry     = float(trade.get("entry", 0))
+
+                if not pos:
+                    # Позиция закрыта — дождёмся минуты после открытия чтобы избежать
+                    # ложного срабатывания сразу после создания сделки
+                    if time.time() - float(trade.get("created_at", 0)) < 60:
+                        continue
+
+                    # Запрашиваем историю закрытых позиций.
+                    # Bybit иногда задерживает появление записи — делаем 2 попытки.
+                    expected_side = "Buy" if direction == "LONG" else "Sell"
+                    created_ms    = float(trade.get("created_at", 0)) * 1000
+                    matched_exit  = None
+
+                    # Пробуем получить цену выхода из истории закрытых позиций.
+                    # Bybit задерживает появление записи — 3 попытки с паузами.
+                    for _attempt in range(3):
+                        try:
+                            closed = await bybit_trader.get_closed_pnl(
+                                api_key, api_secret, trade["symbol"]
+                            )
+                        except Exception:
+                            closed = []
+
+                        for rec in closed:
+                            # side в get_closed_pnl = сторона открытия позиции
+                            if rec.get("side") != expected_side:
+                                continue
+                            if float(rec.get("updatedTime", 0)) < created_ms:
+                                continue
+                            exit_val = float(rec.get("avgExitPrice") or 0)
+                            if exit_val > 0:
+                                matched_exit = exit_val
+                            break
+
+                        if matched_exit:
+                            break
+                        # Запись ещё не появилась — ждём и повторяем
+                        wait_secs = (3, 5, 0)[_attempt]
+                        if wait_secs:
+                            await asyncio.sleep(wait_secs)
+
+                    # Последний резерв: история исполнений (executions)
+                    if not matched_exit:
+                        try:
+                            matched_exit = await bybit_trader.get_execution_exit_price(
+                                api_key, api_secret, trade["symbol"], created_ms
+                            )
+                        except Exception:
+                            pass
+
+                    if matched_exit and matched_exit > 0:
+                        result_str, result_rr = self._trade_result_from_exit(
+                            trade, matched_exit
+                        )
+                    else:
+                        result_str, result_rr = "CLOSED", 0.0
+
+                    # Отменяем оставшиеся TP-ордера (reduce-only могут висеть после SL)
+                    try:
+                        cancel_res = await bybit_trader.cancel_all_orders(
+                            api_key, api_secret, trade["symbol"]
+                        )
+                        if cancel_res.get("ok"):
+                            n = cancel_res.get("cancelled", 0)
+                            if n:
+                                log.info(f"Cancelled {n} open orders for {bb_sym} after close")
+                    except Exception as e_cancel:
+                        log.debug(f"cancel_all_orders {bb_sym}: {e_cancel}")
+
+                    await db.db_set_trade_result(
+                        trade["trade_id"], result_str, result_rr
+                    )
+                    sym_label = trade["symbol"].replace("-USDT-SWAP", "").replace("-USDT", "")
+                    emoji = "✅" if result_str.startswith("TP") else ("🛑" if result_str == "SL" else ("♻️" if result_str == "BE" else "📋"))
+                    rr_text = f"  R:R {result_rr:+.2f}" if result_rr != 0 else ""
+                    if matched_exit:
+                        exit_display = f"<code>{matched_exit}</code>"
+                    else:
+                        # Не удалось получить точную цену — показываем нейтральный текст
+                        exit_display = "<i>по рыночной цене</i>"
+                    # Запрашиваем текущий баланс после закрытия
+                    balance_line = ""
+                    try:
+                        new_balance = await bybit_trader.get_balance(api_key, api_secret)
+                        balance_line = f"\n💼 Баланс: <code>${new_balance:.2f} USDT</code>"
+                    except Exception:
+                        pass
+                    try:
+                        await self.bot.send_message(
+                            user.user_id,
+                            f"{emoji} <b>Сделка закрыта: {result_str}</b>{rr_text}\n\n"
+                            f"💎 {sym_label}  |  {direction}\n"
+                            f"💰 Вход: <code>{entry}</code>\n"
+                            f"📤 Выход: {exit_display}"
+                            f"{balance_line}",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+                    log.info(f"Trade closed: {bb_sym} {direction} → {result_str}{rr_text} "
+                             f"exit={matched_exit} (uid={user.user_id})")
+                    continue
+
+                # ── Позиция ещё открыта: проверяем безубыток ──────────────
+                if trade.get("be_set", 0):
+                    continue   # BE уже выставлен
+
+                mark_price = float(pos.get("markPrice", 0))
+                if mark_price <= 0:
+                    continue
+                tp1_price = float(trade.get("tp1", 0))
+                if tp1_price <= 0 or entry <= 0:
+                    continue
+
+                tp1_reached = (
+                    (direction == "LONG"  and mark_price >= tp1_price) or
+                    (direction == "SHORT" and mark_price <= tp1_price)
+                )
+                if not tp1_reached:
+                    continue
+
+                pos_idx = int(trade.get("pos_idx", 0))
+                result  = await bybit_trader.set_breakeven(
+                    api_key, api_secret,
+                    trade["symbol"], entry, direction, pos_idx,
+                )
+                if result.get("ok"):
+                    await db.db_set_trade_be(trade["trade_id"])
+                    sym_label = trade["symbol"].replace("-USDT-SWAP", "").replace("-USDT", "")
+                    try:
+                        await self.bot.send_message(
+                            user.user_id,
+                            f"♻️ <b>Безубыток выставлен</b>\n\n"
+                            f"💎 {sym_label}  |  TP1 достигнут\n"
+                            f"🛑 Стоп перенесён на вход: <code>{entry}</code>",
+                            parse_mode="HTML",
+                        )
+                    except Exception:
+                        pass
+                else:
+                    log.warning(f"BE set failed {bb_sym}: {result.get('error')}")
+
     async def run_forever(self):
         log.info(
             "🚀 MidScanner v4 | Воркеров: " + str(self.cfg.SCAN_WORKERS) +
@@ -700,6 +976,7 @@ class MidScanner:
         await asyncio.gather(
             self._scan_loop(),
             self._sub_check_loop(),
+            self._be_monitor_loop(),
         )
 
     def get_perf(self) -> dict:

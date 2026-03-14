@@ -5,6 +5,7 @@ handlers.py v5 — CHM BREAKER BOT
 """
 import html as _html
 import io
+import math
 import time
 import matplotlib
 matplotlib.use('Agg')
@@ -19,9 +20,10 @@ from aiogram.filters import Command
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest
+from aiogram.exceptions import TelegramRetryAfter, TelegramBadRequest, TelegramForbiddenError
 
 import database as db
+import turso_sync as _turso
 from user_manager import UserManager, UserSettings, TradeCfg, SMCUserCfg
 from keyboards import (
     kb_main, kb_back, kb_back_photo, kb_settings, kb_notify, kb_subscribe,
@@ -39,17 +41,43 @@ from keyboards import (
     kb_targets, kb_long_targets, kb_short_targets,
     kb_volume, kb_long_volume, kb_short_volume,
     trend_text, help_text, kb_help,
+    gerchik_help_text, gerchik_help_text_p2,
+    kb_gerchik_help_p1, kb_gerchik_help_p2,
     kb_smc_main, kb_smc_tf, kb_smc_interval, kb_smc_direction,
     kb_smc_confirmations, kb_smc_rr, kb_smc_sl, kb_smc_volume, kb_smc_ob_age,
     kb_smc_mode_long, kb_smc_mode_short, kb_smc_mode_both,
     kb_auto_trade,
 )
 from scanner_mid import signal_compact_keyboard, trade_records_keyboard
+from watermark import wm_decode
 
 log = logging.getLogger("CHM.Handlers")
+_audit = logging.getLogger("CHM.Audit")  # отдельный логгер для admin-действий
+
+# Кэш username бота (заполняется при старте, нужен для реферальных ссылок)
+_bot_username: str = ""
 
 # ─── Antispam: user_id → last_analyze_ts ──────────────
 _analyze_cooldown: dict[int, float] = {}
+
+
+def _fire_task(coro, *, name: str = "bg_task") -> asyncio.Task:
+    """Создаёт asyncio.Task с логированием исключений.
+
+    Заменяет голый asyncio.create_task(), который молча проглатывает
+    исключения и затрудняет диагностику сбоев фоновых задач.
+    """
+    task = asyncio.create_task(coro, name=name)
+
+    def _on_done(t: asyncio.Task) -> None:
+        if t.cancelled():
+            return
+        exc = t.exception()
+        if exc is not None:
+            log.error("Фоновая задача '%s' упала: %s", name, exc, exc_info=exc)
+
+    task.add_done_callback(_on_done)
+    return task
 _ANALYZE_COOLDOWN_SEC = 10  # секунд между /analyze запросами
 
 
@@ -95,8 +123,10 @@ async def safe_edit(cb: CallbackQuery, text: str = None, reply_markup=None):
         except TelegramBadRequest as e:
             if "not modified" in str(e):
                 return
+            log.debug("safe_edit TelegramBadRequest: %s", e)
             return
-        except Exception:
+        except Exception as e:
+            log.debug("safe_edit error: %s", e)
             return
 
 
@@ -113,9 +143,25 @@ class AnalyzeState(StatesGroup):
     waiting_symbol = State()
 
 
+class WatchCoinState(StatesGroup):
+    waiting_coin = State()
+
+
+class PromoState(StatesGroup):
+    waiting_code = State()
+
+
+class BroadcastState(StatesGroup):
+    confirm = State()
+
+
 class SetupBybitState(StatesGroup):
     api_key    = State()
     api_secret = State()
+
+
+class MaxTradesState(StatesGroup):
+    waiting = State()
 
 
 # ── Тексты ───────────────────────────────────────────
@@ -128,7 +174,7 @@ def main_text(user: UserSettings, trend: dict) -> str:
     if strategy == "SMC":
         long_s  = "🟢 ЛОНГ" if getattr(user, "smc_long_active",  False) else "⚫ лонг"
         short_s = "🟢 ШОРТ" if getattr(user, "smc_short_active", False) else "⚫ шорт"
-        both_s  = "🟢 ОБА"  if (user.active and user.scan_mode == "smc_both") else "⚫ оба"
+        both_s  = "🟢 ОБА"  if (getattr(user, "smc_long_active", False) and getattr(user, "smc_short_active", False)) else "⚫ оба"
         cfg     = user.get_smc_cfg()
         return (
             "⚡ <b>CHM BREAKER BOT — 🧠 Smart Money</b>" + NL + NL +
@@ -139,6 +185,18 @@ def main_text(user: UserSettings, trend: dict) -> str:
             sub_line + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
             "Выбери режим SMC сканера 👇"
+        )
+    if strategy == "GERCHIK":
+        active_s = "🟢 СКАНЕР ВКЛ" if getattr(user, "gerchik_active", False) else "🔴 выключен"
+        return (
+            "⚡ <b>CHM BREAKER BOT — 🎯 Стратегия Герчика</b>" + NL + NL +
+            trend_text(trend) + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            active_s + NL +
+            "Таймфрейм: <b>1D</b>  Интервал: <b>30 мин.</b>" + NL +
+            sub_line + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "Сканер ищет уровни + паттерн БСУ→БПУ-1→БПУ-2 👇"
         )
     # ── LEVELS ──
     long_s  = "🟢 ЛОНГ" if user.long_active  else "⚫ лонг выкл"
@@ -231,6 +289,48 @@ def stats_text(user: UserSettings, stats: dict) -> str:
     )
 
 
+def _strat_block(name: str, icon: str, s: dict) -> str:
+    """Одна строка стратегии для stats_strategy_text."""
+    NL = "\n"
+    if not s:
+        return icon + " <b>" + name + "</b>: нет сделок" + NL
+    wr   = s["winrate"]
+    wr_e = "🔥" if wr >= 70 else "✅" if wr >= 50 else "⚠️"
+    sign = "+" if s["total_rr"] >= 0 else ""
+    lwr  = str(round(s["longs_w"] / s["longs"] * 100)) + "%" if s["longs"] else "—"
+    swr  = str(round(s["shorts_w"] / s["shorts"] * 100)) + "%" if s["shorts"] else "—"
+    tps  = ""
+    if s["tp1_cnt"] or s["tp2_cnt"] or s["tp3_cnt"]:
+        tps = (f"  TP1:{s['tp1_cnt']}  TP2:{s['tp2_cnt']}  TP3:{s['tp3_cnt']}" + NL)
+    be_line = f"  ♻️ BE: {s['be_cnt']}" + NL if s["be_cnt"] else ""
+    return (
+        icon + " <b>" + name + "</b>" + NL +
+        "  📋 Сделок: <b>" + str(s["total"]) + "</b>"
+        "  ✅ <b>" + str(s["wins"]) + "</b>"
+        "  ❌ <b>" + str(s["losses"]) + "</b>" + NL +
+        "  " + wr_e + " Винрейт: <b>" + "{:.1f}".format(wr) + "%</b>"
+        "  |  R: <b>" + sign + "{:.2f}".format(s["total_rr"]) + "</b>" + NL +
+        "  📈 Л: <b>" + str(s["longs_w"]) + "/" + str(s["longs"]) + "</b> (" + lwr + ")"
+        "  📉 Ш: <b>" + str(s["shorts_w"]) + "/" + str(s["shorts"]) + "</b> (" + swr + ")" + NL +
+        tps + be_line
+    )
+
+
+def stats_strategy_text(user: "UserSettings", by_strat: dict) -> str:
+    """Статистика авто-трейдинга с разбивкой по стратегиям."""
+    NL = "\n"
+    name = "@" + user.username if user.username else "Трейдер"
+    total_all = by_strat.get("ALL", {}).get("total", 0)
+    if not total_all:
+        return "📊 <b>Статистика по стратегиям — " + name + "</b>" + NL + NL + "Сделок пока нет."
+    return (
+        "📊 <b>Авто-трейдинг по стратегиям — " + name + "</b>" + NL + NL +
+        _strat_block("Уровни (LEVELS)", "📊", by_strat.get("LEVELS", {})) + NL +
+        _strat_block("Smart Money (SMC)", "🧠", by_strat.get("SMC", {})) + NL +
+        _strat_block("Герчик", "🎯", by_strat.get("GERCHIK", {}))
+    )
+
+
 def access_denied_text(reason: str) -> str:
     NL = "\n"
     if reason == "banned":
@@ -248,14 +348,9 @@ def pricing_text(config) -> str:
     return (
         "🤖 <b>CHM BOT — автоматический сканер твоей прибыли. Бот, который не даст проспать профит.</b>" + NL + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
-        "🤖 <b>Только БОТ:</b>" + NL +
-        "  📅 1 месяц  — <b>" + config.BOT_PRICE_30 + "</b>" + NL +
+        "🤖 <b>CHM BREAKER BOT:</b>" + NL +
         "  📅 3 месяца — <b>" + config.BOT_PRICE_90 + "</b>" + NL +
         "  📅 1 ГОД    — <b>" + config.BOT_PRICE_365 + "</b>" + NL + NL +
-        "🤖📊 <b>БОТ + ИНДИКАТОР на TradingView:</b>" + NL +
-        "  📅 1 месяц  — <b>" + config.FULL_PRICE_30 + "</b>" + NL +
-        "  📅 3 месяца — <b>" + config.FULL_PRICE_90 + "</b>" + NL +
-        "  📅 1 ГОД    — <b>" + config.FULL_PRICE_365 + "</b>" + NL + NL +
         "💎 <b>Для лабы — дешевле.</b> Пишите @crypto_chm" + NL +
         "🎁 <b>Супер предложение</b> (бот + лаба) — @crypto_chm" + NL + NL +
         "Выберите тариф 👇"
@@ -349,13 +444,24 @@ def _update_short_field(user: UserSettings, field: str, value):
     user.short_cfg = cfg.to_json()
 
 def _update_shared_field(user: UserSettings, field: str, value):
-    """Обновляет поле в обеих конфигах (long + short)."""
+    """Обновляет поле в flat-атрибутах UserSettings (читаются shared_cfg())
+    И в обоих JSON-конфигах (читаются get_long_cfg/get_short_cfg через merged_with).
+    Раньше писалось только в JSON → shared_cfg() никогда не видел изменений → ◉ не двигался."""
+    # Обновляем flat поле UserSettings (источник для shared_cfg и клавиатур)
+    if hasattr(user, field):
+        setattr(user, field, value)
+    # Обновляем JSON-оверрайды (источник для get_long_cfg / get_short_cfg)
     _update_long_field(user, field, value)
     _update_short_field(user, field, value)
 
 def _apply_shared_cfg(user: UserSettings, cfg: TradeCfg):
-    """Применяет TradeCfg к обеим конфигам."""
-    user.long_cfg = cfg.to_json()
+    """Применяет TradeCfg к flat-полям UserSettings и к обоим JSON-конфигам."""
+    from dataclasses import asdict, fields as dc_fields
+    cfg_dict = asdict(cfg)
+    for f in dc_fields(TradeCfg):
+        if hasattr(user, f.name):
+            setattr(user, f.name, cfg_dict[f.name])
+    user.long_cfg  = cfg.to_json()
     user.short_cfg = cfg.to_json()
 
 
@@ -368,6 +474,7 @@ def _kb_strategy_select() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Уровни (Price Action)", callback_data="strategy_levels"),
             InlineKeyboardButton(text="🧠 Smart Money (SMC)",     callback_data="strategy_smc"),
         ],
+        [InlineKeyboardButton(text="🎯 Герчик (Price Action)",   callback_data="strategy_gerchik")],
     ])
 
 def _kb_strategy_change(current: str = "") -> InlineKeyboardMarkup:
@@ -376,6 +483,7 @@ def _kb_strategy_change(current: str = "") -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Уровни", callback_data="strategy_levels"),
             InlineKeyboardButton(text="🧠 SMC",    callback_data="strategy_smc"),
         ],
+        [InlineKeyboardButton(text="🎯 Герчик",   callback_data="strategy_gerchik")],
     ]
     if current == "SMC":
         rows.append([InlineKeyboardButton(text="⚙️ Настройки SMC →", callback_data="smc_settings")])
@@ -385,16 +493,21 @@ def _kb_strategy_change(current: str = "") -> InlineKeyboardMarkup:
 def _strategy_text(strategy: str) -> str:
     chosen = ("📊 Уровни (Price Action)" if strategy == "LEVELS"
               else "🧠 Smart Money (SMC)" if strategy == "SMC"
+              else "🎯 Герчик (Price Action)" if strategy == "GERCHIK"
               else "не выбрана")
     return (
         "🎯 <b>ВЫБОР СТРАТЕГИИ</b>\n\n"
-        "Бот поддерживает две стратегии анализа:\n\n"
+        "Бот поддерживает три стратегии анализа:\n\n"
         "📊 <b>Уровни (Price Action)</b>\n"
         "  Классические уровни поддержки/сопротивления, фракталы, "
         "паттерны свечей, Volume Profile, мультитаймфреймный анализ.\n\n"
         "🧠 <b>Smart Money Concepts (SMC)</b>\n"
         "  Институциональный анализ: Market Structure (BOS/CHoCH), "
         "Liquidity Sweeps, Order Blocks, Fair Value Gaps, Premium/Discount Zones.\n\n"
+        "🎯 <b>Стратегия Герчика</b>\n"
+        "  Уровневая торговля по методу Александра Герчика. "
+        "Паттерн входа БСУ→БПУ-1→БПУ-2 у ключевых уровней. "
+        "ATR-фильтр, выход по частям (TP1 3R / TP2 4R).\n\n"
         "Текущая стратегия: <b>" + chosen + "</b>\n\n"
         "Выбери стратегию 👇"
     )
@@ -829,18 +942,22 @@ def _format_multitf_levels_text(symbol: str, tf_analyses: dict,
 
 
 def _fmt_price(v) -> str:
-    """Форматирует цену без научной нотации."""
+    """Форматирует цену без научной нотации, сохраняя полную точность."""
     try:
         v = float(v)
     except (TypeError, ValueError):
         return str(v)
+    if v <= 0:
+        return "0"
     if v >= 10_000:
         return f"{v:,.0f}"
     if v >= 100:
         return f"{v:,.1f}"
     if v >= 1:
         return f"{v:.4f}".rstrip("0").rstrip(".")
-    return f"{v:.6f}".rstrip("0").rstrip(".")
+    # Для малых чисел: 4 значимые цифры без scientific notation
+    decimals = -math.floor(math.log10(v)) + 3
+    return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
 
 
 def _pct_diff(a, b) -> str:
@@ -1156,19 +1273,50 @@ def _smc_recommendation(analysis: dict, df_1h=None) -> str:
 
 # ─── Основная функция регистрации хендлеров ──────────
 
-def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config):
+def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config,
+                       pd_runner=None):
+    """
+    pd_runner — экземпляр PDRunner (опционально).
+    Передаётся из bot.py после создания.
+    """
+    from pump_dump.pd_handlers import register_pd_handlers
+    register_pd_handlers(dp, bot, lambda: pd_runner)
 
-    is_admin = lambda uid: uid in config.ADMIN_IDS
+    def is_admin(uid: int) -> bool:
+        if uid in config.ADMIN_IDS:
+            return True
+        log.warning("Попытка admin-команды от uid=%s — отклонено", uid)
+        return False
 
     # ── Запуск SMC сканера (background task) ───────────────────────────────
     from fetcher import OKXFetcher as _OKXFetcher
     _fetcher_for_smc = _OKXFetcher()
 
     async def _on_startup_inner():
+        global _bot_username
+        try:
+            me = await bot.get_me()
+            _bot_username = me.username or ""
+        except Exception as e:
+            log.warning("Не удалось получить username бота: %s", e)
         from smc.scanner import run_smc_scanner
-        asyncio.create_task(
-            run_smc_scanner(bot, um, _fetcher_for_smc)
-        )
+
+        async def _smc_task_with_restart():
+            """Запускает SMC-сканер и перезапускает при падении."""
+            _restart_delay = 30
+            while True:
+                try:
+                    await run_smc_scanner(bot, um, _fetcher_for_smc)
+                except asyncio.CancelledError:
+                    break
+                except Exception as e:
+                    log.error(
+                        f"SMC scanner упал, перезапуск через {_restart_delay}с: {e}",
+                        exc_info=True,
+                    )
+                    await asyncio.sleep(_restart_delay)
+
+        asyncio.create_task(_smc_task_with_restart())
 
     dp.startup.register(_on_startup_inner)
 
@@ -1177,6 +1325,16 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.message(Command("start"))
     async def cmd_start(msg: Message):
         user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
+        # Обрабатываем реферальную ссылку: /start ref_12345
+        args = msg.text.split(maxsplit=1)
+        payload = args[1].strip() if len(args) > 1 else ""
+        if payload.startswith("ref_"):
+            try:
+                referrer_id = int(payload[4:])
+                if referrer_id != msg.from_user.id:
+                    await db.db_ref_set(msg.from_user.id, referrer_id)
+            except (ValueError, Exception):
+                pass
         has, reason = user.check_access()
         if not has:
             await msg.answer(
@@ -1241,12 +1399,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     # ─── ПОДПИСКА — ВЫБОР ТАРИФА (callback) ─────────────
 
     PLANS = {
-        "plan_bot_30":   ("🤖 Только БОТ — 1 месяц",   "70$"),
-        "plan_bot_90":   ("🤖 Только БОТ — 3 месяца",  "150$"),
-        "plan_bot_365":  ("🤖 Только БОТ — 1 ГОД",    "330$"),
-        "plan_full_30":  ("🤖📊 БОТ + ИНДИКАТОР — 1 месяц",  "90$"),
-        "plan_full_90":  ("🤖📊 БОТ + ИНДИКАТОР — 3 месяца", "230$"),
-        "plan_full_365": ("🤖📊 БОТ + ИНДИКАТОР — 1 ГОД",   "630$"),
+        "plan_bot_90":   ("🤖 CHM BOT — 3 месяца",  "290$"),
+        "plan_bot_365":  ("🤖 CHM BOT — 1 ГОД",     "990$"),
     }
 
     @dp.callback_query(F.data.startswith("plan_"))
@@ -1278,10 +1432,74 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     # ─── ВЫБОР СТРАТЕГИИ ──────────────────────────────
 
+    @dp.callback_query(F.data == "enter_promo")
+    async def cb_enter_promo(cb: CallbackQuery, state: FSMContext):
+        await cb.answer()
+        await state.set_state(PromoState.waiting_code)
+        await cb.message.answer(
+            "🎟 <b>Введите промокод</b>\n\n"
+            "Отправьте код, который вам выдал администратор.\n"
+            "Он даёт временный тестовый доступ к боту.",
+            parse_mode="HTML",
+        )
+
+    @dp.message(PromoState.waiting_code)
+    async def promo_code_input(msg: Message, state: FSMContext):
+        await state.clear()
+        code = msg.text.strip() if msg.text else ""
+        if not code:
+            await msg.answer("❌ Пустой код. Попробуйте ещё раз через меню.")
+            return
+        ok, text, hours = await db.db_promo_validate_and_use(msg.from_user.id, code)
+        if not ok:
+            await msg.answer(text)
+            return
+        # Выдаём доступ
+        user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
+        if user.check_access()[0]:
+            # Уже есть активная подписка
+            await msg.answer(
+                "ℹ️ У вас уже есть активный доступ.\n"
+                "Промокод засчитан, но ваша подписка не изменена."
+            )
+            return
+        import time as _time
+        user.sub_expires = _time.time() + hours * 3600
+        user.sub_status  = "active"
+        await um.save(user)
+        _fire_task(_turso.turso_push(config.DB_PATH), name="turso_push")
+        await msg.answer(
+            f"✅ <b>Промокод принят!</b>\n\n"
+            f"Вам открыт тестовый доступ на <b>{hours} часа</b>.\n"
+            f"Нажмите /start чтобы войти в бот.",
+            parse_mode="HTML",
+        )
+
+    @dp.callback_query(F.data == "my_referral")
+    async def cb_my_referral(cb: CallbackQuery):
+        await cb.answer()
+        uid  = cb.from_user.id
+        stat = await db.db_ref_stats(uid)
+        link = f"https://t.me/{_bot_username}?start=ref_{uid}" if _bot_username else f"start=ref_{uid}"
+        NL   = "\n"
+        text = (
+            "👥 <b>Реферальная программа</b>" + NL + NL +
+            "Приглашайте друзей по своей ссылке." + NL +
+            "После того как <b>5 приглашённых купят подписку</b> — вы получаете <b>30 дней бесплатно</b>!" + NL + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "🔗 Ваша реферальная ссылка:" + NL +
+            f"<code>{link}</code>" + NL + NL +
+            f"📊 Приглашено: <b>{stat['total']}</b>" + NL +
+            f"💰 Купили подписку: <b>{stat['converted']}</b>" + NL +
+            f"🎁 Наград получено: <b>{stat['rewards']}</b> × 30 дней" + NL +
+            f"⏳ До следующей награды: ещё <b>{stat['until_next']}</b> покупок"
+        )
+        await cb.message.answer(text, parse_mode="HTML")
+
     @dp.callback_query(F.data.startswith("strategy_"))
     async def cb_strategy(cb: CallbackQuery):
-        choice = cb.data.replace("strategy_", "")   # "levels" | "smc"
-        strategy_map = {"levels": "LEVELS", "smc": "SMC"}
+        choice = cb.data.replace("strategy_", "")   # "levels" | "smc" | "gerchik"
+        strategy_map = {"levels": "LEVELS", "smc": "SMC", "gerchik": "GERCHIK"}
         strategy = strategy_map.get(choice)
         if not strategy:
             await cb.answer("Неизвестная стратегия", show_alert=True); return
@@ -1289,11 +1507,60 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         user.strategy = strategy
         await um.save(user)
-        label = "📊 Уровни (Price Action)" if strategy == "LEVELS" else "🧠 Smart Money (SMC)"
+        label = (
+            "📊 Уровни (Price Action)" if strategy == "LEVELS"
+            else "🧠 Smart Money (SMC)" if strategy == "SMC"
+            else "🎯 Герчик (Price Action)"
+        )
         await cb.answer("✅ Стратегия: " + label, show_alert=False)
 
         trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
         await safe_edit(cb, main_text(user, trend), kb_main(user))
+
+    # ─── СТРАТЕГИЯ ГЕРЧИКА — режим ────────────────────
+
+    def _gerchik_mode_text(user: UserSettings) -> str:
+        active = getattr(user, "gerchik_active", False)
+        status = "🟢 СКАНЕР ВКЛ" if active else "🔴 СКАНЕР ВЫКЛ"
+        return (
+            "🎯 <b>Стратегия Герчика</b>\n\n"
+            "Уровневая торговля по методу Александра Герчика:\n"
+            "• Поиск уровней поддержки и сопротивления (D1)\n"
+            "• Паттерн входа: <b>БСУ → БПУ-1 → БПУ-2</b>\n"
+            "• ATR-фильтр: не входить если прошли ≥75% дневного диапазона\n"
+            "• Выход по частям: 55% на TP1 (3R), 45% на TP2 (4R)\n"
+            "• После TP1 стоп автоматически переносится в безубыток\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"Статус: <b>{status}</b>"
+        )
+
+    @dp.callback_query(F.data == "gerchik_menu")
+    async def cb_gerchik_menu(cb: CallbackQuery):
+        """Открывает экран стратегии Герчика (из главного меню если стратегия уже GERCHIK)."""
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        from keyboards import kb_gerchik_menu
+        await safe_edit(cb, _gerchik_mode_text(user), kb_gerchik_menu(user))
+
+    @dp.callback_query(F.data == "toggle_gerchik")
+    async def cb_toggle_gerchik(cb: CallbackQuery):
+        """Включает / выключает сканер Герчика."""
+        user = await um.get_or_create(cb.from_user.id)
+        has, reason = user.check_access()
+        if not has:
+            await cb.answer("❌ Требуется активная подписка.", show_alert=True)
+            return
+
+        await cb.answer()
+        user.gerchik_active = not getattr(user, "gerchik_active", False)
+        await um.save(user)
+
+        from keyboards import kb_gerchik_menu
+        log.info(
+            f"Герчик {'включён' if user.gerchik_active else 'выключен'} "
+            f"uid={user.user_id}"
+        )
+        await safe_edit(cb, _gerchik_mode_text(user), kb_gerchik_menu(user))
 
     # ─── АНАЛИЗ МОНЕТЫ ПО ЗАПРОСУ ────────────────────
 
@@ -1315,6 +1582,11 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await send(f"⏳ Подожди {_ANALYZE_COOLDOWN_SEC} секунд между запросами.", parse_mode="HTML")
             return
         _analyze_cooldown[uid] = now
+        # Периодически очищаем устаревшие записи, чтобы словарь не рос бесконечно
+        if len(_analyze_cooldown) > 2000:
+            _cutoff = now - 3600
+            for _k in [_k for _k, _v in _analyze_cooldown.items() if _v < _cutoff]:
+                _analyze_cooldown.pop(_k, None)
 
         wait_msg = await send(
             "⏳ <b>Глубокий анализ " + symbol + "...</b>\n\nЗагружаю свечи 1H/4H/1D...",
@@ -1344,9 +1616,13 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             pass
         # Telegram limit: 4096 chars. Split if needed.
         MAX = 4000
+        kb_back_analyze = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="◀️ В главное меню", callback_data="back_main"),
+        ]])
         if len(result_text) <= MAX:
             try:
-                await send(result_text, parse_mode="HTML")
+                await send(result_text, parse_mode="HTML",
+                           reply_markup=kb_back_analyze, protect_content=True)
             except Exception as e:
                 log.error(f"_do_analyze send error: {e}")
                 await send(f"❌ Не удалось отправить анализ: {e}")
@@ -1361,9 +1637,10 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                     current = (current + "\n" + line) if current else line
             if current:
                 parts.append(current)
-            for part in parts:
+            for i, part in enumerate(parts):
                 try:
-                    await send(part, parse_mode="HTML")
+                    kb = kb_back_analyze if i == len(parts) - 1 else None
+                    await send(part, parse_mode="HTML", reply_markup=kb, protect_content=True)
                 except Exception:
                     await send(part)  # fallback без HTML если тег сломан
 
@@ -1408,6 +1685,72 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             "<i>Анализ выполняется по вашим текущим настройкам (режим ОБА).</i>",
         )
 
+    # ─── ФИЛЬТР МОНЕТЫ (watch_coin) ───────────────────
+
+    @dp.callback_query(F.data == "watch_coin_menu")
+    async def watch_coin_menu_cb(cb: CallbackQuery, state: FSMContext):
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id, cb.from_user.username or "")
+        has, _ = user.check_access()
+        if not has:
+            await safe_edit(cb, pricing_text(config), kb_subscribe(config))
+            return
+        wc = getattr(user, "watch_coin", "").strip()
+        if wc:
+            base = wc.replace("-USDT-SWAP", "").replace("-USDT", "")
+            text = (
+                f"🎯 <b>Фильтр монеты</b>\n\n"
+                f"Сейчас отслеживается: <b>{base}</b>\n\n"
+                f"Сигналы сканера поступают <b>только по этой монете</b>.\n\n"
+                f"Введите новый тикер чтобы изменить, или нажмите «Сбросить» чтобы вернуть все монеты."
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Сбросить (все монеты)", callback_data="watch_coin_clear")],
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+            ])
+        else:
+            text = (
+                "🎯 <b>Фильтр монеты</b>\n\n"
+                "Сейчас отслеживаются <b>все монеты</b>.\n\n"
+                "Введите тикер монеты чтобы получать сигналы <b>только по ней</b>.\n"
+                "Пример: <code>BTC</code>, <code>ETH</code>, <code>SOL</code>, <code>PEPE</code>"
+            )
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+            ])
+        await state.set_state(WatchCoinState.waiting_coin)
+        await safe_edit(cb, text, kb)
+
+    @dp.callback_query(F.data == "watch_coin_clear")
+    async def watch_coin_clear_cb(cb: CallbackQuery, state: FSMContext):
+        await cb.answer("✅ Фильтр сброшен — все монеты")
+        await state.clear()
+        user = await um.get_or_create(cb.from_user.id, cb.from_user.username or "")
+        user.watch_coin = ""
+        await um.save(user)
+        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
+        await safe_edit(cb, main_text(user, trend), kb_main(user))
+
+    @dp.message(WatchCoinState.waiting_coin)
+    async def watch_coin_input(msg: Message, state: FSMContext):
+        await state.clear()
+        user = await um.get_or_create(msg.from_user.id, msg.from_user.username or "")
+        raw = (msg.text or "").strip()
+        if not raw:
+            await msg.answer("⚠️ Тикер не введён.", parse_mode="HTML")
+            return
+        # Нормализуем к OKX формату
+        sym = _normalize_symbol(raw)
+        user.watch_coin = sym
+        await um.save(user)
+        base = sym.replace("-USDT-SWAP", "").replace("-USDT", "")
+        await msg.answer(
+            f"✅ Фильтр установлен: <b>{base}</b>\n\n"
+            f"Сигналы будут поступать только по монете <b>{base}</b>.\n"
+            f"Чтобы сбросить — откройте «🎯 Мониторить одну монету» в главном меню.",
+            parse_mode="HTML",
+        )
+
     # ─── РЕЗУЛЬТАТЫ СДЕЛОК ────────────────────────────
 
     @dp.callback_query(F.data.startswith("res_"))
@@ -1435,12 +1778,14 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         rr_strs = {"TP1":"+"+str(trade["tp1_rr"])+"R","TP2":"+"+str(trade["tp2_rr"])+"R",
                    "TP3":"+"+str(trade["tp3_rr"])+"R","SL":"-1R","SKIP":""}
         try:
+            emoji_str = emojis.get(result, "")
+            rr_str    = rr_strs.get(result, "")
             await cb.message.edit_text(
-                (cb.message.text or "") + NL + NL +
-                "<b>Результат: " + emojis.get(result,"") + "  " + rr_strs.get(result,"") + "</b>",
+                f"{cb.message.text or ''}{NL}{NL}<b>Результат: {emoji_str}  {rr_str}</b>",
                 parse_mode="HTML", reply_markup=None,
             )
-        except Exception: pass
+        except (TelegramBadRequest, TelegramForbiddenError):
+            pass  # сообщение уже изменено или удалено — норма
 
         if result != "SKIP":
             user  = await um.get_or_create(cb.from_user.id)
@@ -1467,6 +1812,40 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await cb.answer()
         user  = await um.get_or_create(cb.from_user.id)
         trend = scanner.get_trend()
+        await safe_edit(cb, main_text(user, trend), kb_main(user))
+
+    @dp.callback_query(F.data == "quick_start")
+    async def quick_start(cb: CallbackQuery):
+        await cb.answer()
+        user     = await um.get_or_create(cb.from_user.id)
+        has, _   = user.check_access()
+        if not has:
+            await safe_edit(cb, pricing_text(config), kb_subscribe(config))
+            return
+        strategy = getattr(user, "strategy", "LEVELS")
+        if strategy == "SMC":
+            both_on = user.smc_long_active and user.smc_short_active
+            if both_on:
+                user.smc_long_active  = False
+                user.smc_short_active = False
+                msg = "⏹ SMC сканеры остановлены."
+            else:
+                user.smc_long_active  = True
+                user.smc_short_active = True
+                msg = "🚀 SMC ЛОНГ + ШОРТ сканеры запущены!"
+        else:
+            both_on = user.long_active and user.short_active
+            if both_on:
+                user.long_active  = False
+                user.short_active = False
+                msg = "⏹ Сканеры остановлены."
+            else:
+                user.long_active  = True
+                user.short_active = True
+                msg = "🚀 ЛОНГ + ШОРТ сканеры запущены!"
+        await um.save(user)
+        await cb.answer(msg, show_alert=True)
+        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
         await safe_edit(cb, main_text(user, trend), kb_main(user))
 
     @dp.callback_query(F.data == "show_strategy")
@@ -1526,14 +1905,16 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not has:
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
-        is_active = user.active and user.scan_mode == "smc_both"
-        if is_active:
-            user.active = False
+        both_on = user.smc_long_active and user.smc_short_active
+        if both_on:
+            user.smc_long_active  = False
+            user.smc_short_active = False
         else:
-            user.active    = True
-            user.scan_mode = "smc_both"
+            user.smc_long_active  = True
+            user.smc_short_active = True
         await um.save(user)
-        await cb.answer("🟢 SMC ОБА включён!" if user.active else "🔴 SMC ОБА выключен.")
+        both_on = user.smc_long_active and user.smc_short_active
+        await cb.answer("🟢 SMC ОБА включён!" if both_on else "🔴 SMC ОБА выключен.")
         await safe_edit(cb, "⚡ <b>SMC ОБА</b>", kb_smc_mode_both(user))
 
     # ─── SMC НАСТРОЙКИ ────────────────────────────────
@@ -1618,10 +1999,21 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def smc_set_dir(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         cfg  = user.get_smc_cfg()
-        cfg.direction = cb.data.replace("smc_set_dir_", "")
+        direction = cb.data.replace("smc_set_dir_", "")
+        cfg.direction = direction
         user.set_smc_cfg(cfg)
+        # Синхронизируем boolean-флаги — именно их читает сканер
+        if direction == "LONG":
+            user.smc_long_active  = True
+            user.smc_short_active = False
+        elif direction == "SHORT":
+            user.smc_long_active  = False
+            user.smc_short_active = True
+        else:  # BOTH
+            user.smc_long_active  = True
+            user.smc_short_active = True
         await um.save(user)
-        await cb.answer("✅ Направление: " + cfg.direction)
+        await cb.answer("✅ Направление: " + direction)
         await safe_edit(cb, "🧠 <b>Настройки SMC сканера</b>", kb_smc_main(user))
 
     @dp.callback_query(F.data.startswith("smc_set_conf_"))
@@ -1722,8 +2114,12 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         stats  = await db.db_get_user_stats(user.user_id)
         trades = await db.db_get_user_trades(user.user_id)
         text   = stats_text(user, stats)
+        kb_stats = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 По стратегиям", callback_data="my_stats_strategy")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+        ])
         if not trades or len(trades) < 2:
-            await safe_edit(cb, text, kb_back())
+            await safe_edit(cb, text, kb_stats)
             return
         equity = [0.0]
         for t in trades:
@@ -1745,9 +2141,13 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         plt.savefig(buf, format='png', bbox_inches='tight')
         buf.seek(0); plt.close()
         photo = BufferedInputFile(buf.getvalue(), filename="equity.png")
+        kb_photo = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 По стратегиям", callback_data="my_stats_strategy")],
+            [InlineKeyboardButton(text="◀️ Назад в меню",  callback_data="back_photo_main")],
+        ])
         await cb.message.delete()
         await bot.send_photo(chat_id=cb.message.chat.id, photo=photo,
-                             caption=text, parse_mode="HTML", reply_markup=kb_back_photo())
+                             caption=text, parse_mode="HTML", reply_markup=kb_photo)
 
     @dp.callback_query(F.data == "my_chart")
     async def my_chart(cb: CallbackQuery):
@@ -1781,13 +2181,27 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await bot.send_photo(chat_id=cb.message.chat.id, photo=photo,
                              caption=caption, parse_mode="HTML", reply_markup=kb_back_photo())
 
+    @dp.callback_query(F.data == "my_stats_strategy")
+    async def my_stats_strategy(cb: CallbackQuery):
+        await cb.answer()
+        user     = await um.get_or_create(cb.from_user.id)
+        by_strat = await db.db_get_user_stats_by_strategy(user.user_id)
+        text     = stats_strategy_text(user, by_strat)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📊 Общая статистика", callback_data="my_stats")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+        ])
+        await safe_edit(cb, text, kb)
+
     @dp.callback_query(F.data == "back_photo_main")
     async def back_photo_main(cb: CallbackQuery):
         await cb.answer()
         user  = await um.get_or_create(cb.from_user.id)
         trend = scanner.get_trend()
-        try: await cb.message.delete()
-        except Exception: pass
+        try:
+            await cb.message.delete()
+        except (TelegramBadRequest, TelegramForbiddenError):
+            pass  # сообщение уже удалено — норма
         await bot.send_message(cb.message.chat.id, main_text(user, trend),
                                parse_mode="HTML", reply_markup=kb_main(user))
 
@@ -1807,14 +2221,15 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not has:
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
-        # Проверяем стратегию перед включением
-        if not user.long_active and not user.strategy:
+        # Проверяем стратегию перед включением (пустая строка или None — просим выбрать)
+        if not user.long_active and user.strategy not in ("LEVELS", "SMC", "GERCHIK"):
             await cb.answer()
             await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.long_active = not user.long_active
         if user.long_active and user.active and user.scan_mode == "both":
-            # Отключаем BOTH режим чтобы не было дублей сигналов
+            # Конвертируем ОБА → раздельный режим, сохраняем покрытие
             user.active = False
+            user.short_active = True
         await cb.answer("🟢 ЛОНГ включён!" if user.long_active else "🔴 ЛОНГ выключен.")
         await um.save(user)
         cfg = user.get_long_cfg()
@@ -2136,16 +2551,16 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not has:
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
-        # Проверяем стратегию перед включением
-        if not user.short_active and not user.strategy:
+        # Проверяем стратегию перед включением (пустая строка или None — просим выбрать)
+        if not user.short_active and user.strategy not in ("LEVELS", "SMC", "GERCHIK"):
             await cb.answer()
             await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.short_active = not user.short_active
         if user.short_active:
-            # Отключаем BOTH режим чтобы не было дублей сигналов
             if user.active and user.scan_mode == "both":
+                # Конвертируем ОБА → раздельный режим, сохраняем покрытие
                 user.active = False
-            user.scan_mode = "short"
+                user.long_active = True
         else:
             if not user.long_active:
                 user.active = False
@@ -2218,7 +2633,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_retest_", ""))
         await cb.answer("✅ " + str(v))
-        _update_short_field(user, "min_retests", v); await um.save(user)
+        _update_short_field(user, "max_retest_bars", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
 
     @dp.callback_query(F.data.startswith("short_set_buffer_"))
@@ -2226,7 +2641,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("short_set_buffer_", ""))
         await cb.answer("✅ " + str(v) + "%")
-        _update_short_field(user, "buffer_pct", v); await um.save(user)
+        _update_short_field(user, "zone_buffer", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
 
     @dp.callback_query(F.data.startswith("short_set_zone_pct_"))
@@ -2234,7 +2649,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("short_set_zone_pct_", ""))
         await cb.answer("✅ " + str(v) + "%")
-        _update_short_field(user, "zone_width_pct", v); await um.save(user)
+        _update_short_field(user, "zone_pct", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
 
     @dp.callback_query(F.data.startswith("short_set_dist_pct_"))
@@ -2250,7 +2665,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_max_tests_", ""))
         await cb.answer("✅ " + str(v))
-        _update_short_field(user, "max_tests", v); await um.save(user)
+        _update_short_field(user, "max_level_tests", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты ШОРТ</b>", kb_short_pivots(user))
 
     @dp.callback_query(F.data.startswith("short_set_min_rr_"))
@@ -2288,7 +2703,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_htf_ema_", ""))
         await cb.answer("✅ HTF EMA " + str(v))
-        _update_short_field(user, "htf_ema", v); await um.save(user)
+        _update_short_field(user, "htf_ema_period", v); await um.save(user)
         await safe_edit(cb, "📉 <b>EMA ШОРТ</b>", kb_short_ema(user))
 
     @dp.callback_query(F.data == "menu_short_filters")
@@ -2355,7 +2770,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_rsi_ob_", ""))
         await cb.answer("✅ RSI OB " + str(v))
-        _update_short_field(user, "rsi_overbought", v); await um.save(user)
+        _update_short_field(user, "rsi_ob", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры ШОРТ</b>", kb_short_filters(user))
 
     @dp.callback_query(F.data.startswith("short_set_rsi_os_"))
@@ -2363,7 +2778,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("short_set_rsi_os_", ""))
         await cb.answer("✅ RSI OS " + str(v))
-        _update_short_field(user, "rsi_oversold", v); await um.save(user)
+        _update_short_field(user, "rsi_os", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры ШОРТ</b>", kb_short_filters(user))
 
     @dp.callback_query(F.data.startswith("short_set_vol_mult_"))
@@ -2371,7 +2786,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("short_set_vol_mult_", ""))
         await cb.answer("✅ x" + str(v))
-        _update_short_field(user, "volume_mult", v); await um.save(user)
+        _update_short_field(user, "vol_mult", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры ШОРТ</b>", kb_short_filters(user))
 
     @dp.callback_query(F.data == "menu_short_quality")
@@ -2438,30 +2853,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await cb.answer()
         await safe_edit(cb, "🎯 <b>Цели ШОРТ</b>", kb_short_targets(user))
 
-    @dp.callback_query(F.data.startswith("short_set_tp1_"))
-    async def short_set_tp1(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        v = float(cb.data.replace("short_set_tp1_", ""))
-        await cb.answer("✅ TP1 " + str(v) + "R")
-        _update_short_field(user, "tp1_rr", v); await um.save(user)
-        await safe_edit(cb, "🎯 <b>Цели ШОРТ</b>", kb_short_targets(user))
-
-    @dp.callback_query(F.data.startswith("short_set_tp2_"))
-    async def short_set_tp2(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        v = float(cb.data.replace("short_set_tp2_", ""))
-        await cb.answer("✅ TP2 " + str(v) + "R")
-        _update_short_field(user, "tp2_rr", v); await um.save(user)
-        await safe_edit(cb, "🎯 <b>Цели ШОРТ</b>", kb_short_targets(user))
-
-    @dp.callback_query(F.data.startswith("short_set_tp3_"))
-    async def short_set_tp3(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        v = float(cb.data.replace("short_set_tp3_", ""))
-        await cb.answer("✅ TP3 " + str(v) + "R")
-        _update_short_field(user, "tp3_rr", v); await um.save(user)
-        await safe_edit(cb, "🎯 <b>Цели ШОРТ</b>", kb_short_targets(user))
-
     @dp.callback_query(F.data == "menu_short_volume")
     async def menu_short_volume(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
@@ -2499,7 +2890,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await cb.answer("Подписка истекла!", show_alert=True)
             await safe_edit(cb, access_denied_text(reason), kb_subscribe(config)); return
         is_active = user.active and user.scan_mode == "both"
-        if not is_active and not user.strategy:
+        if not is_active and user.strategy not in ("LEVELS", "SMC", "GERCHIK"):
             await cb.answer()
             await safe_edit(cb, _strategy_text(user.strategy), _kb_strategy_select()); return
         user.active = not is_active
@@ -2575,7 +2966,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_retest_", ""))
         await cb.answer("✅ " + str(v))
-        _update_shared_field(user, "min_retests", v); await um.save(user)
+        _update_shared_field(user, "max_retest_bars", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты</b>", kb_pivots(user))
 
     @dp.callback_query(F.data.startswith("set_buffer_"))
@@ -2583,7 +2974,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("set_buffer_", ""))
         await cb.answer("✅ " + str(v) + "%")
-        _update_shared_field(user, "buffer_pct", v); await um.save(user)
+        _update_shared_field(user, "zone_buffer", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты</b>", kb_pivots(user))
 
     @dp.callback_query(F.data.startswith("set_zone_pct_"))
@@ -2591,7 +2982,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("set_zone_pct_", ""))
         await cb.answer("✅ " + str(v) + "%")
-        _update_shared_field(user, "zone_width_pct", v); await um.save(user)
+        _update_shared_field(user, "zone_pct", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты</b>", kb_pivots(user))
 
     @dp.callback_query(F.data.startswith("set_dist_pct_"))
@@ -2607,7 +2998,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_max_tests_", ""))
         await cb.answer("✅ " + str(v))
-        _update_shared_field(user, "max_tests", v); await um.save(user)
+        _update_shared_field(user, "max_level_tests", v); await um.save(user)
         await safe_edit(cb, "📐 <b>Пивоты</b>", kb_pivots(user))
 
     @dp.callback_query(F.data.startswith("set_min_rr_"))
@@ -2645,7 +3036,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_htf_ema_", ""))
         await cb.answer("✅ HTF EMA " + str(v))
-        _update_shared_field(user, "htf_ema", v); await um.save(user)
+        _update_shared_field(user, "htf_ema_period", v); await um.save(user)
         await safe_edit(cb, "📉 <b>EMA настройки</b>", kb_ema(user))
 
     @dp.callback_query(F.data == "menu_filters")
@@ -2712,7 +3103,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_rsi_ob_", ""))
         await cb.answer("✅ RSI OB " + str(v))
-        _update_shared_field(user, "rsi_overbought", v); await um.save(user)
+        _update_shared_field(user, "rsi_ob", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры</b>", kb_filters(user))
 
     @dp.callback_query(F.data.startswith("set_rsi_os_"))
@@ -2720,7 +3111,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = int(cb.data.replace("set_rsi_os_", ""))
         await cb.answer("✅ RSI OS " + str(v))
-        _update_shared_field(user, "rsi_oversold", v); await um.save(user)
+        _update_shared_field(user, "rsi_os", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры</b>", kb_filters(user))
 
     @dp.callback_query(F.data.startswith("set_vol_mult_"))
@@ -2728,7 +3119,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         v = float(cb.data.replace("set_vol_mult_", ""))
         await cb.answer("✅ x" + str(v))
-        _update_shared_field(user, "volume_mult", v); await um.save(user)
+        _update_shared_field(user, "vol_mult", v); await um.save(user)
         await safe_edit(cb, "🔬 <b>Фильтры</b>", kb_filters(user))
 
     @dp.callback_query(F.data == "menu_quality")
@@ -2837,13 +3228,41 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def menu_notify(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         await cb.answer()
-        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user, "menu_settings"))
+
+    @dp.callback_query(F.data == "menu_notify_long")
+    async def menu_notify_long(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user, "menu_long_settings"))
+
+    @dp.callback_query(F.data == "menu_notify_short")
+    async def menu_notify_short(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        await cb.answer()
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user, "menu_short_settings"))
 
     @dp.callback_query(F.data == "toggle_notify")
     async def toggle_notify(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         user.notifications_enabled = not user.notifications_enabled
         await cb.answer("🔔 Уведомления " + ("✅" if user.notifications_enabled else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
+
+    @dp.callback_query(F.data == "toggle_notify_signal")
+    async def toggle_notify_signal(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.notify_signal = not user.notify_signal
+        await cb.answer("📊 Сигнал входа " + ("✅" if user.notify_signal else "❌"))
+        await um.save(user)
+        await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
+
+    @dp.callback_query(F.data == "toggle_notify_breakout")
+    async def toggle_notify_breakout(cb: CallbackQuery):
+        user = await um.get_or_create(cb.from_user.id)
+        user.notify_breakout = not user.notify_breakout
+        await cb.answer("🔓 Пробой уровня " + ("✅" if user.notify_breakout else "❌"))
         await um.save(user)
         await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
 
@@ -3049,76 +3468,6 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         txt = "📊 <b>Сигнал #" + str(signal_id) + "</b>"
         await safe_edit(cb, txt, kb)
 
-    # ─── РЕЗУЛЬТАТЫ СДЕЛОК ────────────────────────────
-
-    @dp.callback_query(F.data.startswith("res_"))
-    async def res_handler(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        parts = cb.data.split("_")
-        # res_{result}_{signal_id}   e.g. res_win_123, res_loss_123, res_be_123
-        if len(parts) < 3:
-            await cb.answer(); return
-        result = parts[1]   # win / loss / be / tp1 / tp2 / tp3
-        signal_id = int(parts[2])
-        await cb.answer("✅ Записано: " + result)
-        rr_map = {"tp1": 1.0, "tp2": 2.0, "tp3": 3.0, "win": 2.0, "loss": -1.0, "be": 0.0}
-        rr = rr_map.get(result, 0.0)
-        await db.add_trade_record(user.user_id, signal_id, result, rr)
-        signal = await db.get_signal(signal_id)
-        kb = signal_compact_keyboard(signal) if signal else None
-        txt = "✅ <b>Результат записан:</b> " + result.upper() + " (" + str(rr) + "R)"
-        if signal:
-            txt = "📊 " + str(signal.get("symbol", "")) + "\n" + txt
-        await safe_edit(cb, txt, kb)
-
-    # ─── НАВИГАЦИЯ ────────────────────────────────────
-
-    @dp.callback_query(F.data == "back_main")
-    async def back_main(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        await cb.answer()
-        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
-        await safe_edit(cb, main_text(user, trend), kb_main(user))
-
-    @dp.callback_query(F.data == "my_stats")
-    async def my_stats(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        await cb.answer()
-        stats = await db.db_get_user_stats(user.user_id)
-        await safe_edit(cb, stats_text(user, stats), kb_back())
-
-    @dp.callback_query(F.data == "my_chart")
-    async def my_chart(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        await cb.answer()
-        stats = await db.db_get_user_stats(user.user_id)
-        if not stats or stats.get("total", 0) < 2:
-            await cb.message.answer("📊 Нужно минимум 2 сделки для графика."); return
-        # Build equity curve
-        records = await db.get_user_records(user.user_id, limit=50)
-        equity = [0.0]
-        for r in records:
-            equity.append(equity[-1] + float(r.get("rr", 0)))
-        fig, ax = plt.subplots(figsize=(8, 4))
-        color = "green" if equity[-1] >= 0 else "red"
-        ax.plot(equity, color=color, linewidth=2)
-        ax.axhline(0, color="gray", linestyle="--", linewidth=0.8)
-        ax.fill_between(range(len(equity)), equity, 0, alpha=0.15, color=color)
-        ax.set_title("Equity curve — " + str(len(records)) + " сделок", fontsize=13)
-        ax.set_xlabel("Сделки"); ax.set_ylabel("R")
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=120); buf.seek(0); plt.close(fig)
-        photo = BufferedInputFile(buf.read(), filename="equity.png")
-        await cb.message.answer_photo(photo, caption="📈 Equity curve", reply_markup=kb_back_photo())
-
-    @dp.callback_query(F.data == "back_photo_main")
-    async def back_photo_main(cb: CallbackQuery):
-        user = await um.get_or_create(cb.from_user.id)
-        await cb.answer()
-        trend = scanner.get_trend() if hasattr(scanner, "get_trend") else {}
-        await cb.message.answer(main_text(user, trend), parse_mode="HTML", reply_markup=kb_main(user))
-
     # ─── ПОМОЩЬ ───────────────────────────────────────
 
     @dp.callback_query(F.data == "help_show")
@@ -3126,9 +3475,21 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         await cb.answer()
         await safe_edit(cb, help_text(), kb_help())
 
+    @dp.callback_query(F.data == "help_gerchik")
+    async def help_gerchik_cb(cb: CallbackQuery):
+        """Справка по стратегии Герчика — страница 1."""
+        await cb.answer()
+        await safe_edit(cb, gerchik_help_text(), kb_gerchik_help_p1())
+
+    @dp.callback_query(F.data == "help_gerchik_p2")
+    async def help_gerchik_p2_cb(cb: CallbackQuery):
+        """Справка по стратегии Герчика — страница 2."""
+        await cb.answer()
+        await safe_edit(cb, gerchik_help_text_p2(), kb_gerchik_help_p2())
+
     # ─── АВТО-ТРЕЙДИНГ BYBIT ──────────────────────────
 
-    def _auto_trade_text(user: UserSettings) -> str:
+    async def _auto_trade_text(user: UserSettings) -> str:
         at       = getattr(user, "auto_trade",        False)
         mode     = getattr(user, "auto_trade_mode",   "confirm")
         risk     = getattr(user, "trade_risk_pct",    1.0)
@@ -3137,17 +3498,55 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         has_key  = bool(getattr(user, "bybit_api_key", ""))
         NL = "\n"
         mode_label = "👆 С подтверждением (кнопка)" if mode == "confirm" else "🤖 Авто (без кнопки)"
-        return (
+        limit_label = "∞ без лимита" if max_tr == 0 else str(max_tr)
+
+        # Загружаем статистику из БД (только если есть API ключи)
+        stats = await db.db_get_auto_stats(user.user_id) if has_key else None
+
+        text = (
             "💹 <b>Авто-трейдинг Bybit</b>" + NL + NL +
             "Статус: " + ("🟢 <b>Включён</b>" if at else "🔴 <b>Выключен</b>") + NL +
-            "Режим: <b>" + mode_label + "</b>" + NL +
-            "Риск: <b>" + str(risk) + "% от баланса</b>" + NL +
-            "Плечо: <b>x" + str(lev) + "</b>" + NL +
-            "Лимит сделок: <b>" + str(max_tr) + " за 24ч</b>" + NL +
-            "API: " + ("✅ <b>Подключено</b>" if has_key else "❌ <b>Не настроено</b>") + NL + NL +
+            "Режим:  <b>" + mode_label + "</b>" + NL +
+            "Риск:   <b>" + str(risk) + "% от баланса</b>" + NL +
+            "Плечо:  <b>x" + str(lev) + "</b>" + NL +
+            "Лимит:  <b>" + limit_label + " сделок/сутки</b>" + NL +
+            "API:    " + ("✅ <b>Подключено</b>" if has_key else "❌ <b>Не настроено</b>")
+        )
+
+        if stats:
+            used_24h   = stats["trades_24h"]
+            open_now   = stats["open_now"]
+            slots_left = (max_tr - open_now) if max_tr > 0 else "∞"
+            tp_total   = stats["tp1"] + stats["tp2"] + stats["tp3"]
+            sl_total   = stats["sl"]
+            closed_all = tp_total + sl_total
+            winrate    = int(tp_total / closed_all * 100) if closed_all > 0 else 0
+            rr         = stats["total_rr"]
+            rr_sign    = "+" if rr >= 0 else ""
+
+            text += (
+                NL + NL +
+                "━━━ 📊 Статистика авто-сделок ━━━" + NL +
+                f"Сегодня открыто: <b>{used_24h}</b>" +
+                (f" / {max_tr}" if max_tr > 0 else "") +
+                f"  |  Сейчас открыто: <b>{open_now}</b>" +
+                (f"  (слотов: {slots_left})" if max_tr > 0 else "") + NL +
+                NL +
+                "Закрытые позиции:" + NL +
+                f"  ✅ TP1: <b>{stats['tp1']}</b>  "
+                f"🎯 TP2: <b>{stats['tp2']}</b>  "
+                f"💎 TP3: <b>{stats['tp3']}</b>" + NL +
+                f"  ❌ Стоп-лосс: <b>{sl_total}</b>" +
+                (f"  |  Win: <b>{winrate}%</b> ({tp_total}/{closed_all})" if closed_all > 0 else "") + NL +
+                f"  💰 Итого P&L: <b>{rr_sign}{rr:.2f}R</b>"
+            )
+
+        text += (
+            NL + NL +
             "⚠️ <i>Используй только собственные API-ключи.\n"
             "Разрешение: только Contract Trade. Без Withdraw!</i>"
         )
+        return text
 
     @dp.callback_query(F.data == "auto_trade_menu")
     async def auto_trade_menu(cb: CallbackQuery):
@@ -3155,62 +3554,93 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         has, reason = user.check_access()
         if not has:
-            await cb.answer("❌ Нет доступа", show_alert=True); return
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+            await cb.message.answer("❌ Нет доступа. Требуется активная подписка."); return
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data == "toggle_auto_trade")
     async def toggle_auto_trade(cb: CallbackQuery):
+        await cb.answer()  # ACK сразу — до любых await, чтобы не словить "query is too old"
         user = await um.get_or_create(cb.from_user.id)
         has, _ = user.check_access()
         if not has:
-            await cb.answer("❌ Нет доступа", show_alert=True); return
+            await cb.message.answer("❌ Нет доступа к авто-трейдингу."); return
         if not getattr(user, "bybit_api_key", ""):
-            await cb.answer("⚠️ Сначала настрой API ключи!", show_alert=True); return
+            await cb.message.answer("⚠️ Сначала настрой API ключи!\n\nПерейди: 💹 Авто-трейдинг → 🔑 Настроить Bybit API"); return
         user.auto_trade = not user.auto_trade
         await um.save(user)
-        await cb.answer("💹 Авто-трейд: " + ("✅ вкл" if user.auto_trade else "❌ выкл"))
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.in_({"set_at_mode_confirm", "set_at_mode_auto"}))
     async def set_at_mode(cb: CallbackQuery):
+        await cb.answer()
         user = await um.get_or_create(cb.from_user.id)
         user.auto_trade_mode = "confirm" if cb.data == "set_at_mode_confirm" else "auto"
         await um.save(user)
-        await cb.answer("Режим: " + user.auto_trade_mode)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_risk_"))
     async def set_at_risk(cb: CallbackQuery):
+        await cb.answer()
         user = await um.get_or_create(cb.from_user.id)
         try:
             user.trade_risk_pct = float(cb.data.split("_")[-1])
         except ValueError:
-            await cb.answer("Ошибка"); return
+            return
         await um.save(user)
-        await cb.answer(f"Риск: {user.trade_risk_pct}%")
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_lev_"))
     async def set_at_lev(cb: CallbackQuery):
+        await cb.answer()
         user = await um.get_or_create(cb.from_user.id)
         try:
             user.trade_leverage = int(cb.data.split("_")[-1])
         except ValueError:
-            await cb.answer("Ошибка"); return
+            return
         await um.save(user)
-        await cb.answer(f"Плечо: x{user.trade_leverage}")
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("set_at_maxtr_"))
-    async def set_at_maxtr(cb: CallbackQuery):
+    async def set_at_maxtr(cb: CallbackQuery, state: FSMContext):
+        await cb.answer()
+        val = cb.data.split("_")[-1]
+        if val == "custom":
+            await state.set_state(MaxTradesState.waiting)
+            await cb.message.answer(
+                "✏️ <b>Введи лимит открытых сделок</b>\n\n"
+                "Например: <code>25</code>, <code>100</code>, <code>0</code> (без лимита)\n\n"
+                "Допустимые значения: от 0 до 9999",
+                parse_mode="HTML",
+            )
+            return
         user = await um.get_or_create(cb.from_user.id)
         try:
-            user.max_trades_limit = int(cb.data.split("_")[-1])
+            user.max_trades_limit = int(val)
         except ValueError:
-            await cb.answer("Ошибка"); return
+            return
         await um.save(user)
-        await cb.answer(f"Лимит сделок: {user.max_trades_limit}")
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
+
+    @dp.message(MaxTradesState.waiting)
+    async def set_at_maxtr_custom_input(msg: Message, state: FSMContext):
+        await state.clear()
+        try:
+            val = int(msg.text.strip())
+        except (ValueError, AttributeError):
+            await msg.answer("❌ Введи целое число, например <code>25</code>", parse_mode="HTML")
+            return
+        if val < 0 or val > 9999:
+            await msg.answer("❌ Значение должно быть от 0 до 9999")
+            return
+        user = await um.get_or_create(msg.from_user.id)
+        user.max_trades_limit = val
+        await um.save(user)
+        label = "без лимита" if val == 0 else f"{val} сделок"
+        await msg.answer(
+            f"✅ Лимит открытых сделок: <b>{label}</b>",
+            parse_mode="HTML",
+            reply_markup=kb_auto_trade(user),
+        )
 
     @dp.callback_query(F.data == "setup_bybit_api")
     async def setup_bybit_api(cb: CallbackQuery, state: FSMContext):
@@ -3218,7 +3648,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get_or_create(cb.from_user.id)
         has, _ = user.check_access()
         if not has:
-            await cb.answer("❌ Нет доступа", show_alert=True); return
+            await cb.message.answer("❌ Нет доступа. Требуется активная подписка."); return
         await state.set_state(SetupBybitState.api_key)
         await cb.message.answer(
             "🔑 <b>Настройка Bybit API</b>\n\n"
@@ -3289,7 +3719,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         api_key    = getattr(user, "bybit_api_key",    "")
         api_secret = getattr(user, "bybit_api_secret", "")
         if not api_key:
-            await cb.answer("❌ Ключи не настроены", show_alert=True); return
+            await cb.message.answer("❌ Ключи не настроены. Введи их через 🔑 Настроить Bybit API"); return
         wait = await cb.message.answer("⏳ Проверяю соединение...")
         try:
             import bybit_trader
@@ -3319,17 +3749,18 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.bybit_api_secret = ""
         user.auto_trade       = False
         await um.save(user)
-        await safe_edit(cb, _auto_trade_text(user), kb_auto_trade(user))
+        await safe_edit(cb, await _auto_trade_text(user), kb_auto_trade(user))
 
     @dp.callback_query(F.data.startswith("exec_trade_"))
     async def exec_trade(cb: CallbackQuery):
         """Пользователь нажал '✅ Открыть сделку на Bybit'."""
-        await cb.answer()
+        await cb.answer()  # ACK сразу — до любых await
         trade_id = cb.data[len("exec_trade_"):]
         user = await um.get_or_create(cb.from_user.id)
         has, _ = user.check_access()
         if not has:
-            await cb.answer("❌ Нет доступа", show_alert=True); return
+            await cb.message.answer("❌ Нет доступа. Требуется активная подписка.")
+            return
 
         api_key    = getattr(user, "bybit_api_key",    "")
         api_secret = getattr(user, "bybit_api_secret", "")
@@ -3343,15 +3774,29 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
         trade = await db.db_get_trade(trade_id)
         if not trade:
-            await cb.answer("❌ Сделка не найдена", show_alert=True); return
+            await cb.message.answer("❌ Сделка не найдена или устарела.")
+            return
 
         max_trades = getattr(user, "max_trades_limit", 5)
         open_count = await db.db_count_open_trades(user.user_id)
-        if open_count >= max_trades:
+        if max_trades > 0 and open_count >= max_trades:
             await cb.answer(
                 f"⛔ Лимит сделок достигнут ({open_count}/{max_trades}). "
                 f"Дождись закрытия открытых позиций.",
                 show_alert=True,
+            )
+            return
+        # Защита от двойного нажатия: order_id уже есть — сделка уже открыта
+        if trade.get("order_id", ""):
+            await cb.answer("⚠️ Сделка уже была открыта на Bybit!", show_alert=True)
+            return
+
+        # Проверяем дубликат по символу — не открываем вторую сделку по той же монете
+        if await db.db_has_open_trade_for_symbol(user.user_id, trade["symbol"]):
+            await cb.message.answer(
+                f"⚠️ <b>Сделка по {trade['symbol'].replace('-USDT-SWAP','').replace('-USDT','')} уже открыта</b>\n\n"
+                f"Дождись закрытия текущей позиции перед открытием новой.",
+                parse_mode="HTML",
             )
             return
 
@@ -3367,7 +3812,19 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 float(trade["tp1"]),
                 getattr(user, "trade_risk_pct",  1.0),
                 getattr(user, "trade_leverage",  10),
+                tp2=float(trade.get("tp2") or 0),
+                tp3=float(trade.get("tp3") or 0),
             )
+            # Сохраняем pos_idx для корректного BE-мониторинга
+            if result.get("ok"):
+                await db.db_update_trade_pos_idx(trade_id, result.get("pos_idx", 0))
+            # Сохраняем order_id и pos_idx — критично для BE-монитора и дедупликации
+            if result.get("ok"):
+                await db.db_update_trade_bybit(
+                    trade_id,
+                    result.get("order_id", ""),
+                    result.get("pos_idx", 0),
+                )
             text = bybit_trader.format_trade_result(
                 result,
                 trade["direction"],
@@ -3377,6 +3834,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 float(trade["tp1"]),
                 getattr(user, "trade_risk_pct", 1.0),
                 getattr(user, "trade_leverage", 10),
+                tp2=float(trade.get("tp2") or 0),
+                tp3=float(trade.get("tp3") or 0),
             )
         except Exception as e:
             log.error(f"exec_trade {trade_id}: {e}")
@@ -3403,7 +3862,12 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             "Кэш: <b>" + str(cs.get("size",0)) + "</b> ключей | хит <b>" + str(cs.get("ratio",0)) + "%</b>" + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
             "/give [id] [дней]  /revoke [id]  /ban [id]" + NL +
-            "/unban [id]  /userinfo [id]  /broadcast [текст]",
+            "/unban [id]  /userinfo [id]  /broadcast [текст]" + NL +
+            "━━━━━━━━━━━━━━━━━━━━" + NL +
+            "🎟 Промокоды:" + NL +
+            "/addcode [код] [часов]  — создать промокод (по умолч. 2 ч.)" + NL +
+            "/delcode [код]           — удалить промокод" + NL +
+            "/listcodes               — список активных промокодов",
             parse_mode="HTML",
         )
 
@@ -3417,20 +3881,43 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             tid = int(parts[1]); days = int(parts[2])
         except ValueError:
             await msg.answer("❌ Неверный формат"); return
-        user = await um.get(tid)
-        if not user:
-            await msg.answer("❌ Пользователь " + str(tid) + " не найден"); return
+        user = await um.get_or_create(tid)
         user.grant_access(days)
         await um.save(user)
-        await _save_subs_backup()   # автосохранение на диск
-        await msg.answer("✅ Доступ выдан @" + str(user.username or tid) + " на " + str(days) + " дней")
+        await _save_subs_backup()                         # автосохранение на диск
+        _fire_task(_turso.turso_push(config.DB_PATH), name="turso_push")
+        uname = user.username or str(tid)
+        await msg.answer(f"✅ Доступ выдан @{uname} на {days} дней")
+        _audit.info("GIVE uid=%s days=%d by_admin=%s", tid, days, msg.from_user.id)
         try:
             await bot.send_message(
                 tid,
-                "🎉 <b>Доступ открыт!</b>\n\nПодписка на <b>" + str(days) + " дней</b>.\nОсталось: <b>" + user.time_left_str() + "</b>\n\nНажми /menu",
+                f"🎉 <b>Доступ открыт!</b>\n\nПодписка на <b>{days} дней</b>.\n"
+                f"Осталось: <b>{user.time_left_str()}</b>\n\nНажми /menu",
                 parse_mode="HTML",
             )
-        except Exception: pass
+        except TelegramForbiddenError:
+            log.info("GIVE: пользователь %s заблокировал бота — уведомление не отправлено", tid)
+        except TelegramRetryAfter as e:
+            log.warning("GIVE: flood control %ss для uid=%s", e.retry_after, tid)
+        except Exception as e:
+            log.error("GIVE: не удалось уведомить uid=%s: %s", tid, e)
+        # Реферальная программа: отмечаем конверсию и выдаём награду если нужно
+        try:
+            ref_result = await db.db_ref_on_purchase(tid)
+            if ref_result:
+                referrer_id, total_conv = ref_result
+                notify = f"🎉 Ваш реферал купил подписку! Всего успешных: <b>{total_conv}</b>"
+                should_reward = await db.db_ref_check_and_claim_reward(referrer_id)
+                if should_reward:
+                    referrer = await um.get(referrer_id)
+                    if referrer:
+                        referrer.grant_access(30)
+                        await um.save(referrer)
+                    notify += "\n\n🎁 <b>Вы получили 30 дней бесплатно!</b> (5 успешных рефералов)"
+                await bot.send_message(referrer_id, notify, parse_mode="HTML")
+        except Exception as e:
+            log.warning("GIVE: реферальная программа uid=%s: %s", tid, e)
 
     @dp.message(Command("revoke"))
     async def cmd_revoke(msg: Message):
@@ -3444,7 +3931,11 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.sub_status = "expired"; user.sub_expires = 0
         user.active = False; user.long_active = False; user.short_active = False
         await um.save(user)
-        await msg.answer("✅ Доступ отозван у @" + str(user.username or tid))
+        await _save_subs_backup()                          # обновляем бэкап
+        _fire_task(_turso.turso_push(config.DB_PATH), name="turso_push")
+        uname = user.username or str(tid)
+        _audit.info("REVOKE uid=%s by_admin=%s", tid, msg.from_user.id)
+        await msg.answer(f"✅ Доступ отозван у @{uname}")
 
     @dp.message(Command("ban"))
     async def cmd_ban(msg: Message):
@@ -3458,7 +3949,10 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user.sub_status = "banned"; user.active = False
         user.long_active = False; user.short_active = False
         await um.save(user)
-        await msg.answer("🚫 @" + str(user.username or tid) + " заблокирован")
+        _fire_task(_turso.turso_push(config.DB_PATH), name="turso_push")
+        uname = user.username or str(tid)
+        _audit.info("BAN uid=%s by_admin=%s", tid, msg.from_user.id)
+        await msg.answer(f"🚫 @{uname} заблокирован")
 
     @dp.message(Command("unban"))
     async def cmd_unban(msg: Message):
@@ -3471,7 +3965,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         if not user: await msg.answer("❌ Не найден"); return
         user.sub_status = "expired"
         await um.save(user)
-        await msg.answer("✅ @" + str(user.username or tid) + " разблокирован")
+        uname = user.username or str(tid)
+        _audit.info("UNBAN uid=%s by_admin=%s", tid, msg.from_user.id)
+        await msg.answer(f"✅ @{uname} разблокирован")
 
     @dp.message(Command("userinfo"))
     async def cmd_userinfo(msg: Message):
@@ -3483,34 +3979,97 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
         user = await um.get(tid)
         if not user: await msg.answer("❌ Не найден"); return
         stats = await db.db_get_user_stats(tid)
-        NL    = "\n"
+        long_icon  = "🟢" if user.long_active  else "⚫"
+        short_icon = "🟢" if user.short_active else "⚫"
+        both_icon  = "🟢" if user.active       else "⚫"
+        total_rr   = stats.get("total_rr", 0)
         await msg.answer(
-            "👤 <b>@" + str(user.username or "—") + "</b> (<code>" + str(user.user_id) + "</code>)" + NL +
-            "Подписка: <b>" + user.sub_status.upper() + "</b> | Осталось: <b>" + user.time_left_str() + "</b>" + NL +
-            "ЛОНГ: " + ("🟢" if user.long_active else "⚫") +
-            "  ШОРТ: " + ("🟢" if user.short_active else "⚫") +
-            "  ОБА: " + ("🟢" if user.active else "⚫") + NL +
-            "Сигналов: <b>" + str(user.signals_received) + "</b>  Сделок: <b>" + str(stats.get("total",0)) + "</b>  R: <b>" + "{:+.2f}".format(stats.get("total_rr",0)) + "R</b>" + NL +
-            "Стратегия: <b>" + (user.strategy or "не выбрана") + "</b>",
+            f"👤 <b>@{user.username or '—'}</b> (<code>{user.user_id}</code>)\n"
+            f"Подписка: <b>{user.sub_status.upper()}</b> | Осталось: <b>{user.time_left_str()}</b>\n"
+            f"ЛОНГ: {long_icon}  ШОРТ: {short_icon}  ОБА: {both_icon}\n"
+            f"Сигналов: <b>{user.signals_received}</b>  "
+            f"Сделок: <b>{stats.get('total', 0)}</b>  "
+            f"R: <b>{total_rr:+.2f}R</b>\n"
+            f"Стратегия: <b>{user.strategy or 'не выбрана'}</b>",
             parse_mode="HTML",
         )
 
+    @dp.message(Command("decode_wm"))
+    async def cmd_decode_wm(msg: Message):
+        """Декодирует невидимый водяной знак из скопированного сигнала.
+        Использование: /decode_wm — затем переслать или вставить текст сигнала как reply."""
+        if not is_admin(msg.from_user.id): return
+        # Берём текст из reply или из самого сообщения (после команды)
+        source = msg.reply_to_message.text if msg.reply_to_message else msg.text
+        if not source:
+            await msg.answer("❌ Перешли сообщение с сигналом как reply на эту команду, или вставь текст после /decode_wm"); return
+        uid = wm_decode(source)
+        if uid is None:
+            await msg.answer("❌ Водяной знак не найден — текст без watermark или повреждён"); return
+        user = await um.get(uid)
+        if user:
+            await msg.answer(
+                "🔍 <b>Водяной знак декодирован</b>\n\n"
+                "👤 @" + str(user.username or "—") + " (<code>" + str(uid) + "</code>)\n"
+                "Подписка: <b>" + user.sub_status.upper() + "</b>\n"
+                "Сигналов получено: <b>" + str(user.signals_received) + "</b>",
+                parse_mode="HTML",
+            )
+        else:
+            await msg.answer("🔍 User ID из водяного знака: <code>" + str(uid) + "</code>\n(пользователь не найден в БД)", parse_mode="HTML")
+
     @dp.message(Command("broadcast"))
-    async def cmd_broadcast(msg: Message):
+    async def cmd_broadcast(msg: Message, state: FSMContext):
         if not is_admin(msg.from_user.id): return
         text = msg.text.replace("/broadcast", "", 1).strip()
-        if not text: await msg.answer("Использование: /broadcast [текст]"); return
+        if not text:
+            await msg.answer("Использование: /broadcast [текст]"); return
         users  = await um.all_users()
-        sent = failed = 0
-        for u in users:
-            if u.sub_status in ("trial", "active"):
-                try:
-                    await bot.send_message(u.user_id, "📢 " + text)
-                    sent += 1
-                    await asyncio.sleep(0.04)
-                except Exception:
-                    failed += 1
-        await msg.answer("📢 Рассылка: ✅ " + str(sent) + "  ❌ " + str(failed))
+        target = [u for u in users if u.sub_status in ("trial", "active")]
+        await state.update_data(broadcast_text=text)
+        await state.set_state(BroadcastState.confirm)
+        await msg.answer(
+            f"📢 <b>Подтверждение рассылки</b>\n\n"
+            f"Получателей: <b>{len(target)}</b> активных пользователей\n\n"
+            f"Текст сообщения:\n<i>{text}</i>\n\n"
+            f"Напишите <code>CONFIRM</code> для отправки или /cancel для отмены.",
+            parse_mode="HTML",
+        )
+
+    @dp.message(BroadcastState.confirm)
+    async def broadcast_confirm(msg: Message, state: FSMContext):
+        if not is_admin(msg.from_user.id):
+            await state.clear(); return
+        if msg.text and msg.text.strip().upper() == "CONFIRM":
+            data = await state.get_data()
+            text = data.get("broadcast_text", "")
+            await state.clear()
+            users = await um.all_users()
+            sent = failed = 0
+            _audit.info("BROADCAST by_admin=%s recipients=%d", msg.from_user.id,
+                        sum(1 for u in users if u.sub_status in ("trial", "active")))
+            for u in users:
+                if u.sub_status in ("trial", "active"):
+                    try:
+                        await bot.send_message(u.user_id, f"📢 {text}")
+                        sent += 1
+                        await asyncio.sleep(0.04)
+                    except TelegramForbiddenError:
+                        failed += 1  # пользователь заблокировал бота
+                    except TelegramRetryAfter as e:
+                        await asyncio.sleep(e.retry_after)
+                        try:
+                            await bot.send_message(u.user_id, f"📢 {text}")
+                            sent += 1
+                        except Exception:
+                            failed += 1
+                    except Exception as e:
+                        log.warning("broadcast uid=%s: %s", u.user_id, e)
+                        failed += 1
+            await msg.answer(f"📢 Рассылка завершена: ✅ {sent}  ❌ {failed}")
+        else:
+            await state.clear()
+            await msg.answer("❌ Рассылка отменена.")
 
     # ─── ПРОЧЕЕ ───────────────────────────────────────
 
@@ -3534,6 +4093,55 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def cmd_help(msg: Message):
         await msg.answer(help_text(), parse_mode="HTML", reply_markup=kb_help())
 
+    # ─── ПРОМОКОДЫ (ADMIN) ─────────────────────────────
+
+    @dp.message(Command("addcode"))
+    async def cmd_addcode(msg: Message):
+        if not is_admin(msg.from_user.id): return
+        parts = msg.text.split()
+        if len(parts) < 2:
+            await msg.answer("Использование: /addcode [код] [часов]\nПример: /addcode FREECHM 2"); return
+        code  = parts[1].upper()
+        hours = 2
+        if len(parts) >= 3:
+            try: hours = int(parts[2])
+            except ValueError: await msg.answer("❌ Количество часов должно быть числом"); return
+        await db.db_promo_create(code, msg.from_user.id, hours)
+        await msg.answer(
+            f"✅ Промокод <code>{code}</code> создан ({hours} ч.)\n\n"
+            f"Пользователь вводит его на экране тарифов. Удалить: /delcode {code}",
+            parse_mode="HTML",
+        )
+
+    @dp.message(Command("delcode"))
+    async def cmd_delcode(msg: Message):
+        if not is_admin(msg.from_user.id): return
+        parts = msg.text.split()
+        if len(parts) < 2:
+            await msg.answer("Использование: /delcode [код]"); return
+        code = parts[1].upper()
+        deleted = await db.db_promo_delete(code)
+        if deleted:
+            await msg.answer(f"✅ Промокод <code>{code}</code> удалён — теперь недействителен.", parse_mode="HTML")
+        else:
+            await msg.answer(f"❌ Промокод <code>{code}</code> не найден.", parse_mode="HTML")
+
+    @dp.message(Command("listcodes"))
+    async def cmd_listcodes(msg: Message):
+        if not is_admin(msg.from_user.id): return
+        codes = await db.db_promo_list()
+        if not codes:
+            await msg.answer("📋 Активных промокодов нет."); return
+        import time as _time
+        NL   = "\n"
+        lines = ["📋 <b>Активные промокоды:</b>" + NL]
+        for c in codes:
+            import datetime
+            dt = datetime.datetime.fromtimestamp(c["created_at"]).strftime("%d.%m %H:%M")
+            lines.append(f"<code>{c['code']}</code> — {c['duration_hours']} ч.  (создан {dt})")
+        lines.append(NL + "Удалить: /delcode КОД")
+        await msg.answer(NL.join(lines), parse_mode="HTML")
+
     # ─── ЭКСПОРТ / ИМПОРТ ПОДПИСОК ────────────────────
     # После редеплоя БД может быть пуста. /export_subs сохраняет
     # список активных подписок в файл и в Telegram.
@@ -3541,9 +4149,10 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
 
     def _subs_backup_path() -> str:
         import os
-        return os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "subs_backup.txt"
-        )
+        # Сохраняем рядом с БД (persistent /data/ на bothost.ru и VPS)
+        # а не рядом со скриптом, который затирается при редеплое.
+        db_dir = os.path.dirname(os.path.abspath(config.DB_PATH))
+        return os.path.join(db_dir, "subs_backup.txt")
 
     async def _save_subs_backup():
         """Сохраняет активных пользователей в файл рядом со скриптом."""
@@ -3613,6 +4222,271 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                 log.warning(f"import_subs line error: {e}")
                 errors += 1
         await msg.answer(f"✅ Восстановлено: {restored}  ❌ Ошибок: {errors}")
+
+    # ─── ПАНЕЛЬ ПОЗИЦИЙ BYBIT ──────────────────────────
+
+    def _fmt_bybit_dashboard(positions: list, orders: list, summary: dict) -> str:
+        NL = "\n"
+        eq       = summary.get("equity", 0.0)
+        upnl     = summary.get("unrealized_pnl", 0.0)
+        avail    = summary.get("available", 0.0)
+        pnl24    = summary.get("closed_pnl_24h", 0.0)
+        trades24 = summary.get("trades_24h", 0)
+        wins24   = summary.get("wins_24h", 0)
+
+        upnl_str = ("+$" if upnl >= 0 else "-$") + f"{abs(upnl):.2f}"
+        pnl24_str = ("+$" if pnl24 >= 0 else "-$") + f"{abs(pnl24):.2f}"
+
+        lines = [
+            "📊 <b>BYBIT — Панель управления</b>" + NL,
+            f"💰 Баланс: <b>${eq:.2f}</b>   💵 Доступно: <b>${avail:.2f}</b>",
+            f"📈 Нереализ. P&L: <b>{upnl_str}</b>",
+        ]
+
+        # Открытые позиции
+        open_pos = [p for p in positions if float(p.get("size", 0)) > 0]
+        if open_pos:
+            lines.append(NL + f"─── Открытые позиции ({len(open_pos)}) ───")
+            for pos in open_pos:
+                sym      = pos.get("symbol", "")
+                side     = pos.get("side", "")
+                size     = pos.get("size", "0")
+                entry    = float(pos.get("entryPrice", 0) or 0)
+                mark     = float(pos.get("markPrice", 0) or 0)
+                pos_upnl = float(pos.get("unrealisedPnl", 0) or 0)
+                lev      = pos.get("leverage", "?")
+                sl_raw   = pos.get("stopLoss", "0") or "0"
+                sl       = float(sl_raw)
+
+                dir_em   = "🟢 LONG" if side == "Buy" else "🔴 SHORT"
+                upnl_em  = ("+" if pos_upnl >= 0 else "") + f"${pos_upnl:.2f}"
+                pct = ((mark - entry) / entry * 100) if entry > 0 else 0.0
+                if side == "Sell":
+                    pct = -pct
+
+                sl_line = f"   🛑 SL: <code>{sl:.6g}</code>" if sl > 0 else ""
+                lines.append(
+                    f"{dir_em} <b>{sym}</b> x{lev}   📦 {size}" + NL +
+                    f"   🎯 Вход: <code>{entry:.6g}</code>  →  Сейчас: <code>{mark:.6g}</code>" + NL +
+                    f"   💹 P&L: <b>{upnl_em}</b> ({pct:+.1f}%)" +
+                    (NL + sl_line if sl_line else "")
+                )
+        else:
+            lines.append(NL + "─── Открытых позиций нет ───")
+
+        # Ожидающие ордера
+        if orders:
+            lines.append(NL + f"─── Ожидающие ордера ({len(orders)}) ───")
+            for order in orders[:10]:
+                sym    = order.get("symbol", "")
+                side_o = order.get("side", "")
+                price  = order.get("price", "?")
+                qty    = order.get("qty", "?")
+                reduce = " [TP]" if order.get("reduceOnly") else ""
+                em     = "🟢" if side_o == "Buy" else "🔴"
+                lines.append(f"  {em} {sym} {side_o} Limit <code>{price}</code>  ({qty}){reduce}")
+            if len(orders) > 10:
+                lines.append(f"  … ещё {len(orders) - 10} ордеров")
+        else:
+            lines.append(NL + "─── Ожидающих ордеров нет ───")
+
+        # 24ч статистика
+        lines.append(NL + "─── За последние 24 часа ───")
+        wr_str = f"  Win: {wins24}/{trades24} ({int(wins24/trades24*100)}%)" if trades24 > 0 else ""
+        lines.append(f"📊 Закрыто сделок: <b>{trades24}</b>{wr_str}")
+        lines.append(f"💵 Реализов. P&L: <b>{pnl24_str}</b>")
+
+        return NL.join(lines)
+
+    async def _load_bybit_dashboard(api_key: str, api_secret: str):
+        """Загружает все данные за одно подключение к Bybit (быстро)."""
+        import bybit_trader as _bt
+        return await _bt.get_dashboard(api_key, api_secret)
+
+    @dp.callback_query(F.data == "bybit_pos")
+    async def bybit_positions(cb: CallbackQuery):
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        has, _ = user.check_access()
+        if not has:
+            await cb.answer("❌ Нет доступа", show_alert=True); return
+        api_key    = getattr(user, "bybit_api_key",    "")
+        api_secret = getattr(user, "bybit_api_secret", "")
+        if not api_key:
+            await cb.answer("❌ API ключи не настроены", show_alert=True); return
+
+        try:
+            await cb.message.edit_text("⏳ Загружаю данные с Bybit...", parse_mode="HTML")
+        except Exception:
+            pass
+
+        try:
+            positions, orders, summary = await _load_bybit_dashboard(api_key, api_secret)
+        except Exception as e:
+            await cb.message.edit_text(f"❌ Ошибка Bybit:\n<code>{e}</code>", parse_mode="HTML")
+            return
+
+        from keyboards import kb_bybit_dashboard
+        text = _fmt_bybit_dashboard(positions, orders, summary)
+        kb   = kb_bybit_dashboard(positions, orders)
+        try:
+            await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            await cb.message.answer(text, parse_mode="HTML", reply_markup=kb)
+
+    @dp.callback_query(F.data.startswith("bybit_pos_close_") & ~F.data.startswith("bybit_pos_close_ok_"))
+    async def bybit_pos_close_ask(cb: CallbackQuery):
+        """Запрашивает подтверждение закрытия позиции."""
+        await cb.answer()
+        # callback: bybit_pos_close_{symbol}_{pos_idx}
+        parts = cb.data[len("bybit_pos_close_"):].rsplit("_", 1)
+        if len(parts) != 2:
+            await cb.answer("Ошибка формата", show_alert=True); return
+        symbol, pos_idx_s = parts[0], parts[1]
+        try:
+            pos_idx = int(pos_idx_s)
+        except ValueError:
+            await cb.answer("Ошибка формата", show_alert=True); return
+
+        from keyboards import kb_close_confirm
+        await safe_edit(
+            cb,
+            f"⚠️ <b>Закрыть {symbol} по рынку?</b>\n\nЭто действие нельзя отменить.",
+            kb_close_confirm(symbol, pos_idx),
+        )
+
+    @dp.callback_query(F.data.startswith("bybit_pos_close_ok_"))
+    async def bybit_pos_close_confirm(cb: CallbackQuery):
+        """Закрывает позицию маркет-ордером."""
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        api_key    = getattr(user, "bybit_api_key",    "")
+        api_secret = getattr(user, "bybit_api_secret", "")
+        if not api_key:
+            await cb.answer("❌ API ключи не настроены", show_alert=True); return
+
+        # callback: bybit_pos_close_ok_{symbol}_{pos_idx}
+        parts = cb.data[len("bybit_pos_close_ok_"):].rsplit("_", 1)
+        if len(parts) != 2:
+            await cb.answer("Ошибка формата", show_alert=True); return
+        symbol, pos_idx_s = parts[0], parts[1]
+        try:
+            pos_idx = int(pos_idx_s)
+        except ValueError:
+            await cb.answer("Ошибка формата", show_alert=True); return
+
+        try:
+            await cb.message.edit_text(f"⏳ Закрываю {symbol}...", parse_mode="HTML")
+        except Exception:
+            pass
+
+        import bybit_trader as _bt
+        # Получаем актуальный размер и сторону позиции
+        positions = await _bt.get_positions(api_key, api_secret, symbol)
+        pos = next((p for p in positions
+                    if p.get("symbol") == _bt._to_bybit_symbol(symbol)
+                    and int(p.get("positionIdx", 0)) == pos_idx
+                    and float(p.get("size", 0)) > 0), None)
+        if not pos:
+            await cb.message.edit_text(
+                f"ℹ️ Позиция {symbol} уже закрыта или не найдена.",
+                parse_mode="HTML",
+            )
+            return
+
+        # Сначала отменяем все TP-ордера
+        await _bt.cancel_all_orders(api_key, api_secret, symbol)
+
+        result = await _bt.close_position(
+            api_key, api_secret,
+            symbol,
+            side    = pos.get("side", "Buy"),
+            size    = pos.get("size", "0"),
+            pos_idx = pos_idx,
+        )
+        if result.get("ok"):
+            await cb.message.edit_text(
+                f"✅ <b>{symbol}</b> закрыт маркет-ордером.\n\n"
+                f"🆔 Order ID: <code>{result.get('order_id', '—')}</code>",
+                parse_mode="HTML",
+            )
+        else:
+            await cb.message.edit_text(
+                f"❌ Не удалось закрыть {symbol}:\n{result.get('error')}",
+                parse_mode="HTML",
+            )
+
+    @dp.callback_query(F.data.startswith("bybit_ord_cancel_all_"))
+    async def bybit_ord_cancel_all(cb: CallbackQuery):
+        """Отменяет все ордера для символа."""
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        api_key    = getattr(user, "bybit_api_key",    "")
+        api_secret = getattr(user, "bybit_api_secret", "")
+        if not api_key:
+            await cb.answer("❌ API ключи не настроены", show_alert=True); return
+
+        # callback: bybit_ord_cancel_all_{symbol}_{pos_idx}
+        tail  = cb.data[len("bybit_ord_cancel_all_"):]
+        parts = tail.rsplit("_", 1)
+        symbol = parts[0]
+
+        import bybit_trader as _bt
+        result = await _bt.cancel_all_orders(api_key, api_secret, symbol)
+        if result.get("ok"):
+            cancelled = result.get("cancelled", 0)
+            await cb.answer(f"✅ Отменено ордеров: {cancelled}", show_alert=True)
+        else:
+            await cb.answer(f"❌ {result.get('error', 'Ошибка')}", show_alert=True)
+
+    @dp.callback_query(F.data.startswith("bybit_ord_cancel_"))
+    async def bybit_ord_cancel_one(cb: CallbackQuery):
+        """Отменяет один ордер по orderId."""
+        await cb.answer()
+        user = await um.get_or_create(cb.from_user.id)
+        api_key    = getattr(user, "bybit_api_key",    "")
+        api_secret = getattr(user, "bybit_api_secret", "")
+        if not api_key:
+            await cb.answer("❌ API ключи не настроены", show_alert=True); return
+
+        # callback: bybit_ord_cancel_{orderId}
+        order_id = cb.data[len("bybit_ord_cancel_"):]
+        if not order_id:
+            await cb.answer("Ошибка: нет order_id", show_alert=True); return
+
+        # Для отмены нужен symbol — берём из открытых ордеров
+        import bybit_trader as _bt
+        orders = await _bt.get_open_orders(api_key, api_secret)
+        target = next((o for o in orders if o.get("orderId") == order_id), None)
+        if not target:
+            await cb.answer("ℹ️ Ордер уже исполнен или отменён", show_alert=True)
+            # Обновляем панель
+            try:
+                positions, orders2, summary = await _load_bybit_dashboard(api_key, api_secret)
+                from keyboards import kb_bybit_dashboard
+                text = _fmt_bybit_dashboard(positions, orders2, summary)
+                kb   = kb_bybit_dashboard(positions, orders2)
+                await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+            except Exception:
+                pass
+            return
+
+        symbol = target.get("symbol", "")
+        result = await _bt.cancel_order(api_key, api_secret, symbol, order_id)
+        if result.get("ok"):
+            await cb.answer("✅ Ордер отменён", show_alert=False)
+        else:
+            await cb.answer(f"❌ {result.get('error', 'Ошибка')}", show_alert=True)
+
+        # Обновляем панель после отмены
+        try:
+            positions, orders2, summary = await _load_bybit_dashboard(api_key, api_secret)
+            from keyboards import kb_bybit_dashboard
+            text = _fmt_bybit_dashboard(positions, orders2, summary)
+            kb   = kb_bybit_dashboard(positions, orders2)
+            await cb.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            pass
 
     # ─── Закрываем register_handlers ──────────────────
     # (конец функции)
