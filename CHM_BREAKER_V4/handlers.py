@@ -3751,9 +3751,7 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             tid = int(parts[1]); days = int(parts[2])
         except ValueError:
             await msg.answer("❌ Неверный формат"); return
-        user = await um.get(tid)
-        if not user:
-            await msg.answer("❌ Пользователь " + str(tid) + " не найден"); return
+        user = await um.get_or_create(tid)
         user.grant_access(days)
         await um.save(user)
         await _save_subs_backup()                         # автосохранение на диск
