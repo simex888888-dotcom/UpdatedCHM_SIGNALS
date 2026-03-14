@@ -30,6 +30,21 @@ from pump_dump.pd_config import (
 log = logging.getLogger("CHM.PD.Hidden")
 
 
+def _extract_data(response: dict) -> dict:
+    """Нормализует поле 'data' из ответа BingX API.
+
+    BingX возвращает data либо как dict {'fundingRate': ...},
+    либо как list [{'fundingRate': ...}] в зависимости от эндпоинта и монеты.
+    Эта функция всегда возвращает dict (первый элемент если list, {} если пусто).
+    """
+    d = response.get("data", {})
+    if isinstance(d, list):
+        return d[0] if d else {}
+    if isinstance(d, dict):
+        return d
+    return {}
+
+
 @dataclass
 class HiddenResult:
     # Funding rate
@@ -90,7 +105,7 @@ class HiddenSignalsCache:
                     async with s.get(url, params={"symbol": sym},
                                      timeout=aiohttp.ClientTimeout(total=5)) as r:
                         data = await r.json()
-                    rate = float(data.get("data", {}).get("fundingRate", 0))
+                    rate = float(_extract_data(data).get("fundingRate", 0))
                     self._funding[sym].append((rate, time.time()))
                 except asyncio.TimeoutError:
                     log.debug(f"funding {sym}: timeout")
@@ -112,7 +127,7 @@ class HiddenSignalsCache:
                     async with s.get(url, params={"symbol": sym},
                                      timeout=aiohttp.ClientTimeout(total=5)) as r:
                         data = await r.json()
-                    oi = float(data.get("data", {}).get("openInterest", 0))
+                    oi = float(_extract_data(data).get("openInterest", 0))
                     self._oi_history[sym].append((oi, time.time()))
                 except asyncio.TimeoutError:
                     log.debug(f"OI {sym}: timeout")
