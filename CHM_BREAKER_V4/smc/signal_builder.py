@@ -2,10 +2,25 @@
 smc/signal_builder.py — Signal Scoring, Entry/SL/TP, Narrative Generation
 """
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
 log = logging.getLogger("CHM.SMC.SignalBuilder")
+
+
+def _fp(v: float) -> str:
+    """Форматирует цену без научной нотации, сохраняя полную точность."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    if v <= 0:      return "0"
+    if v >= 10_000: return f"{v:,.0f}"
+    if v >= 100:    return f"{v:,.1f}"
+    if v >= 1:      return f"{v:.4f}".rstrip("0").rstrip(".")
+    decimals = -math.floor(math.log10(v)) + 3
+    return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
 
 GRADES = {5: "🔥 A+", 4: "✅ A", 3: "⚡ B"}
 
@@ -133,8 +148,30 @@ def calculate_levels(analysis: dict, direction: str, cfg) -> Optional[dict]:
     if risk <= 0:
         return None
 
-    # TP1 = FVG zone или 1R
+    # ── Фильтр стопа (ATR + минимум по типу монеты) ───────────────────────
+    _MEMCOIN_KW = ("FLOKI","PEPE","SHIB","DOGE","WIF","BONK","NEIRO",
+                   "MEME","SATS","TURBO","CATS","ACT","BOME","BOOK")
+    _sym_up    = analysis.get("symbol", "").upper()
+    is_memcoin = any(k in _sym_up for k in _MEMCOIN_KW)
+    is_major   = "BTC" in _sym_up or "ETH" in _sym_up
+
+    cp = analysis.get("current_price", 0.0) or entry_mid
+    risk_pct_raw = risk / cp * 100 if cp > 0 else 0.0
+
+    if is_major and risk_pct_raw < 0.15:      # было 0.4
+        return None
+    if is_memcoin and risk_pct_raw < 0.8:    # было 1.5
+        return None
+    if not is_major and not is_memcoin and risk_pct_raw < 0.4:  # было 0.8
+        return None
+
+    atr = analysis.get("atr", 0.0)
+    if atr > 0 and risk < atr * 0.8:         # было 1.5
+        return None
+
+    # TP1 = FVG zone или fallback
     # Используем FVG только если он ПОЛНОСТЬЮ за пределами зоны входа
+    _MIN_TP1_RR = 1.0  # TP1 минимум 1.0R от entry_mid
     fvg_obj = fvg.get("bull_fvg") if direction == "LONG" else fvg.get("bear_fvg")
     if fvg_obj:
         if direction == "LONG":
@@ -152,12 +189,18 @@ def calculate_levels(analysis: dict, direction: str, cfg) -> Optional[dict]:
     else:
         tp1 = None
 
-    # Fallback: считаем от entry_high/entry_low (худший вход в зону)
+    # Fallback: минимум 1.5R от entry_mid
     if tp1 is None:
         if direction == "LONG":
-            tp1 = entry_high + risk * cfg.TP1_RATIO * 3
+            tp1 = entry_mid + risk * 1.5
         else:
-            tp1 = entry_low - risk * cfg.TP1_RATIO * 3
+            tp1 = entry_mid - risk * 1.5
+
+    # Гарантируем минимум _MIN_TP1_RR от entry_mid независимо от источника TP1
+    if direction == "LONG":
+        tp1 = max(tp1, entry_mid + risk * _MIN_TP1_RR)
+    else:
+        tp1 = min(tp1, entry_mid - risk * _MIN_TP1_RR)
 
     # TP2 = swing high/low (должен быть за пределами зоны входа)
     sh = s.get("last_swing_high")
@@ -184,23 +227,20 @@ def calculate_levels(analysis: dict, direction: str, cfg) -> Optional[dict]:
         tp3 = entry_high + risk * 4.0 if direction == "LONG" \
               else entry_low - risk * 4.0
 
-    # Проверка порядка TP — база от worst-case входа (entry_high/entry_low)
+    # Проверка порядка TP — база от entry_mid с гарантированным расстоянием
     if direction == "LONG":
-        # Все TP должны быть ВЫШЕ entry_high (верхней границы зоны входа)
         if not (entry_high < tp1 <= tp2 <= tp3):
-            tp2 = entry_high + risk * 2.5
-            tp3 = entry_high + risk * 4.0
-            tp1 = entry_high + risk * 1.2
+            tp1 = entry_mid + risk * 1.2
+            tp2 = entry_mid + risk * 2.5
+            tp3 = entry_mid + risk * 4.0
     else:
-        # Все TP должны быть НИЖЕ entry_low (нижней границы зоны входа)
         if not (entry_low > tp1 >= tp2 >= tp3):
-            tp2 = entry_low - risk * 2.5
-            tp3 = entry_low - risk * 4.0
-            tp1 = entry_low - risk * 1.2
+            tp1 = entry_mid - risk * 1.2
+            tp2 = entry_mid - risk * 2.5
+            tp3 = entry_mid - risk * 4.0
 
     rr = abs(tp2 - entry_mid) / risk if risk > 0 else 0.0
-    if rr < cfg.MIN_RR:
-        return None
+    # Фильтр RR применяется единожды в build_smc_signal, не здесь
 
     risk_pct = abs(sl - entry_mid) / entry_mid * 100
     return {
@@ -223,11 +263,11 @@ def _trend_sentence(structure: dict, tf_htf: str) -> str:
     choch = structure.get("choch", {})
     if choch.get("detected") and choch["direction"] == "UP":
         return (f"На {tf_htf} зафиксирована смена характера движения вверх (CHoCH) "
-                f"на уровне {choch['price']:.4g} — первый признак смены тренда "
+                f"на уровне {_fp(choch['price'])} — первый признак смены тренда "
                 f"в пользу покупателей.")
     if choch.get("detected") and choch["direction"] == "DOWN":
         return (f"На {tf_htf} зафиксирована смена характера движения вниз (CHoCH) "
-                f"на уровне {choch['price']:.4g}.")
+                f"на уровне {_fp(choch['price'])}.")
     if trend == "BULLISH":
         return (f"На {tf_htf} рынок находится в устойчивом восходящем тренде "
                 f"с чёткой HH/HL структурой.")
@@ -241,7 +281,7 @@ def _sweep_sentence(liquidity: dict, direction: str) -> str:
         sw = liquidity.get("sweep_up", {})
         if sw.get("swept"):
             lvl = sw.get("level", 0)
-            return (f"Перед этим цена сделала sweep ниже уровня {lvl:.4g}, "
+            return (f"Перед этим цена сделала sweep ниже уровня {_fp(lvl)}, "
                     f"сняв ликвидность продавцов и stop-loss'ы лонгов, после чего "
                     f"резко отбила вверх — классический манипуляционный сбор "
                     f"ликвидности перед институциональным входом.")
@@ -249,13 +289,13 @@ def _sweep_sentence(liquidity: dict, direction: str) -> str:
         sw = liquidity.get("sweep_down", {})
         if sw.get("swept"):
             lvl = sw.get("level", 0)
-            return (f"Цена совершила sweep выше {lvl:.4g}, собрала ликвидность "
+            return (f"Цена совершила sweep выше {_fp(lvl)}, собрала ликвидность "
                     f"покупателей (equal highs) и резко развернулась — типичная "
                     f"ловушка для розничных лонгов.")
     bos_price = liquidity.get("sweep_up", {}).get("level", 0) or \
                 liquidity.get("sweep_down", {}).get("level", 0)
     if bos_price:
-        return f"Пробой структуры (BOS) на уровне {bos_price:.4g} подтвердил намерение рынка."
+        return f"Пробой структуры (BOS) на уровне {_fp(bos_price)} подтвердил намерение рынка."
     return "Явного sweep ликвидности на данном таймфрейме не зафиксировано."
 
 
@@ -270,12 +310,12 @@ def _ob_sentence(ob_data: dict, direction: str, tf_mtf: str) -> str:
         prev = "бычий" if "bullish" in ob_type else "медвежий"
         new  = "медвежий" if direction == "LONG" else "бычий"
         return (f"Бывший {prev} OB пробит и стал Breaker Block'ом "
-                f"{lo:.4g}–{hi:.4g} — теперь работает как {new} уровень.")
+                f"{_fp(lo)}–{_fp(hi)} — теперь работает как {new} уровень.")
     if direction == "LONG":
-        return (f"Цена вернулась в бычий ордер-блок {lo:.4g}–{hi:.4g} на {tf_mtf} "
+        return (f"Цена вернулась в бычий ордер-блок {_fp(lo)}–{_fp(hi)} на {tf_mtf} "
                 f"— зону, где институционалы формировали позицию перед последним "
                 f"бычьим импульсом с BOS.")
-    return (f"Цена поднялась в медвежий ордер-блок {lo:.4g}–{hi:.4g} на {tf_mtf} "
+    return (f"Цена поднялась в медвежий ордер-блок {_fp(lo)}–{_fp(hi)} на {tf_mtf} "
             f"— зону предложения, откуда начался последний медвежий импульс.")
 
 
@@ -287,10 +327,10 @@ def _fvg_sentence(fvg: dict, direction: str) -> str:
     inv      = obj.get("inversed", False)
     if inv:
         role = "поддержки" if direction == "LONG" else "сопротивления"
-        return (f"Перевёрнутый FVG {lo:.4g}–{hi:.4g} выступает как усиленный "
+        return (f"Перевёрнутый FVG {_fp(lo)}–{_fp(hi)} выступает как усиленный "
                 f"уровень {role} после смены роли.")
     ftype = "bullish" if direction == "LONG" else "bearish"
-    return (f"Внутри зоны присутствует {ftype} FVG {lo:.4g}–{hi:.4g} "
+    return (f"Внутри зоны присутствует {ftype} FVG {_fp(lo)}–{_fp(hi)} "
             f"— дисбаланс, который рынок стремится заполнить, добавляя "
             f"магнетизм к точке входа.")
 
@@ -299,27 +339,27 @@ def _sl_sentence(levels: dict, direction: str, buf_pct: float) -> str:
     sl = levels["sl"]
     if direction == "LONG":
         return (f"Стоп размещён под нижним экстремумом OB с буфером {buf_pct}% "
-                f"на уровне {sl:.4g} — ниже этого уровня бычий контекст теряется.")
+                f"на уровне {_fp(sl)} — ниже этого уровня бычий контекст теряется.")
     return (f"Стоп размещён над верхним экстремумом OB с буфером {buf_pct}% "
-            f"на уровне {sl:.4g} — выше этого уровня медвежий контекст нарушен.")
+            f"на уровне {_fp(sl)} — выше этого уровня медвежий контекст нарушен.")
 
 
 def _tp_sentence(levels: dict, direction: str, fvg: dict) -> str:
     tp1, tp3 = levels["tp1"], levels["tp3"]
     fvg_obj  = fvg.get("bull_fvg") if direction == "LONG" else fvg.get("bear_fvg")
-    tp1_desc = f"закрытие FVG ({tp1:.4g})" if fvg_obj else f"структурный уровень ({tp1:.4g})"
+    tp1_desc = f"закрытие FVG ({_fp(tp1)})" if fvg_obj else f"структурный уровень ({_fp(tp1)})"
     pct3 = abs(tp3 - levels["entry_mid"]) / levels["entry_mid"] * 100
     return (f"Первая цель — {tp1_desc}, "
-            f"финальная цель — следующая зона ликвидности {tp3:.4g} "
+            f"финальная цель — следующая зона ликвидности {_fp(tp3)} "
             f"(+{pct3:.1f}%).")
 
 
 def _invalidation_sentence(levels: dict, direction: str, tf_ltf: str) -> str:
     sl = levels["sl"]
     if direction == "LONG":
-        return (f"Сетап теряет силу, если {tf_ltf}-свеча закроется ниже {sl:.4g} "
+        return (f"Сетап теряет силу, если {tf_ltf}-свеча закроется ниже {_fp(sl)} "
                 f"— это полная митигация OB и потеря бычьей структуры.")
-    return (f"Сетап теряет силу, если {tf_ltf}-свеча закроется выше {sl:.4g} "
+    return (f"Сетап теряет силу, если {tf_ltf}-свеча закроется выше {_fp(sl)} "
             f"— медвежья структура будет нарушена.")
 
 
@@ -377,11 +417,30 @@ def build_smc_signal(symbol: str, analysis: dict, cfg,
         )
         grade = GRADES.get(score, f"⚡ {score}/5")
 
+        # ── Взвешенный R:R фильтр ─────────────────────────────────────────
+        rr_val  = levels["rr"]
+        min_rr  = getattr(cfg, "MIN_RR", 0.8)
+        if rr_val < min_rr:
+            continue  # ниже пользовательского минимума
+        adjusted_score = score
+        if rr_val < max(min_rr, 1.2):
+            adjusted_score = max(0, score - 1)  # низкий R:R снижает оценку
+
+        # ── Мемкоин: максимум 3 подтверждения ────────────────────────────
+        _MEMCOIN_KW = ("FLOKI","PEPE","SHIB","DOGE","WIF","BONK","NEIRO",
+                       "MEME","SATS","TURBO","CATS","ACT","BOME","BOOK")
+        _sym_up    = symbol.upper()
+        is_memcoin = any(k in _sym_up for k in _MEMCOIN_KW)
+        if is_memcoin:
+            adjusted_score = min(adjusted_score, 3)
+
+        final_grade = GRADES.get(adjusted_score, f"⚡ {adjusted_score}/5")
+
         sig = SMCSignalResult(
             symbol        = symbol,
             direction     = direction,
-            score         = score,
-            grade         = grade,
+            score         = adjusted_score,
+            grade         = final_grade,
             entry_low     = levels["entry_low"],
             entry_high    = levels["entry_high"],
             entry         = levels["entry_mid"],

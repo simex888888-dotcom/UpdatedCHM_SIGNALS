@@ -17,31 +17,99 @@
 import os
 
 
+def _is_writable(path: str) -> bool:
+    """Проверяет, можно ли создать файл в директории."""
+    probe = os.path.join(path, ".chm_write_probe")
+    try:
+        with open(probe, "w") as _f:
+            _f.write("")
+        os.remove(probe)
+        return True
+    except OSError:
+        return False
+
+
+def _find_data_dir() -> str:
+    for candidate in ("/data", "/app/data", "/persistent"):
+        if os.path.isdir(candidate) and _is_writable(candidate):
+            return candidate
+    # Создаём /app/data если /app существует
+    app_data = "/app/data"
+    if os.path.isdir("/app"):
+        try:
+            os.makedirs(app_data, exist_ok=True)
+            if _is_writable(app_data):
+                return app_data
+        except OSError:
+            pass
+    # Последний вариант — рядом со скриптом
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 class Config:
 
     # ════════════════════════════════════════════════
     #  🔑 TELEGRAM
     # ════════════════════════════════════════════════
 
-    TELEGRAM_TOKEN = ("8363325324:AAFAG26xReNSE-ZEwoBGaLdrNb9Rqtl8l1k")
-
+    TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 
     # Твой Telegram ID — станешь администратором
     # Узнать: написать @userinfobot
-    ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "445677777,705020259,7107654772").split(",")]
-
+    # Переопределить: ADMIN_IDS=123456789,987654321
+    _admin_ids_raw = os.getenv("ADMIN_IDS", "445677777,705020259")
+    ADMIN_IDS = [int(x.strip()) for x in _admin_ids_raw.split(",")]
     # ════════════════════════════════════════════════
     #  🗄  SQLITE — путь к БД (persistent volume)
     # ════════════════════════════════════════════════
 
-    # Для сохранения данных после редеплоя:
-    # Docker: монтировать /data как volume, задать DB_PATH=/data/chm_bot.db
-    # По умолчанию — рядом со скриптом (не зависит от рабочей директории)
-    DB_PATH = os.getenv(
-        "DB_PATH",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "chm_bot.db"),
-    )
+    # ─────────────────────────────────────────────────────────────────────
+    # ПОСТОЯННАЯ БАЗА ДАННЫХ
+    # ─────────────────────────────────────────────────────────────────────
+    # Приоритет:
+    #   1. Переменная окружения DB_PATH    (рекомендуется для любого хостинга)
+    #   2. /data/chm_bot.db               (если /data смонтирован как volume)
+    #   3. <папка_со_скриптом>/chm_bot.db (иначе — рабочая директория)
+    #
+    # ВПС / Docker:
+    #   docker-compose up --build
+    #   → volume ./data:/data в docker-compose.yml, БД не теряется.
+    #
+    # bothost.ru / managed-хостинги:
+    #   Задайте переменную окружения DB_PATH в настройках хостинга.
+    #   Значение = путь к постоянному диску хостинга, например:
+    #     DB_PATH=/persistent/chm_bot.db
+    #   Если хостинг сохраняет рабочую директорию между перезапусками
+    #   (но не между редеплоями) — DB_PATH=/app/chm_bot.db.
+    # ─────────────────────────────────────────────────────────────────────
+    _default_db = os.path.join(_find_data_dir(), "chm_bot.db")
+    DB_PATH = os.getenv("DB_PATH", _default_db)
 
+    # Если DB_PATH задан через env — убедимся что его родительская папка существует
+    if "DB_PATH" in os.environ:
+        _db_dir = os.path.dirname(os.path.abspath(DB_PATH))
+        if not os.path.isdir(_db_dir):
+            os.makedirs(_db_dir, exist_ok=True)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TURSO — облачный SQLite (опционально, для bothost.ru и др. хостингов)
+    # ─────────────────────────────────────────────────────────────────────
+    # При редеплое обычный SQLite теряется т.к. контейнер пересоздаётся.
+    # Turso решает это: БД хранится в облаке, при каждом старте бот
+    # скачивает актуальную версию, при остановке — загружает обратно.
+    #
+    # Как настроить (бесплатно, занимает 5 минут):
+    #   1. Зайти на turso.tech, войти через GitHub
+    #   2. Dashboard → Databases → Create Database → выбрать регион
+    #   3. После создания: Generate Token → скопировать токен
+    #   4. В bothost.ru → Settings → Variables добавить:
+    #        TURSO_URL   = libsql://your-db-name-username.turso.io
+    #        TURSO_TOKEN = eyJ...токен из шага 3...
+    #   5. Перезапустить бота — он установит libsql-experimental и синхронизируется
+    #
+    # Установить зависимость: pip install libsql-experimental
+    # Если переменные не заданы — модуль молча отключается.
+    # ─────────────────────────────────────────────────────────────────────
 
     # ════════════════════════════════════════════════
     #  ⚙️  ПРОИЗВОДИТЕЛЬНОСТЬ
@@ -86,15 +154,9 @@ class Config:
     PAYMENT_ADDRESS = "0xb5116aa7d7a20d7c45a8a5ff10bc1d86437df985"
     PAYMENT_NETWORK = "BEP20 (BSC)"
 
-    # Только БОТ
-    BOT_PRICE_30    = "70$"
-    BOT_PRICE_90    = "150$"
-    BOT_PRICE_365   = "330$"
-
-    # БОТ + ИНДИКАТОР на TradingView
-    FULL_PRICE_30   = "90$"
-    FULL_PRICE_90   = "230$"
-    FULL_PRICE_365  = "630$"
+    # Тарифы подписки
+    BOT_PRICE_90    = "290$"
+    BOT_PRICE_365   = "990$"
 
     # Контакт администратора
     ADMIN_CONTACT   = "@crypto_chm"
@@ -111,6 +173,24 @@ class Config:
     ]
     COINS_CACHE_HOURS = 6
 
+    # ════════════════════════════════════════════════
+    #  🎲 POLYMARKET
+    # ════════════════════════════════════════════════
+    #
+    # Просмотр маркетов и AI-анализ — бесплатно, ключи не нужны.
+    # Для торговли нужен Polygon-кошелёк с USDC и ключи Polymarket:
+    #   1. Создать кошелёк Polygon (MetaMask и др.)
+    #   2. Пополнить USDC на Polygon сети
+    #   3. Зайти на polymarket.com → Account → Export API Key
+    #   4. Прописать переменные окружения ниже
+    #
+    # Внимание: торговля доступна только ADMIN_IDS (единый кошелёк бота)
+    # ─────────────────────────────────────────────────────────────────────
+    POLY_PRIVATE_KEY    = os.getenv("POLY_PRIVATE_KEY", "")      # 0x...
+    POLY_FUNDER_ADDRESS = os.getenv("POLY_FUNDER_ADDRESS", "")   # 0x...
+    POLY_API_KEY        = os.getenv("POLY_API_KEY", "")
+    POLY_API_SECRET     = os.getenv("POLY_API_SECRET", "")
+    POLY_API_PASSPHRASE = os.getenv("POLY_API_PASSPHRASE", "")
 
     # ════════════════════════════════════════════════
     #  📋 ДЕФОЛТНЫЕ НАСТРОЙКИ НОВОГО ПОЛЬЗОВАТЕЛЯ

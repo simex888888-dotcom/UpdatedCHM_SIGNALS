@@ -74,11 +74,18 @@ class TradeCfg:
 
     def merged_with(self, override: "TradeCfg") -> "TradeCfg":
         """Применяем override поверх self (только непустые значения)."""
+        import math
+        def _differs(a, b) -> bool:
+            """Сравнивает значения с учётом float-точности."""
+            if isinstance(a, float) and isinstance(b, float):
+                return not math.isclose(a, b, rel_tol=1e-6, abs_tol=1e-9)
+            return a != b
+
         base  = asdict(self)
         odict = asdict(override)
         defs  = asdict(TradeCfg())          # дефолтные значения
         # берём из override только то что отличается от дефолта
-        merged = {k: (odict[k] if odict[k] != defs[k] else base[k]) for k in base}
+        merged = {k: (odict[k] if _differs(odict[k], defs[k]) else base[k]) for k in base}
         return TradeCfg(**merged)
 
 
@@ -90,16 +97,16 @@ class SMCUserCfg:
     tf_key:           str   = "1H"        # "15m" | "1H" | "4H" — основной таймфрейм
     scan_interval:    int   = 900         # интервал сканирования (сек)
     direction:        str   = "BOTH"      # "LONG" | "SHORT" | "BOTH"
-    min_confirmations: int  = 3           # мин. подтверждений из 5 для сигнала
-    min_rr:           float = 2.0         # мин. R:R
+    min_confirmations: int  = 2           # мин. подтверждений из 5 для сигнала (было 3)
+    min_rr:           float = 1.5         # мин. R:R (было 2.0)
     sl_buffer_pct:    float = 0.15        # буфер SL от экстремума OB (%)
     min_volume_usdt:  float = 5_000_000   # мин. объём монеты ($)
     # ── Фильтры структуры ──────────────────────────
     fvg_enabled:      bool  = True        # учитывать FVG в подтверждениях
     choch_enabled:    bool  = True        # учитывать CHoCH
     ob_use_breaker:   bool  = True        # Breaker Blocks
-    ob_max_age:       int   = 50          # макс. возраст OB в свечах
-    sweep_close_req:  bool  = True        # liquidity sweep — требуется закрытие за уровнем
+    ob_max_age:       int   = 80          # макс. возраст OB в свечах (было 50)
+    sweep_close_req:  bool  = False       # liquidity sweep — не требуем закрытия (было True)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
@@ -178,6 +185,9 @@ class UserSettings:
     smc_long_active:  bool  = False   # SMC лонг сканер
     smc_short_active: bool  = False   # SMC шорт сканер
 
+    # ── Стратегия Герчика ─────────────────────────
+    gerchik_active:   bool  = False   # Герчик сканер включён
+
     # JSON-строки с независимыми настройками
     long_cfg:         str   = "{}"
     short_cfg:        str   = "{}"
@@ -186,6 +196,9 @@ class UserSettings:
     signals_received:     int   = 0
     trial_reminder_sent:  bool  = False
     expired_notified:     bool  = False
+
+    # ── Фильтр монеты (пустая строка = все монеты) ────
+    watch_coin:           str   = ""   # например "BTC-USDT-SWAP"
 
     # ── Стратегия сканера ─────────────────────────
     strategy:             str   = "LEVELS"   # "LEVELS" | "SMC"
@@ -305,12 +318,15 @@ def _from_db(row: dict) -> UserSettings:
         "active", "trial_used", "use_rsi", "use_volume",
         "use_pattern", "use_htf", "notify_signal", "notify_breakout",
         "long_active", "short_active", "smc_long_active", "smc_short_active",
-        "trend_only", "trial_reminder_sent", "expired_notified",
+        "gerchik_active", "trend_only", "trial_reminder_sent", "expired_notified",
         "auto_trade",
     }
     for f in fields(u):
         if f.name in row and row[f.name] is not None:
             v = row[f.name]
+            # Нормализуем strategy: пустая строка или неизвестное значение → "LEVELS"
+            if f.name == "strategy" and v not in ("LEVELS", "SMC", "GERCHIK"):
+                v = "LEVELS"
             setattr(u, f.name, bool(v) if f.name in bool_fields else v)
     return u
 
@@ -344,6 +360,16 @@ class UserManager:
     async def all_users(self) -> list[UserSettings]:
         rows = await db.db_get_all_users()
         return [_from_db(r) for r in rows]
+
+    async def get_active_auto_trade_users(self) -> list[UserSettings]:
+        """Пользователи у которых включён авто-трейдинг и есть API-ключи."""
+        rows = await db.db_get_active_users()
+        result = []
+        for r in rows:
+            u = _from_db(r)
+            if getattr(u, "auto_trade", False) and getattr(u, "bybit_api_key", ""):
+                result.append(u)
+        return result
 
     async def stats_summary(self) -> dict:
         return await db.db_stats_summary()

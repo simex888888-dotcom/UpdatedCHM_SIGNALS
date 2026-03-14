@@ -19,7 +19,10 @@ def _check(v: bool) -> str:
     return "✅" if v else "❌"
 
 def _mark(current, val) -> str:
-    return "◉ " if current == val else "○ "
+    try:
+        return "◉ " if round(float(current), 6) == round(float(val), 6) else "○ "
+    except (TypeError, ValueError):
+        return "◉ " if current == val else "○ "
 
 
 # ── Тренд ────────────────────────────────────────────
@@ -66,55 +69,136 @@ def kb_auto_trade(user: UserSettings) -> InlineKeyboardMarkup:
           for r in [0.5, 1.0, 1.5, 2.0, 3.0, 5.0]],
         _noop("── Плечо ───────────────────────────────────────────"),
         *[_btn(("◉ " if lev == l else "○ ") + f"x{l}", f"set_at_lev_{l}")
-          for l in [5, 10, 15, 20]],
-        _noop("── Лимит открытых сделок (за 24ч) ─────────────────"),
+          for l in [3, 5, 10, 15, 20, 25, 50]],
+        _noop("── Лимит открытых сделок ───────────────────────────"),
         *[_btn(("◉ " if max_tr == n else "○ ") + f"{n} сделок", f"set_at_maxtr_{n}")
-          for n in [1, 2, 3, 5, 10]],
+          for n in [1, 2, 3, 5, 10, 15, 20, 30, 50]],
+        _btn(f"✏️ Своё значение (сейчас: {max_tr})", "set_at_maxtr_custom"),
         _noop("── API ключи ────────────────────────────────────────"),
         _btn(key_label,              "setup_bybit_api"),
         _btn("🧪 Проверить соединение", "test_bybit_api") if has_key else _noop("── Введи ключи для проверки ──"),
         _btn("🗑 Удалить ключи",      "remove_bybit_api") if has_key else _noop("──────────────────────────────────"),
+        *([_noop("── Управление позициями ────────────────────────────"),
+           _btn("📊 Мои позиции / ордера / статистика 24ч", "bybit_pos")]
+          if has_key else []),
         _back(),
+    ])
+
+
+# ── Панель управления позициями Bybit ────────────────
+
+def kb_bybit_dashboard(positions: list, orders: list) -> InlineKeyboardMarkup:
+    """Клавиатура панели позиций: обновить, закрыть/отменить по позиции, назад."""
+    rows = [
+        _btn("🔄 Обновить", "bybit_pos"),
+    ]
+    # Кнопки для каждой позиции
+    for pos in positions:
+        sym     = pos.get("symbol", "")
+        side    = pos.get("side", "")
+        pos_idx = int(pos.get("positionIdx", 0))
+        dir_label = "LONG" if side == "Buy" else "SHORT"
+        rows.append([
+            InlineKeyboardButton(text=f"❌ Закрыть {sym}",   callback_data=f"bybit_pos_close_{sym}_{pos_idx}"),
+            InlineKeyboardButton(text=f"🗑 Ордера {sym}", callback_data=f"bybit_ord_cancel_all_{sym}_{pos_idx}"),
+        ])
+    # Кнопки отмены отдельных ордеров (первые 6)
+    shown_orders = orders[:6]
+    for order in shown_orders:
+        order_id = order.get("orderId", "")
+        sym      = order.get("symbol", "")
+        price    = order.get("price", "?")
+        side_o   = order.get("side", "")
+        reduce   = " TP" if order.get("reduceOnly") else ""
+        rows.append(_btn(
+            f"✖ {sym} {side_o} @{price}{reduce}",
+            f"bybit_ord_cancel_{order_id}",
+        ))
+    rows.append(_btn("⚙️ Настройки авто-трейдинга", "auto_trade_menu"))
+    rows.append(_back())
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def kb_close_confirm(symbol: str, pos_idx: int) -> InlineKeyboardMarkup:
+    """Подтверждение закрытия позиции маркет-ордером."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="✅ Да, закрыть по рынку",
+                callback_data=f"bybit_pos_close_ok_{symbol}_{pos_idx}",
+            ),
+            InlineKeyboardButton(text="❌ Отмена", callback_data="bybit_pos"),
+        ]
     ])
 
 
 # ── ГЛАВНОЕ МЕНЮ ─────────────────────────────────────
 
+def _watch_coin_label(user) -> str:
+    wc = getattr(user, "watch_coin", "").strip()
+    if wc:
+        base = wc.replace("-USDT-SWAP", "").replace("-USDT", "")
+        return f"🎯 Монета: {base} — сменить / сбросить"
+    return "🎯 Мониторить одну монету — все / выбрать"
+
+
+
 def kb_main(user: UserSettings) -> InlineKeyboardMarkup:
     strategy = getattr(user, "strategy", "LEVELS")
+    # ── GERCHIK ──
+    if strategy == "GERCHIK":
+        g_s = "🟢" if getattr(user, "gerchik_active", False) else "⚫"
+        return InlineKeyboardMarkup(inline_keyboard=[
+            _btn(g_s + " ⚡ Герчик — запустить / остановить сканер", "gerchik_menu"),
+            _btn("🎯 Стратегия: 🎯 Герчик — сменить", "show_strategy"),
+            [InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
+             InlineKeyboardButton(text="📈 График",         callback_data="my_chart")],
+            _btn(_watch_coin_label(user), "watch_coin_menu"),
+            _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
+            [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
+             InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
+            _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
+            [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
+             InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
+        ])
+    # ── SMC ──
     if strategy == "SMC":
         long_s  = "🟢" if getattr(user, "smc_long_active",  False) else "⚫"
         short_s = "🟢" if getattr(user, "smc_short_active", False) else "⚫"
-        both_s  = "🟢" if (user.active and user.scan_mode == "smc_both") else "⚫"
+        both_s  = "🟢" if (getattr(user, "smc_long_active", False) and getattr(user, "smc_short_active", False)) else "⚫"
         return InlineKeyboardMarkup(inline_keyboard=[
-            _btn(long_s  + " 📈 SMC ЛОНГ — только лонговые сигналы",          "mode_smc_long"),
-            _btn(short_s + " 📉 SMC ШОРТ — только шортовые сигналы",          "mode_smc_short"),
-            _btn(both_s  + " ⚡ SMC ОБА — все SMC сигналы",                    "mode_smc_both"),
-            _btn("🎯 Стратегия: 🧠 SMC — сменить",                             "show_strategy"),
-            [
-                InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
-                InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
-            ],
-            _btn("🔍 Анализ монеты — разовый сигнал по запросу",               "analyze_coin"),
-            _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",             "auto_trade_menu"),
-            _btn("❓ Справка — что делает каждая кнопка",                       "help_show"),
+            [InlineKeyboardButton(text=long_s  + " 📈 SMC ЛОНГ", callback_data="mode_smc_long"),
+             InlineKeyboardButton(text=short_s + " 📉 SMC ШОРТ", callback_data="mode_smc_short")],
+            _btn(both_s + " ⚡ SMC ОБА — все SMC сигналы", "mode_smc_both"),
+            _btn("🎯 Стратегия: 🧠 SMC — сменить", "show_strategy"),
+            [InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
+             InlineKeyboardButton(text="📈 График",         callback_data="my_chart")],
+            _btn(_watch_coin_label(user), "watch_coin_menu"),
+            _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
+            [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
+             InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
+            _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
+            [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
+             InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
         ])
     # ── LEVELS (default) ──
     long_s  = "🟢" if user.long_active  else "⚫"
     short_s = "🟢" if user.short_active else "⚫"
     both_s  = "🟢" if (user.active and user.scan_mode == "both") else "⚫"
     return InlineKeyboardMarkup(inline_keyboard=[
-        _btn(long_s  + " 📈 ЛОНГ сканер  — только сигналы в лонг",  "mode_long"),
-        _btn(short_s + " 📉 ШОРТ сканер  — только сигналы в шорт",  "mode_short"),
-        _btn(both_s  + " ⚡ ОБА — лонги и шорты одновременно",       "mode_both"),
-        _btn("🎯 Стратегия: 📊 Уровни — сменить",                    "show_strategy"),
-        [
-            InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
-            InlineKeyboardButton(text="📈 График",          callback_data="my_chart"),
-        ],
+        [InlineKeyboardButton(text=long_s  + " 📈 ЛОНГ", callback_data="mode_long"),
+         InlineKeyboardButton(text=short_s + " 📉 ШОРТ", callback_data="mode_short")],
+        _btn(both_s + " ⚡ ОБА — лонги и шорты одновременно", "mode_both"),
+        _btn("🎯 Стратегия: 📊 Уровни — сменить", "show_strategy"),
+        [InlineKeyboardButton(text="📊 Моя статистика", callback_data="my_stats"),
+         InlineKeyboardButton(text="📈 График",         callback_data="my_chart")],
+        _btn(_watch_coin_label(user), "watch_coin_menu"),
         _btn("🔍 Анализ монеты — разовый сигнал по запросу", "analyze_coin"),
-        _btn(_auto_trade_label(user) + " Авто-трейдинг Bybit",  "auto_trade_menu"),
-        _btn("❓ Справка — что делает каждая кнопка", "help_show"),
+        [InlineKeyboardButton(text=_auto_trade_label(user) + " Авто-трейдинг", callback_data="auto_trade_menu"),
+         InlineKeyboardButton(text="🎰 Памп/Дамп",                             callback_data="pd_menu")],
+        _btn("🎲 Polymarket — prediction market / AI ставки", "pm:menu"),
+        [InlineKeyboardButton(text="👥 Рефералы", callback_data="my_referral"),
+         InlineKeyboardButton(text="❓ Справка",   callback_data="help_show")],
     ])
 
 
@@ -218,6 +302,7 @@ def _settings_menu(prefix: str, back_cb: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         _noop("── Сигналы ──────────────────"),
         _btn("📐 Пивоты и уровни S/R",          "menu_" + p + "pivots"),
+        _btn("📉 EMA (трендовые линии)",         "menu_" + p + "ema"),
         _btn("🔬 Фильтры (RSI / Объём / HTF)",  "menu_" + p + "filters"),
         _btn("⭐ Качество сигнала",               "menu_" + p + "quality"),
         _btn("🔁 Cooldown между сигналами",       "menu_" + p + "cooldown"),
@@ -227,7 +312,7 @@ def _settings_menu(prefix: str, back_cb: str) -> InlineKeyboardMarkup:
         _noop("── Монеты ──────────────────"),
         _btn("💰 Фильтр монет по объёму",         "menu_" + p + "volume"),
         _noop("── Уведомления ─────────────"),
-        _btn("📱 Уведомления",                    "menu_notify"),
+        _btn("📱 Уведомления",                    "menu_notify" + ("_" + p.rstrip("_") if p else "")),
         _back(back_cb),
     ])
 
@@ -442,33 +527,29 @@ def kb_short_volume(user: UserSettings) -> InlineKeyboardMarkup: return _volume_
 
 # ── УВЕДОМЛЕНИЯ ──────────────────────────────────────
 
-def kb_notify(user: UserSettings) -> InlineKeyboardMarkup:
+def kb_notify(user: UserSettings, back_cb: str = "menu_settings") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         _noop("── Типы уведомлений ──────────────────────────────"),
         _btn(_check(user.notify_signal)   + " Сигнал входа",        "toggle_notify_signal"),
-        _btn(_check(user.notify_breakout) + " Пробой уровня (ранний)","toggle_notify_breakout"),
-        _back("menu_settings"),
+        _btn(_check(user.notify_breakout) + " Пробой уровня (ранний)", "toggle_notify_breakout"),
+        _back(back_cb),
     ])
 
 
 # ── ПОДПИСКА — ВЫБОР ТАРИФА ───────────────────────────
 
 def kb_subscribe(config=None) -> InlineKeyboardMarkup:
-    """Меню выбора тарифа при старте — без триала."""
+    """Меню выбора тарифа при старте."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        _noop("── 🤖 Только БОТ ───────────────────────────"),
-        _btn("📅 1 месяц  — 70$",  "plan_bot_30"),
-        _btn("📅 3 месяца — 150$", "plan_bot_90"),
-        _btn("📅 1 ГОД    — 330$", "plan_bot_365"),
-        _noop("── 🤖+📊 БОТ + ИНДИКАТОР TradingView ────────"),
-        _btn("📅 1 месяц  — 90$",  "plan_full_30"),
-        _btn("📅 3 месяца — 230$", "plan_full_90"),
-        _btn("📅 1 ГОД    — 630$", "plan_full_365"),
+        _noop("── 🤖 CHM BREAKER BOT ──────────────────────"),
+        _btn("📅 3 месяца — 290$", "plan_bot_90"),
+        _btn("📅 1 ГОД    — 990$", "plan_bot_365"),
         _noop("── 🎁 Специальные предложения ─────────────────"),
         [InlineKeyboardButton(
             text="💎 Бот + Лаба — написать @crypto_chm",
             url="https://t.me/crypto_chm"
         )],
+        _btn("🎟 Ввести промокод (тестовый доступ)", "enter_promo"),
     ])
 
 
@@ -637,7 +718,7 @@ def kb_smc_mode_short(user: UserSettings) -> InlineKeyboardMarkup:
 
 def kb_smc_mode_both(user: UserSettings) -> InlineKeyboardMarkup:
     cfg    = user.get_smc_cfg()
-    active = user.active and user.scan_mode == "smc_both"
+    active = getattr(user, "smc_long_active", False) and getattr(user, "smc_short_active", False)
     status = "🟢 SMC ОБА ВКЛЮЧЁН — нажми чтобы остановить" if active \
            else "🔴 SMC ОБА ВЫКЛЮЧЕН — нажми чтобы запустить"
     tf_label = {"15m":"15 мин","1H":"1 час ⭐","4H":"4 часа"}.get(cfg.tf_key, cfg.tf_key)
@@ -650,47 +731,233 @@ def kb_smc_mode_both(user: UserSettings) -> InlineKeyboardMarkup:
     ])
 
 
+# ── ГЕРЧИК ────────────────────────────────────────────
+
+def kb_gerchik_menu(user: UserSettings) -> InlineKeyboardMarkup:
+    """Меню стратегии Герчика."""
+    active   = getattr(user, "gerchik_active", False)
+    status   = "🟢 СКАНЕР ВКЛ — нажми чтобы остановить" if active \
+             else "🔴 СКАНЕР ВЫКЛ — нажми чтобы запустить"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        _noop("── 🎯 Стратегия Герчика ──────────────────────────"),
+        _noop("  Уровневая торговля: БСУ → БПУ-1 → БПУ-2"),
+        _noop("  Price Action + объём. Без индикаторов."),
+        _btn(status, "toggle_gerchik"),
+        _noop("── Параметры ──────────────────────────────────────"),
+        _btn("📊 Таймфрейм: 1D (поиск уровней)",       "noop"),
+        _btn("🔄 Интервал сканирования: 30 минут",       "noop"),
+        _btn("⭐ Мин. сила уровня: 2+ балла",            "noop"),
+        _btn("📐 Мин. R:R: 1:3  |  Риск: 1%",           "noop"),
+        _btn("🎯 TP1: 3R (55%)  |  TP2: 4R (45%)",      "noop"),
+        _noop("──────────────────────────────────────────────────"),
+        _btn("❓ Как работает стратегия — подробнее",    "help_gerchik"),
+        _back(),
+    ])
+
+
 # ── СПРАВКА ───────────────────────────────────────────
+
+def gerchik_help_text() -> str:
+    """Страница 1 из 2 — уровни, сила уровня, паттерн входа."""
+    return (
+        "🎯 <b>СТРАТЕГИЯ ГЕРЧИКА — ЧАСТЬ 1 из 2</b>\n\n"
+
+        "━━ <b>ЧТО ЭТО ТАКОЕ</b> ━━━━━━━━━━━━━━━━━━━━\n"
+        "Метод уровневой торговли Александра Герчика.\n"
+        "Суть: покупать у уровня поддержки, продавать у уровня сопротивления.\n"
+        "Не используются индикаторы — только структура цены и объём.\n\n"
+
+        "━━ <b>ЧТО ТАКОЕ УРОВЕНЬ</b> ━━━━━━━━━━━━━━━━\n"
+        "Уровень — ценовая зона, в которой рынок разворачивался минимум два раза.\n"
+        "Бот ищет такие зоны на дневных свечах (таймфрейм 1 день).\n\n"
+        "📌 <b>Уровень поддержки</b> — зона снизу, от которой цена отскакивала вверх.\n"
+        "   Покупатели перевешивают продавцов. Ищем вход в покупку.\n\n"
+        "📌 <b>Уровень сопротивления</b> — зона сверху, от которой цена отскакивала вниз.\n"
+        "   Продавцы перевешивают покупателей. Ищем вход в продажу.\n\n"
+        "📌 <b>Зеркальный уровень</b> — бывшая поддержка после пробоя становится\n"
+        "   сопротивлением, и наоборот. Такие уровни особенно надёжны.\n\n"
+
+        "━━ <b>СИЛА УРОВНЯ (от 1 до 6 звёзд)</b> ━━━\n"
+        "  +1 ⭐ — уровень подтверждён касанием цены\n"
+        "  +1 ⭐ — уровень зеркальный\n"
+        "  +1 ⭐ — отскок произошёл с повышенным объёмом торгов\n"
+        "  +1 ⭐ — уровень совпадает с дневным или недельным экстремумом\n"
+        "  +1 ⭐ — несколько тестов без пробоя (чем больше, тем лучше)\n"
+        "  +1 ⭐ — подтверждение на старшем таймфрейме (неделя или месяц)\n\n"
+        "Бот отправляет сигналы только по уровням с силой <b>2 звезды и выше</b>.\n\n"
+
+        "━━ <b>ПАТТЕРН ВХОДА: БСУ → БПУ-1 → БПУ-2</b> ━━\n\n"
+        "Трёхшаговая последовательность свечей у уровня:\n\n"
+        "🕯 <b>Бар Силы Уровня (БСУ)</b>\n"
+        "   Свеча, которая <i>создала</i> уровень. Цена пришла к зоне и ушла\n"
+        "   от неё с силой — тело свечи закрылось далеко от уровня.\n"
+        "   Эта свеча показала рынку, что здесь есть сильный интерес.\n\n"
+        "🕯 <b>Первый Бар Подтверждения Уровня (БПУ-1)</b>\n"
+        "   Цена вернулась к уровню первый раз и снова отскочила.\n"
+        "   Это значит — уровень живой, его продолжают защищать.\n\n"
+        "🕯 <b>Второй Бар Подтверждения Уровня (БПУ-2) — это ВХОД</b>\n"
+        "   Цена возвращается второй раз. Уровень снова держит.\n"
+        "   Два отскока — это уже не случайность. Уровень доказал силу.\n"
+        "   ✅ Покупка: БПУ-2 у поддержки.\n"
+        "   ✅ Продажа: БПУ-2 у сопротивления."
+    )
+
+
+def gerchik_help_text_p2() -> str:
+    """Страница 2 из 2 — фильтры, стоп, цели, сканер, пример."""
+    return (
+        "🎯 <b>СТРАТЕГИЯ ГЕРЧИКА — ЧАСТЬ 2 из 2</b>\n\n"
+
+        "━━ <b>ФИЛЬТР ДНЕВНОГО ДИАПАЗОНА</b> ━━━━━━━━\n"
+        "Бот НЕ входит в сделку, если за текущий торговый день цена уже\n"
+        "прошла 75% и более от своего среднего дневного диапазона.\n"
+        "Среднедневной диапазон вычисляется автоматически по последним 14 дням.\n\n"
+        "Почему это важно: если большая часть дневного движения позади,\n"
+        "входить поздно. Риск разворота к концу дня слишком высок.\n\n"
+
+        "━━ <b>КУДА СТАВИТСЯ СТОП-ЛОСС</b> ━━━━━━━━━\n"
+        "Стоп размещается <b>за уровнем</b>, от которого произошёл вход:\n"
+        "  • Покупка: стоп ниже уровня поддержки.\n"
+        "  • Продажа: стоп выше уровня сопротивления.\n"
+        "Добавляется небольшой буфер — чтобы кратковременный прокол\n"
+        "уровня (рыночный шум) не выбивал позицию преждевременно.\n\n"
+
+        "━━ <b>ЦЕЛИ ВЫХОДА</b> ━━━━━━━━━━━━━━━━━━━━━\n"
+        "Позиция делится на две части:\n\n"
+        "🎯 <b>Первая цель — 3 размера риска (3R), 55% позиции</b>\n"
+        "   Если риск 100 долларов — первая цель даёт 300 долларов.\n\n"
+        "🏆 <b>Вторая цель — 4 размера риска (4R), 45% позиции</b>\n"
+        "   Если риск 100 долларов — вторая цель даёт 400 долларов.\n\n"
+        "Если от точки входа до ближайшего противоположного уровня\n"
+        "не хватает хотя бы 3R — бот сигнал не отправит.\n\n"
+
+        "━━ <b>ПЕРЕНОС СТОПА В БЕЗУБЫТОК</b> ━━━━━━━\n"
+        "Когда цена достигает первой цели (3R), стоп переносится на\n"
+        "цену входа. Если цена развернётся — сделка закроется в нуле.\n"
+        "Оставшиеся 45% позиции идут к второй цели <b>без риска</b>.\n\n"
+
+        "━━ <b>КАК РАБОТАЕТ СКАНЕР</b> ━━━━━━━━━━━━━\n"
+        "• Сканирование каждые <b>30 минут</b>, таймфрейм — <b>1 день</b>.\n"
+        "• Все монеты с оборотом от <b>5 миллионов долларов</b> в сутки.\n"
+        "• Повтор по одной монете — не раньше чем через 4 часа.\n"
+        "• Если задан мониторинг одной монеты — сканируется только она.\n\n"
+
+        "━━ <b>ПРИМЕР СИГНАЛА</b> ━━━━━━━━━━━━━━━━━━\n"
+        "🟢 <b>ЛОНГ — ГЕРЧИК</b>\n"
+        "💎 <b>BTC</b>  📈  ПОДДЕРЖКА  ⭐⭐⭐\n"
+        "💰 Вход:   65 400 $\n"
+        "🛑 Стоп:   64 200 $  (-1.84%)\n"
+        "🎯 Цель 1: 69 000 $  (+5.50%  55% позиции)\n"
+        "🏆 Цель 2: 70 200 $  (+7.34%  45% позиции)\n"
+        "📐 Соотношение прибыль/риск = 1:3  |  После Цели 1 — стоп в ноль"
+    )
+
 
 def help_text() -> str:
     return (
         "❓ <b>СПРАВКА — CHM BREAKER BOT</b>\n\n"
-        "── <b>Режимы сканера</b> ──\n"
-        "📈 <b>ЛОНГ</b> — поиск только лонговых сигналов\n"
-        "📉 <b>ШОРТ</b> — поиск только шортовых сигналов\n"
-        "⚡ <b>ОБА</b> — лонги + шорты с общими настройками\n\n"
-        "── <b>Основные настройки</b> ──\n"
-        "📊 <b>Таймфрейм</b> — период свечей (1m/5m/15m/1h/4h/1d)\n"
-        "🔄 <b>Интервал</b> — как часто проверять рынок\n\n"
-        "── <b>Сигналы</b> ──\n"
-        "📐 <b>Пивоты</b> — чувствительность поиска уровней S/R\n"
-        "📉 <b>EMA тренд</b> — быстрая/медленная EMA для тренда\n"
-        "🔬 <b>Фильтры</b> — RSI, объём, паттерны, HTF, тренд-сигналы\n"
-        "⭐ <b>Качество</b> — минимальный порог звёзд (1–5) для сигнала\n"
-        "🔁 <b>Cooldown</b> — пауза между сигналами по одной монете\n\n"
-        "── <b>Риск-менеджмент</b> ──\n"
-        "🛡 <b>Стоп-лосс</b> — множитель ATR для стопа\n"
-        "🎯 <b>Цели (TP)</b> — R:R для TP1/TP2/TP3\n\n"
-        "── <b>Монеты</b> ──\n"
-        "💰 <b>Объём монет</b> — мин. суточный объём монеты в $\n\n"
-        "── <b>Под сигналом</b> ──\n"
+
+        "━━ <b>ГЛАВНЫЕ КНОПКИ</b> ━━━━━━━━━━━━━━━━━━\n"
+        "📈 <b>ЛОНГ / 📉 ШОРТ</b> — раздельные настройки для каждого направления.\n"
+        "   Используй если нужны разные параметры на лонг и шорт.\n"
+        "⚡ <b>ОБА</b> — единые настройки сразу для лонга и шорта (рекомендуется).\n"
+        "🎯 <b>Стратегия</b> — три варианта на выбор:\n"
+        "   📊 Уровни — классический Price Action.\n"
+        "   🧠 SMC — институциональный анализ.\n"
+        "   🎯 Герчик — паттерн у уровня (❓ — в меню Герчика).\n\n"
+
+        "━━ <b>НАСТРОЙКИ — РЕКОМЕНДАЦИИ</b> ━━━━━━\n"
+        "📊 <b>Таймфрейм</b> — период свечей для поиска сигналов.\n"
+        "   ⭐ Оптимально: <b>1H</b> — лучший баланс частоты и качества.\n"
+        "   Скальп: 5m–15m. Позиционная торговля: 4H–1D.\n\n"
+        "🔄 <b>Интервал</b> — частота проверки рынка ботом.\n"
+        "   ⭐ Рекомендуется: <b>1 час</b> (соответствует таймфрейму 1H).\n\n"
+        "📐 <b>Пивоты</b> — ширина «окна» для поиска уровней поддержки/сопротивления.\n"
+        "   ⭐ Рекомендуется: <b>7</b>. Больше = сильнее уровни, меньше сигналов.\n\n"
+        "📉 <b>EMA тренд</b> — пара EMA для определения направления тренда.\n"
+        "   ⭐ Рекомендуется: быстрая <b>50</b>, медленная <b>200</b>.\n\n"
+
+        "━━ <b>ФИЛЬТРЫ</b> ━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "📊 <b>RSI OB/OS</b> — блокирует вход при перекупе и перепроданности.\n"
+        "   ⭐ Рекомендуется: OB = <b>65</b>, OS = <b>35</b>.\n"
+        "   Строже: OB=60/OS=40 — меньше сигналов, но чище.\n\n"
+        "📦 <b>Объём ×</b> — вход только при объёме выше среднего.\n"
+        "   ⭐ Рекомендуется: <b>×1.2</b>. При ×1.5+ — только сильные движения.\n\n"
+        "🕯 <b>Паттерны</b> — пин-бары и поглощения как доп. подтверждение (+1⭐).\n"
+        "🌐 <b>HTF тренд</b> — 1D тренд должен совпадать с направлением (+1⭐).\n"
+        "➡️ <b>Только по тренду</b> — убирает контртрендовые входы.\n\n"
+
+        "━━ <b>КАЧЕСТВО СИГНАЛА ⭐</b> ━━━━━━━━━━━\n"
+        "Минимальный порог для отправки сигнала (1–6):\n"
+        "  +2 базовые ⭐ за любой сигнал\n"
+        "  +1 ⭐ объём выше нормы\n"
+        "  +1 ⭐ направление по тренду EMA\n"
+        "  +1 ⭐ паттерн свечи (пин-бар / поглощение)\n"
+        "  +1 ⭐ совпадение с HTF (1D) трендом\n"
+        "   ⭐ Рекомендуется порог: <b>3⭐</b>.\n"
+        "   4–5⭐ — только топовые сигналы (меньше, но надёжнее).\n\n"
+
+        "━━ <b>СТОП-ЛОСС и ЦЕЛИ</b> ━━━━━━━━━━━━━\n"
+        "🛡 <b>ATR множитель</b> — стоп ставится за уровень + N × ATR (волатильность).\n"
+        "   ⭐ Рекомендуется: <b>×1.5</b> — стоп за структуру, вне рыночного шума.\n"
+        "   ×1.0 — ближе к цене (риск выбивания шумом).\n"
+        "   ×2.0 — очень широко (для высоковолатильных монет).\n\n"
+        "🎯 <b>Цели R:R</b> — соотношение прибыль/риск для каждой цели.\n"
+        "   ⭐ Рекомендуется: TP1 = <b>2R</b>, TP2 = <b>3R</b>, TP3 = <b>4.5R</b>.\n\n"
+
+        "━━ <b>АВТО-ТРЕЙДИНГ (Bybit)</b> ━━━━━━━━━\n"
+        "💹 <b>Вкл/Выкл</b> — включает автоматическое открытие сделок на Bybit.\n"
+        "👆 <b>С подтверждением</b> — бот присылает сигнал с кнопкой «Открыть сделку».\n"
+        "🤖 <b>Авто-вход</b> — открывает позицию сразу, без нажатий.\n"
+        "💰 <b>Риск</b>: ⭐ <b>1–2%</b> от депозита — безопасно. 3–5% — агрессивно.\n"
+        "📊 <b>Плечо</b>: ⭐ <b>5–10x</b> — оптимально. 20x+ — для опытных.\n"
+        "🔢 <b>Лимит сделок</b>: ⭐ <b>3–5</b> одновременно.\n\n"
+        "♻️ <b>3 тейка + Безубыток</b>:\n"
+        "   Позиция делится на 3 части: TP1/TP2/TP3 по 1/3 каждый.\n"
+        "   После достижения TP1 стоп <b>автоматически</b> переносится на вход.\n"
+        "   Дальнейший риск по позиции = 0.\n\n"
+
+        "━━ <b>МОНИТОРИНГ МОНЕТЫ</b> ━━━━━━━━━━━━\n"
+        "🎯 <b>Мониторить монету</b> — сигналы только по одной выбранной паре.\n\n"
+
+        "━━ <b>ПОД КАЖДЫМ СИГНАЛОМ</b> ━━━━━━━━━\n"
         "📈 <b>График</b> — открыть монету на TradingView\n"
-        "📊 <b>Статистика</b> — показать кривую доходности\n"
-        "📋 <b>Результат</b> — записать итог сделки (TP1/TP2/TP3/SL/Пропустил)\n\n"
-        "── <b>Качество ⭐ (из чего складывается)</b> ──\n"
-        "Базовые 2 звезды за любой сигнал\n"
-        "+1 за объём выше нормы (VOL × множитель)\n"
-        "+1 за сигнал ПО тренду EMA\n"
-        "+1 за паттерн свечи (пин-бар / поглощение)\n"
-        "+1 за подтверждение HTF тренда (если HTF включён)\n\n"
-        "── <b>Фильтры подробнее</b> ──\n"
-        "✅ <b>RSI</b> — блокирует вход при перекупленности/перепроданности\n"
-        "✅ <b>Объём</b> — требует повышенного объёма для входа\n"
-        "✅ <b>Паттерны</b> — пин-бары и поглощения как подтверждение\n"
-        "✅ <b>HTF тренд</b> — старший ТФ (1D) должен совпадать по тренду, даёт +1 звезду\n"
-        "✅ <b>Тренд-сигналы</b> — показывать только сигналы ПО тренду (без контр-трендов)\n"
+        "📋 <b>Результат</b> — записать итог (TP1/TP2/TP3/SL/Пропустил)\n"
+        "📊 <b>Статистика</b> — кривая доходности по всем записанным сделкам\n\n"
+
+        "━━ <b>🎲 POLYMARKET</b> ━━━━━━━━━━━━━━━━\n"
+        "Prediction market — ставки на реальные события (политика, крипто, спорт).\n"
+        "Команда: /poly  |  Кнопка в главном меню: 🎲 Polymarket\n\n"
+        "🔥 <b>Трендовые маркеты</b> — топ-10 по объёму торгов с пагинацией.\n"
+        "🔍 <b>Поиск</b> — найти маркет по ключевому слову (bitcoin, trump, election...).\n"
+        "📊 <b>Карточка маркета</b>:\n"
+        "   YES/NO цены, ликвидность, объём 24ч, дата закрытия.\n"
+        "🤖 <b>AI-анализ (Groq llama-3.3-70b)</b>:\n"
+        "   Рекомендация: BUY YES / BUY NO / SKIP\n"
+        "   Уверенность, риск, edge и объяснение на русском.\n"
+        "   При недоступности Groq — автоматически rule-based анализ.\n"
+        "💼 <b>Мои ставки</b> — история последних 10 ставок.\n"
+        "⚙️ <b>Размер ставки</b> — настройка суммы по умолчанию ($1–$25).\n\n"
+        "⚠️ <b>Торговля</b> (BUY YES/BUY NO) — только для администраторов.\n"
+        "   Требует POLY_PRIVATE_KEY + USDC на Polygon в .env\n"
     )
 
 
 def kb_help() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[_back()])
+
+
+def kb_gerchik_help_p1() -> InlineKeyboardMarkup:
+    """Клавиатура для страницы 1 справки Герчика."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="▶️ Часть 2: фильтры, стоп, цели, пример →", callback_data="help_gerchik_p2")],
+        [InlineKeyboardButton(text="◀️ Назад к сканеру", callback_data="gerchik_menu")],
+    ])
+
+
+def kb_gerchik_help_p2() -> InlineKeyboardMarkup:
+    """Клавиатура для страницы 2 справки Герчика."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Часть 1: уровни, паттерн входа", callback_data="help_gerchik")],
+        [InlineKeyboardButton(text="◀️ Назад к сканеру", callback_data="gerchik_menu")],
+    ])
