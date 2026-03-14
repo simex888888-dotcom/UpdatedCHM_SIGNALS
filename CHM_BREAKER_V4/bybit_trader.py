@@ -191,7 +191,7 @@ def _get_balance_sync(api_key: str, api_secret: str) -> float:
 
 async def get_balance(api_key: str, api_secret: str) -> float:
     """Асинхронная обёртка для получения баланса."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None, _get_balance_sync, api_key, api_secret
     )
@@ -406,7 +406,7 @@ async def place_trade(
     Возвращает {"ok": True, "order_id": ..., "qty": ..., ...}
               или {"ok": False, "error": "..."}
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
         _place_trade_sync,
