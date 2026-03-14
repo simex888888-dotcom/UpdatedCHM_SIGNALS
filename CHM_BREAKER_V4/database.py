@@ -22,7 +22,15 @@ def _request_turso_push():
         pass
 
 _db_path: str = "chm_bot.db"
-_lock = asyncio.Lock()   # SQLite не любит параллельные записи
+_lock: Optional[asyncio.Lock] = None   # инициализируется в init_db внутри event loop
+
+
+def _get_lock() -> asyncio.Lock:
+    """Возвращает write-lock, создавая его при первом вызове внутри event loop."""
+    global _lock
+    if _lock is None:
+        _lock = asyncio.Lock()
+    return _lock
 
 # ─── Шифрование Bybit API-ключей (Fernet AES-128-CBC + HMAC) ──────────────
 # Устанавливает переменная окружения BYBIT_FERNET_KEY.
@@ -77,11 +85,6 @@ def _decrypt_key(stored: str) -> str:
 
 
 SCHEMA = """
-PRAGMA journal_mode=WAL;
-PRAGMA synchronous=NORMAL;
-PRAGMA cache_size=10000;
-PRAGMA temp_store=MEMORY;
-
 CREATE TABLE IF NOT EXISTS users (
     user_id          INTEGER PRIMARY KEY,
     username         TEXT    DEFAULT '',
@@ -352,10 +355,22 @@ CREATE TABLE IF NOT EXISTS poly_digest_log (
 
 
 async def init_db(path: str):
-    global _db_path
+    global _db_path, _lock
     _db_path = path
+    _lock = asyncio.Lock()   # создаём lock внутри запущенного event loop
     _init_fernet()  # инициализируем шифрование ключей один раз при старте
     async with aiosqlite.connect(_db_path) as db:
+        # PRAGMAs должны устанавливаться через execute(), а не executescript()
+        # WAL может не работать на Docker overlay/NFS — добавляем fallback
+        try:
+            await db.execute("PRAGMA journal_mode=WAL")
+        except Exception as e:
+            log.warning("WAL mode unavailable (%s), using DELETE journal mode", e)
+            await db.execute("PRAGMA journal_mode=DELETE")
+        await db.execute("PRAGMA synchronous=NORMAL")
+        await db.execute("PRAGMA cache_size=10000")
+        await db.execute("PRAGMA temp_store=MEMORY")
+        await db.execute("PRAGMA mmap_size=0")   # отключаем mmap — безопаснее в контейнерах
         await db.executescript(SCHEMA)
         # Миграция: добавляем новые колонки если их нет (для существующих БД)
         migrations = [
@@ -457,7 +472,7 @@ async def db_is_trial_used(user_id: int) -> bool:
 
 async def db_mark_trial_used(user_id: int):
     """Помечает пользователя как использовавшего пробный период."""
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "INSERT OR IGNORE INTO trial_ids (user_id, used_at) VALUES (?, ?)",
@@ -519,7 +534,7 @@ async def db_upsert_user(data: dict):
         f"INSERT INTO users ({col_names}) VALUES ({placeholders}) "
         f"ON CONFLICT(user_id) DO UPDATE SET {updates}"
     )
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(sql, vals)
             await db.commit()
@@ -581,7 +596,7 @@ async def db_add_trade(data: dict):
     placeholders = ", ".join("?" * len(vals))
     col_names    = ", ".join(cols)
     sql = f"INSERT OR IGNORE INTO trades ({col_names}) VALUES ({placeholders})"
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(sql, vals)
             await db.commit()
@@ -596,7 +611,7 @@ async def db_get_trade(trade_id: str) -> Optional[dict]:
 
 
 async def db_set_trade_result(trade_id: str, result: str, result_rr: float) -> Optional[dict]:
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "UPDATE trades SET result=?, result_rr=? WHERE trade_id=?",
@@ -643,7 +658,7 @@ async def db_get_all_open_trades(user_id: int) -> list[dict]:
 
 async def db_update_trade_pos_idx(trade_id: str, pos_idx: int):
     """Обновляет pos_idx сделки после подтверждения открытия на бирже."""
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "UPDATE trades SET pos_idx=? WHERE trade_id=?",
@@ -654,7 +669,7 @@ async def db_update_trade_pos_idx(trade_id: str, pos_idx: int):
 
 async def db_update_trade_bybit(trade_id: str, order_id: str, pos_idx: int):
     """Сохраняет order_id и pos_idx после успешного открытия позиции на Bybit."""
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "UPDATE trades SET order_id=?, pos_idx=? WHERE trade_id=?",
@@ -665,7 +680,7 @@ async def db_update_trade_bybit(trade_id: str, order_id: str, pos_idx: int):
 
 async def db_set_trade_be(trade_id: str):
     """Помечает что безубыток по сделке уже выставлен."""
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "UPDATE trades SET be_set=1 WHERE trade_id=?", (trade_id,)
@@ -882,7 +897,7 @@ async def update_signal_tp(signal_id, *, tp1=None, tp2=None, tp3=None):
         return
     set_clause = ", ".join(f"{k}=?" for k in updates)
     vals = list(updates.values()) + [str(signal_id)]
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(f"UPDATE trades SET {set_clause} WHERE trade_id=?", vals)
             await db.commit()
@@ -904,7 +919,7 @@ async def db_pd_get_user(user_id: int) -> Optional[dict]:
 
 async def db_pd_upsert_user(user_id: int, subscribed: bool = None, threshold: int = None):
     from pump_dump.pd_config import DEFAULT_USER_THRESHOLD
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "INSERT INTO pd_users(user_id, pd_threshold) VALUES(?,?) ON CONFLICT(user_id) DO NOTHING",
@@ -938,7 +953,7 @@ async def db_pd_save_signal(
     symbol: str, direction: str, score: float,
     layers_json: str, features_json: str, price: float
 ) -> int:
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             cur = await db.execute(
                 "INSERT INTO pd_signals(symbol,direction,score,layers_json,features_json,price_signal,ts)"
@@ -953,7 +968,7 @@ async def db_pd_save_outcome(
     signal_id: int, price_signal: float,
     price_15m: float, change_pct: float, correct: bool
 ):
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "INSERT INTO pd_outcomes(signal_id,price_signal,price_15m,change_pct,correct,ts)"
@@ -964,7 +979,7 @@ async def db_pd_save_outcome(
 
 
 async def db_pd_save_train(signal_id: int, label: int):
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             # Берём features из pd_signals
             async with db.execute(
@@ -1049,7 +1064,7 @@ async def db_pd_recent_signals(limit: int = 10) -> list[dict]:
 
 async def poly_watchlist_add(user_id: int, market_id: str, question: str):
     """Добавляет маркет в список наблюдения. Дублирование игнорируется."""
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "INSERT OR IGNORE INTO poly_watchlist(user_id, market_id, question, added_at)"
@@ -1061,7 +1076,7 @@ async def poly_watchlist_add(user_id: int, market_id: str, question: str):
 
 async def poly_watchlist_remove(user_id: int, market_id: str):
     """Удаляет маркет из списка наблюдения."""
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "DELETE FROM poly_watchlist WHERE user_id=? AND market_id=?",
@@ -1099,7 +1114,7 @@ async def poly_watchlist_has(user_id: int, market_id: str) -> bool:
 
 async def db_promo_create(code: str, created_by: int, duration_hours: int = 2):
     code = code.strip().upper()
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "INSERT OR REPLACE INTO promo_codes(code, created_by, created_at, duration_hours)"
@@ -1112,7 +1127,7 @@ async def db_promo_create(code: str, created_by: int, duration_hours: int = 2):
 async def db_promo_delete(code: str) -> bool:
     """Удаляет промокод. Возвращает True если он существовал."""
     code = code.strip().upper()
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             cur = await db.execute(
                 "DELETE FROM promo_codes WHERE code=?", (code,)
@@ -1138,7 +1153,7 @@ async def db_promo_validate_and_use(user_id: int, code: str) -> tuple:
     Возвращает (success: bool, message: str, duration_hours: int).
     """
     code = code.strip().upper()
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             # Код существует?
             async with db.execute(
@@ -1172,7 +1187,7 @@ async def db_ref_set(referred_id: int, referrer_id: int) -> bool:
     Записывает реферала. Возвращает True если запись новая
     (чтобы не перезаписывать, если пользователь уже был приглашён кем-то).
     """
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             async with db.execute(
                 "SELECT referred_id FROM referrals WHERE referred_id=?", (referred_id,)
@@ -1194,7 +1209,7 @@ async def db_ref_on_purchase(referred_id: int) -> Optional[tuple]:
     Помечает реферал как конвертированный.
     Возвращает (referrer_id, total_conversions) или None если реферала нет.
     """
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             async with db.execute(
                 "SELECT referrer_id, converted FROM referrals WHERE referred_id=?",
@@ -1223,7 +1238,7 @@ async def db_ref_check_and_claim_reward(referrer_id: int) -> bool:
     Проверяет, положена ли реферу награда (каждые 5 конверсий = +30 дней).
     Если да — записывает награду и возвращает True.
     """
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             async with db.execute(
                 "SELECT COUNT(*) FROM referrals WHERE referrer_id=? AND converted=1",
@@ -1305,7 +1320,7 @@ async def poly_get_settings(user_id: int) -> dict:
 
 
 async def poly_save_settings(user_id: int, default_bet: float):
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "INSERT INTO poly_settings(user_id, default_bet, created_at) VALUES(?,?,?) "
@@ -1317,7 +1332,7 @@ async def poly_save_settings(user_id: int, default_bet: float):
 
 async def poly_save_digest(user_id: int, digest_on: int):
     """Сохраняет настройку дайджеста (0 или 1)."""
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "INSERT INTO poly_settings(user_id, default_bet, digest_on, created_at) VALUES(?,5.0,?,?) "
@@ -1331,7 +1346,7 @@ async def poly_save_bet(
     user_id: int, market_id: str, question: str, side: str,
     amount: float, shares: float, price: float, order_id: str,
 ) -> int:
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             cur = await db.execute(
                 "INSERT INTO poly_bets"
@@ -1371,7 +1386,7 @@ async def poly_wallet_get(user_id: int) -> Optional[dict]:
 
 async def poly_wallet_create(user_id: int, address: str, encrypted_key: str):
     """Сохраняет новый кошелёк пользователя."""
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "INSERT OR IGNORE INTO poly_wallets(user_id, address, encrypted_key, created_at)"
@@ -1388,7 +1403,7 @@ async def poly_wallet_restore(user_id: int, address: str, encrypted_key: str):
     Используется для восстановления из Turso после редеплоя.
     В отличие от poly_wallet_create, перезаписывает существующую запись.
     """
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "INSERT OR REPLACE INTO poly_wallets(user_id, address, encrypted_key, created_at)"
@@ -1408,7 +1423,7 @@ async def poly_alert_add(
     yes_price: float, threshold: float,
 ) -> int:
     """Создаёт ценовой алерт. Возвращает id."""
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             cur = await db.execute(
                 "INSERT INTO poly_alerts(user_id, market_id, question, yes_price, threshold, created_at)"
@@ -1433,7 +1448,7 @@ async def poly_alert_get_user(user_id: int) -> list[dict]:
 
 async def poly_alert_delete(alert_id: int):
     """Деактивирует алерт."""
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "UPDATE poly_alerts SET active=0 WHERE id=?", (alert_id,)
@@ -1467,7 +1482,7 @@ async def poly_digest_sent_today(user_id: int, date: str) -> bool:
 
 async def poly_digest_mark_sent(user_id: int, date: str):
     """Помечает дайджест как отправленный."""
-    async with _lock:
+    async with _get_lock():
         async with aiosqlite.connect(_db_path) as db:
             await db.execute(
                 "INSERT OR IGNORE INTO poly_digest_log(user_id, date) VALUES(?,?)",
