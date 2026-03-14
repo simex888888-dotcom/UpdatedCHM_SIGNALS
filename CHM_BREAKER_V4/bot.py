@@ -157,14 +157,27 @@ async def main():
     dp.callback_query.middleware(_throttle)
 
     # ─── Глобальный обработчик необработанных исключений ─────────────────────
+    # Некоторые исключения Telegram — штатные ситуации, не требующие алерта.
+    _IGNORABLE_ERRORS = (
+        "query is too old",           # callback_query протух (>2с без ответа)
+        "message is not modified",    # попытка отредактировать без изменений
+        "message to delete not found", # сообщение уже удалено
+        "bot was blocked by the user", # пользователь заблокировал бота
+    )
+
     @dp.errors()
     async def global_error_handler(event: ErrorEvent) -> bool:
+        err_str = str(event.exception).lower()
+        # Штатные ошибки Telegram — логируем на INFO, не шлём алерт
+        if any(pattern in err_str for pattern in _IGNORABLE_ERRORS):
+            log.info("Ожидаемая ошибка Telegram (игнорируем): %s", event.exception)
+            return True
+        # Настоящие критические ошибки
         log.critical(
             "Необработанное исключение в хендлере: %s",
             event.exception,
             exc_info=event.exception,
         )
-        # Уведомляем администраторов о критической ошибке
         short = str(event.exception)[:200]
         for admin_id in config.ADMIN_IDS:
             with contextlib.suppress(Exception):
