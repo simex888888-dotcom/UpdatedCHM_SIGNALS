@@ -91,11 +91,9 @@ def find_liquidity_sweeps(df: pd.DataFrame,
                           close_required: bool = True,
                           wick_ratio: float = 0.6) -> dict:
     """Полный поиск ликвидности: Equal H/L + Sweep detection."""
-    # Тегируем типы
-    for sh in swing_highs:
-        sh["type"] = "high"
-    for sl in swing_lows:
-        sl["type"] = "low"
+    # Тегируем типы (копии, чтобы не мутировать входные данные)
+    swing_highs = [{**sh, "type": "high"} for sh in swing_highs]
+    swing_lows  = [{**sl, "type": "low"}  for sl in swing_lows]
 
     eq_highs = find_equal_levels(swing_highs, threshold_pct)
     eq_lows  = find_equal_levels(swing_lows,  threshold_pct)

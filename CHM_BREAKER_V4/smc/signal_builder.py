@@ -242,6 +242,8 @@ def calculate_levels(analysis: dict, direction: str, cfg) -> Optional[dict]:
     rr = abs(tp2 - entry_mid) / risk if risk > 0 else 0.0
     # Фильтр RR применяется единожды в build_smc_signal, не здесь
 
+    if entry_mid <= 0:
+        return None
     risk_pct = abs(sl - entry_mid) / entry_mid * 100
     return {
         "entry_low":  entry_low,

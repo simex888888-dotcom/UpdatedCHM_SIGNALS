@@ -157,7 +157,8 @@ def get_order_blocks(df: pd.DataFrame,
                      mitigated_invalid: bool = True,
                      use_breaker_blocks: bool = True) -> dict:
     """Полный анализ OB для обоих направлений."""
-    bull_ob = bear_ob = dict(_EMPTY_OB)
+    bull_ob = dict(_EMPTY_OB)
+    bear_ob = dict(_EMPTY_OB)
 
     if bos["detected"]:
         # Ищем оба OB относительно уровня BOS:

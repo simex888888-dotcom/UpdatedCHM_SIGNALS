@@ -13,7 +13,6 @@ import matplotlib.pyplot as plt
 from aiogram.types import BufferedInputFile
 import asyncio
 import logging
-import time
 from dataclasses import fields
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
@@ -3245,8 +3244,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     @dp.callback_query(F.data == "toggle_notify")
     async def toggle_notify(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
-        user.notifications_enabled = not user.notifications_enabled
-        await cb.answer("🔔 Уведомления " + ("✅" if user.notifications_enabled else "❌"))
+        user.notify_signal = not user.notify_signal
+        await cb.answer("🔔 Уведомления " + ("✅" if user.notify_signal else "❌"))
         await um.save(user)
         await safe_edit(cb, "🔔 <b>Уведомления</b>", kb_notify(user))
 
@@ -3447,20 +3446,20 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def sig_records(cb: CallbackQuery):
         user = await um.get_or_create(cb.from_user.id)
         await cb.answer()
-        parts = cb.data.split("_")
-        signal_id = int(parts[2]) if len(parts) > 2 else 0
+        signal_id = cb.data.replace("sig_records_", "")
         records = await db.get_signal_records(signal_id)
         kb = trade_records_keyboard(signal_id, records)
         lines = ["📋 <b>Результаты сигнала</b>"]
         for r in records:
-            em = "✅" if r.get("result") == "win" else "❌" if r.get("result") == "loss" else "⏳"
-            lines.append(em + " " + str(r.get("result", "—")) + " " + str(r.get("rr", "")))
+            res = r.get("result", "")
+            em = "✅" if res in ("TP1", "TP2", "TP3") else "❌" if res == "SL" else "⏳"
+            lines.append(em + " " + str(res or "—") + " " + str(r.get("result_rr", "")))
         await safe_edit(cb, "\n".join(lines) or "Нет записей", kb)
 
     @dp.callback_query(F.data.startswith("sig_back_"))
     async def sig_back(cb: CallbackQuery):
         await cb.answer()
-        signal_id = int(cb.data.replace("sig_back_", ""))
+        signal_id = cb.data.replace("sig_back_", "")
         signal = await db.get_signal(signal_id)
         if not signal:
             await cb.message.answer("Сигнал не найден"); return
@@ -4081,7 +4080,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
     async def toggle_active_legacy(cb: CallbackQuery):
         """Legacy toggle для старых кнопок без режима."""
         user = await um.get_or_create(cb.from_user.id)
-        if not user.has_access():
+        has, _ = user.check_access()
+        if not has:
             await cb.answer("❌ Нет доступа", show_alert=True); return
         user.active = not user.active
         await cb.answer("⚡ " + ("✅ Включён" if user.active else "❌ Выключен"))
