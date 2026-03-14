@@ -270,8 +270,8 @@ def _place_trade_sync(
         qty_raw  = MIN_NOTIONAL / entry
         notional = MIN_NOTIONAL
 
-    # Получаем реальный шаг лота с Bybit и округляем
-    qty_step = _get_qty_step(session, bb_symbol)
+    # Получаем реальный шаг лота и тик-сайз с Bybit и округляем
+    qty_step, tick_size = _get_instrument_filters(session, bb_symbol)
     qty_str  = _round_qty(qty_raw, qty_step)
     if float(qty_str) <= 0:
         return {
@@ -304,6 +304,8 @@ def _place_trade_sync(
     # Пробуем One-Way, при ошибке режима — переключаемся на Hedge.
     hedge_idx = 1 if side == "Buy" else 2
 
+    sl_str = _round_price(sl, tick_size)
+
     def _do_place(position_idx: int) -> dict:
         return session.place_order(
             category="linear",
@@ -311,7 +313,7 @@ def _place_trade_sync(
             side=side,
             orderType="Market",
             qty=qty_str,
-            stopLoss=str(round(sl, 8)),
+            stopLoss=sl_str,
             slTriggerBy="MarkPrice",
             positionIdx=position_idx,
         )
@@ -359,7 +361,7 @@ def _place_trade_sync(
                         side        = close_side,
                         orderType   = "Limit",
                         qty         = qty_tp_str,
-                        price       = str(round(tp_price, 8)),
+                        price       = _round_price(tp_price, tick_size),
                         reduceOnly  = True,
                         timeInForce = "GTC",
                         positionIdx = final_pos_idx,
@@ -425,10 +427,11 @@ def _set_breakeven_sync(api_key: str, api_secret: str,
     session   = _get_session(api_key, api_secret)
     bb_symbol = _to_bybit_symbol(symbol)
     try:
+        _, tick_size = _get_instrument_filters(session, bb_symbol)
         resp = session.set_trading_stop(
             category    = "linear",
             symbol      = bb_symbol,
-            stopLoss    = str(round(entry, 8)),
+            stopLoss    = _round_price(entry, tick_size),
             slTriggerBy = "MarkPrice",
             positionIdx = pos_idx,
         )

@@ -324,6 +324,9 @@ def _from_db(row: dict) -> UserSettings:
     for f in fields(u):
         if f.name in row and row[f.name] is not None:
             v = row[f.name]
+            # Нормализуем strategy: пустая строка или неизвестное значение → "LEVELS"
+            if f.name == "strategy" and v not in ("LEVELS", "SMC", "GERCHIK"):
+                v = "LEVELS"
             setattr(u, f.name, bool(v) if f.name in bool_fields else v)
     return u
 
