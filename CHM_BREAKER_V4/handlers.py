@@ -26,7 +26,7 @@ import turso_sync as _turso
 from user_manager import UserManager, UserSettings, TradeCfg, SMCUserCfg
 from keyboards import (
     kb_main, kb_back, kb_back_photo, kb_settings, kb_notify, kb_subscribe,
-    kb_contact_admin,
+    kb_contact_admin, kb_reply_main,
     kb_mode_long, kb_mode_short, kb_mode_both,
     kb_long_timeframes, kb_short_timeframes, kb_timeframes,
     kb_long_intervals, kb_short_intervals, kb_intervals,
@@ -176,11 +176,11 @@ def main_text(user: UserSettings, trend: dict) -> str:
         both_s  = "🟢 ОБА"  if (getattr(user, "smc_long_active", False) and getattr(user, "smc_short_active", False)) else "⚫ оба"
         cfg     = user.get_smc_cfg()
         return (
-            "⚡ <b>CHM BREAKER BOT — 🧠 Smart Money</b>" + NL + NL +
+            "⚡ <b>CHM BREAKER BOT</b>  ·  🧠 Smart Money Concepts" + NL + NL +
             trend_text(trend) + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
             long_s + "  |  " + short_s + "  |  " + both_s + NL +
-            "Таймфрейм: <b>" + cfg.tf_key + "</b>  Интервал: <b>" + str(cfg.scan_interval // 60) + " мин.</b>" + NL +
+            "📊 " + cfg.tf_key + "  ·  🔄 каждые " + str(cfg.scan_interval // 60) + " мин." + NL +
             sub_line + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
             "Выбери режим SMC сканера 👇"
@@ -188,24 +188,26 @@ def main_text(user: UserSettings, trend: dict) -> str:
     if strategy == "GERCHIK":
         active_s = "🟢 СКАНЕР ВКЛ" if getattr(user, "gerchik_active", False) else "🔴 выключен"
         return (
-            "⚡ <b>CHM BREAKER BOT — 🎯 Стратегия Герчика</b>" + NL + NL +
+            "⚡ <b>CHM BREAKER BOT</b>  ·  🎯 Стратегия Герчика" + NL + NL +
             trend_text(trend) + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
-            active_s + NL +
-            "Таймфрейм: <b>1D</b>  Интервал: <b>30 мин.</b>" + NL +
+            active_s + "  ·  📊 1D  ·  🔄 каждые 30 мин." + NL +
             sub_line + NL +
             "━━━━━━━━━━━━━━━━━━━━" + NL +
             "Сканер ищет уровни + паттерн БСУ→БПУ-1→БПУ-2 👇"
         )
     # ── LEVELS ──
-    long_s  = "🟢 ЛОНГ" if user.long_active  else "⚫ лонг выкл"
-    short_s = "🟢 ШОРТ" if user.short_active else "⚫ шорт выкл"
-    both_s  = "🟢 ОБА"  if (user.active and user.scan_mode == "both") else "⚫ оба выкл"
+    long_s  = "🟢 ЛОНГ" if user.long_active  else "⚫ лонг"
+    short_s = "🟢 ШОРТ" if user.short_active else "⚫ шорт"
+    both_s  = "🟢 ОБА"  if (user.active and user.scan_mode == "both") else "⚫ оба"
+    long_cfg  = user.get_long_cfg()
+    short_cfg = user.get_short_cfg()
     return (
-        "⚡ <b>CHM BREAKER BOT</b>" + NL + NL +
+        "⚡ <b>CHM BREAKER BOT</b>  ·  📊 Уровни (Price Action)" + NL + NL +
         trend_text(trend) + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
         long_s + "  |  " + short_s + "  |  " + both_s + NL +
+        "📊 " + long_cfg.timeframe + "  ·  🔄 каждые " + str(long_cfg.scan_interval // 60) + " мин." + NL +
         sub_line + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
         "Выбери режим сканера 👇"
@@ -1348,6 +1350,9 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                              reply_markup=_kb_strategy_select())
             return
         trend = scanner.get_trend()
+        # Устанавливаем постоянную нижнюю панель навигации
+        await msg.answer("⚡ <b>CHM BREAKER BOT</b> — панель управления:", parse_mode="HTML",
+                         reply_markup=kb_reply_main())
         await msg.answer(main_text(user, trend), parse_mode="HTML", reply_markup=kb_main(user))
 
     @dp.message(Command("menu"))
@@ -1358,6 +1363,8 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
             await msg.answer(pricing_text(config), parse_mode="HTML", reply_markup=kb_subscribe(config))
             return
         trend = scanner.get_trend()
+        await msg.answer("⚡ <b>CHM BREAKER BOT</b> — панель управления:", parse_mode="HTML",
+                         reply_markup=kb_reply_main())
         await msg.answer(main_text(user, trend), parse_mode="HTML", reply_markup=kb_main(user))
 
     @dp.message(Command("stop"))
@@ -1803,6 +1810,81 @@ def register_handlers(dp: Dispatcher, bot: Bot, um: UserManager, scanner, config
                     parse_mode="HTML",
                 )
 
+
+    # ─── REPLY KEYBOARD НАВИГАЦИЯ ─────────────────────
+
+    _REPLY_NAV = {"🏠 Меню", "📈 Лонг", "📉 Шорт", "⚡ Оба",
+                  "📊 Статистика", "🔍 Анализ", "❓ Справка"}
+
+    @dp.message(F.text.in_(_REPLY_NAV))
+    async def reply_nav(msg: Message, state: FSMContext):
+        user = await um.get_or_create(msg.from_user.id)
+        has, reason = user.check_access()
+        if not has:
+            await msg.answer(access_denied_text(reason), parse_mode="HTML",
+                             reply_markup=kb_subscribe(config))
+            return
+        btn = msg.text
+        trend = scanner.get_trend()
+        strategy = getattr(user, "strategy", "LEVELS")
+
+        if btn == "🏠 Меню":
+            await msg.answer(main_text(user, trend), parse_mode="HTML",
+                             reply_markup=kb_main(user))
+
+        elif btn == "📈 Лонг":
+            if strategy == "SMC":
+                await msg.answer(
+                    "🧠 <b>SMC ЛОНГ</b>\n\nНастройки и управление сканером:",
+                    parse_mode="HTML", reply_markup=kb_smc_mode_long(user))
+            else:
+                await msg.answer(
+                    cfg_text(user.get_long_cfg(), "📈 <b>ЛОНГ сканер</b>"),
+                    parse_mode="HTML", reply_markup=kb_mode_long(user))
+
+        elif btn == "📉 Шорт":
+            if strategy == "SMC":
+                await msg.answer(
+                    "🧠 <b>SMC ШОРТ</b>\n\nНастройки и управление сканером:",
+                    parse_mode="HTML", reply_markup=kb_smc_mode_short(user))
+            else:
+                await msg.answer(
+                    cfg_text(user.get_short_cfg(), "📉 <b>ШОРТ сканер</b>"),
+                    parse_mode="HTML", reply_markup=kb_mode_short(user))
+
+        elif btn == "⚡ Оба":
+            if strategy == "SMC":
+                await msg.answer(
+                    "🧠 <b>SMC — ОБА направления</b>\n\nНастройки и управление сканером:",
+                    parse_mode="HTML", reply_markup=kb_smc_mode_both(user))
+            else:
+                await msg.answer(
+                    settings_text(user), parse_mode="HTML",
+                    reply_markup=kb_mode_both(user))
+
+        elif btn == "📊 Статистика":
+            stats = await db.db_get_user_stats(user.user_id)
+            text  = stats_text(user, stats)
+            kb_stats = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📊 По стратегиям", callback_data="my_stats_strategy")],
+                [InlineKeyboardButton(text="◀️ Назад", callback_data="back_main")],
+            ])
+            await msg.answer(text, parse_mode="HTML", reply_markup=kb_stats)
+
+        elif btn == "🔍 Анализ":
+            await state.set_state(AnalyzeState.waiting_symbol)
+            await msg.answer(
+                "🔍 <b>Анализ монеты по запросу</b>\n\n"
+                "Введи тикер:\n"
+                "<code>BTC</code>  <code>ETH</code>  <code>SOL</code>  <code>PEPE</code>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="◀️ Отмена", callback_data="back_main")]
+                ]),
+            )
+
+        elif btn == "❓ Справка":
+            await msg.answer(help_text(), parse_mode="HTML", reply_markup=kb_help())
 
     # ─── НАВИГАЦИЯ ────────────────────────────────────
 
