@@ -381,6 +381,7 @@ async def init_db(path: str):
                 await db.execute("PRAGMA journal_mode=DELETE")
             except Exception:
                 pass
+        await db.execute("PRAGMA busy_timeout=5000")  # ждать 5с вместо мгновенного disk I/O error
         await db.execute("PRAGMA synchronous=NORMAL")
         await db.execute("PRAGMA cache_size=10000")
         await db.execute("PRAGMA temp_store=MEMORY")
