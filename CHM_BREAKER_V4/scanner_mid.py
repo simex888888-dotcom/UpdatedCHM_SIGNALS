@@ -206,20 +206,32 @@ def trade_records_keyboard(trade_id: str) -> InlineKeyboardMarkup:
 
 def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
     stars  = "⭐" * sig.quality + "☆" * (5 - sig.quality)
-    header = "🟢 <b>LONG СИГНАЛ</b>" if sig.direction == "LONG" else "🔴 <b>SHORT СИГНАЛ</b>"
-    emoji  = "📈" if sig.direction == "LONG" else "📉"
-    
+    is_long = sig.direction == "LONG"
+    header  = "🟢 <b>LONG СИГНАЛ</b>" if is_long else "🔴 <b>SHORT СИГНАЛ</b>"
+    dir_em  = "📈" if is_long else "📉"
+    # Чистый тикер без суффикса для заголовка
+    clean_sym = sig.symbol.replace("-USDT-SWAP", "").replace("-USDT", "")
+    # Класс уровня
+    cls_map = {1: "🏆 Абсолютный", 2: "💪 Сильный", 3: "📌 Рабочий"}
+    cls_str = cls_map.get(getattr(sig, "level_class", 0), "")
+    cls_part = "  ·  " + cls_str if cls_str else ""
+
     counter_trend_warn = (
         "\n🔶 <b>━━━ ⚠️ КОНТР-ТРЕНД ━━━</b> 🔶"
-        "\n<i>Сделка идёт ПРОТИВ основного тренда — повышенный риск!</i>"
+        "\n<i>Против основного тренда — повышенный риск!</i>"
     ) if sig.is_counter_trend else ""
 
     def pct(t): return abs((t - sig.entry) / sig.entry * 100)
 
     NL = "\n"
-    quality_factors = (
-        "📋 <b>Факторы качества:</b>" + NL + NL.join(sig.reasons)
-    ) if sig.reasons else ""
+
+    quality_factors = ""
+    if sig.reasons:
+        quality_factors = (
+            "📋 <b>Факторы:</b>" + NL +
+            NL.join("  • " + r for r in sig.reasons) + NL
+        )
+
     def _fp(v: float) -> str:
         try:
             v = float(v)
@@ -233,22 +245,21 @@ def signal_text(sig: SignalResult, cfg: TradeCfg) -> str:
         return f"{v:.{decimals}f}".rstrip("0").rstrip(".")
 
     return (
-        header + NL + NL +
-        "💎 <b>" + sig.symbol + "</b>  " + emoji + "  <b>" + sig.breakout_type + "</b>" +
+        header + "  " + dir_em + "  💎 <b>" + clean_sym + "</b>  ·  <b>" + sig.breakout_type + "</b>" +
         counter_trend_warn + NL +
-        "⭐ Качество: " + stars + NL +
-        quality_factors + NL + NL +
-        "🧠 <b>Анализ:</b> <i>" + sig.human_explanation + "</i>" + NL +
+        stars + cls_part + NL + NL +
+        quality_factors +
+        "🧠 <i>" + sig.human_explanation + "</i>" + NL +
         "━━━━━━━━━━━━━━━━━━━━" + NL +
-        "💰 Вход:    <code>" + _fp(sig.entry) + "</code>" + NL +
-        "🛑 Стоп:    <code>" + _fp(sig.sl) + "</code>  <i>(-" + "{:.2f}".format(sig.risk_pct) + "%)</i>" + NL + NL +
-        "🎯 Цель 1: <code>" + _fp(sig.tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp1)) + "%)</i>" + NL +
-        "🎯 Цель 2: <code>" + _fp(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
-        "🏆 Цель 3: <code>" + _fp(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
-        "━━━━━━━━━━━━━━━━━━━━" + NL + NL +
-        "📊 " + sig.trend_local + "  |  RSI: <code>" + "{:.1f}".format(sig.rsi) + "</code>  |  Vol: <code>x" + "{:.1f}".format(sig.volume_ratio) + "</code>" + NL +
+        "💰 Вход:   <code>" + _fp(sig.entry) + "</code>" + NL +
+        "🛑 Стоп:   <code>" + _fp(sig.sl) + "</code>  <i>(-" + "{:.2f}".format(sig.risk_pct) + "%)</i>" + NL + NL +
+        "🎯 TP1:    <code>" + _fp(sig.tp1) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp1)) + "%)</i>" + NL +
+        "🎯 TP2:    <code>" + _fp(sig.tp2) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp2)) + "%)</i>" + NL +
+        "🏆 TP3:    <code>" + _fp(sig.tp3) + "</code>  <i>(+" + "{:.2f}".format(pct(sig.tp3)) + "%)</i>" + NL +
+        "━━━━━━━━━━━━━━━━━━━━" + NL +
+        "📊 " + sig.trend_local + "  ·  RSI <code>" + "{:.1f}".format(sig.rsi) + "</code>  ·  Vol ×<code>" + "{:.1f}".format(sig.volume_ratio) + "</code>" + NL +
         _corr_label(sig.btc_corr, sig.eth_corr) + NL + NL +
-        "⚡ <i>CHM Laboratory — CHM BREAKER</i>" + NL + NL +
+        "⚡ <i>CHM Laboratory</i>" + NL +
         "👇 <i>Отметь результат когда сделка закроется:</i>"
     )
 

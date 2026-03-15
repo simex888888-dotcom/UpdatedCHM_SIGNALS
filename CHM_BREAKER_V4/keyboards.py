@@ -2,7 +2,10 @@
 keyboards.py — клавиатуры бота v5 (без триала, полные настройки)
 """
 
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
+)
 from user_manager import UserSettings, TradeCfg, SMCUserCfg
 
 
@@ -23,6 +26,29 @@ def _mark(current, val) -> str:
         return "◉ " if round(float(current), 6) == round(float(val), 6) else "○ "
     except (TypeError, ValueError):
         return "◉ " if current == val else "○ "
+
+
+# ── Нижняя постоянная панель навигации ───────────────
+
+def kb_reply_main() -> ReplyKeyboardMarkup:
+    """Постоянная нижняя панель навигации (всегда видна)."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text="🏠 Меню"),
+                KeyboardButton(text="📈 Лонг"),
+                KeyboardButton(text="📉 Шорт"),
+                KeyboardButton(text="⚡ Оба"),
+            ],
+            [
+                KeyboardButton(text="📊 Статистика"),
+                KeyboardButton(text="🔍 Анализ"),
+                KeyboardButton(text="❓ Справка"),
+            ],
+        ],
+        resize_keyboard=True,
+        persistent=True,
+    )
 
 
 # ── Тренд ────────────────────────────────────────────
